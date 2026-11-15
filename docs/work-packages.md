@@ -312,6 +312,8 @@ The exhaustive tests of each device against each capability belong to WP7, not h
 - `docs/hardware.md` (the shopping list from concept section 3), `docs/install.md` (complete, for the mini PC and the Raspberry Pi), `docs/pairing.md` (Zigbee2MQTT pairing, the Bosch install code, FRITZ! registration and its neutral timetable, the `settings` entries per model, describing rooms in `heating.yaml` and applying them, running `device-check`, and that a room is switched off in the UI and not at a FRITZ! dial), `docs/phone-and-remote.md` (the apps, enabling the phones' trackers for presence, the FRITZ!Box VPN), `docs/hardware-acceptance.md` (what to verify on real devices beyond `device-check`, including the open points of concept section 12 and recording messages for the simulators), and a final `README.md`.
 - A pipeline check that relative links in the documentation resolve and that every `cave` command mentioned exists.
 
+`docs/hardware.md` and `docs/phone-and-remote.md` were delivered ahead of the rest, in their own pull request, because they depend on no code.
+
 **Acceptance**
 
 - The screenshot artifact shows the demo home's rooms with live values and no error cards.
