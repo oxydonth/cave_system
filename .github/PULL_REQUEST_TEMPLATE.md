@@ -8,13 +8,13 @@
 
 ## Deviations from the concept and work packages
 
-<!-- None, or list each one. A change to a contract (names in concept sections 4.1, 4.4, 5.1, 5.2)
+<!-- None, or list each one. A change to a contract (concept sections 4.1, 4.2, 4.4, 4.5, 5.1 and 5.2)
      updates docs/concept.md in this pull request. -->
 
 ## Checklist
 
 - [ ] `make check` passes locally
-- [ ] The pipeline is green on the latest commit
+- [ ] Rebased on the current `main`, and the pipeline is green on the latest commit
 - [ ] Tests assert behaviour; none of them can pass while the code is broken
 - [ ] No secrets, no commented-out code, no `TODO` without an explanation
 - [ ] New commands, variables and configuration keys are documented where a user would look
