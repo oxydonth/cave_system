@@ -109,10 +109,44 @@ Without a coordinator the stack starts without Zigbee2MQTT. Once one is connecte
 `CAVE_Z2M_SERIAL_PORT`, `CAVE_Z2M_ADAPTER` and `COMPOSE_PROFILES=zigbee` in `.env` and run
 `./cave up` again; Zigbee2MQTT's web UI is on port 8080, protected by `CAVE_Z2M_FRONTEND_TOKEN`.
 
+## 5. First-run setup
+
 Until the owner account exists, anyone on the network who opens `http://<server>:8123` can
-complete Home Assistant's onboarding and become its owner. `./cave bootstrap` creates the
-account; that command arrives with work package 6, so until then open the address yourself right
-after the first `./cave up` and create the owner in the browser.
+complete Home Assistant's onboarding and become its owner. So right after the first `./cave up`:
+
+```sh
+sudo -u cave ./cave bootstrap
+```
+
+It waits until the stack is healthy (`--timeout SECONDS`, default 300), then sets Home Assistant up
+without a browser:
+
+* the owner account from `CAVE_HA_OWNER_NAME`, `CAVE_HA_OWNER_USER` and `CAVE_HA_OWNER_PASSWORD`,
+  and the rest of onboarding, so the web UI opens with a normal login;
+* Home Assistant's time zone (from `TZ`), metric units, country Germany and currency euro, once:
+  later changes in the UI are kept, and a time zone that differs from `TZ` is pointed out;
+* the MQTT integration, connected to the broker with `CAVE_MQTT_USER` and `CAVE_MQTT_PASSWORD`;
+* FRITZ!SmartHome and FRITZ!Box Tools, if `CAVE_FRITZ_HOST`, `CAVE_FRITZ_USER` and
+  `CAVE_FRITZ_PASSWORD` are set (the host as `fritz.box`, an address, or a URL); without
+  `CAVE_FRITZ_HOST` both are left out;
+* a schedule helper for every room in the applied `cave/heating.yaml` that names one, with exactly
+  that entity ID and a default week (Monday to Friday 06:00–08:00 and 17:00–22:00, Saturday and
+  Sunday 08:00–22:00; on means comfort). Edit the timetables in the UI under Settings → Devices &
+  services → Helpers; the bootstrap never touches a schedule that exists;
+* the script token: a long-lived access token named `cave-scripts` in
+  `CAVE_DATA/homeassistant/.cave/token`, mode 0600 and owned by the user who runs `./cave`, which
+  `apply`, `status`, `update` and the health check use.
+
+Run it again whenever you like: it changes only what is missing, so a second run changes nothing,
+and an interrupted run is finished by the next. It repairs a deleted or revoked script token (the
+old token is deleted in Home Assistant, a new one written), and changes the MQTT login to the one
+in `.env` if that changed. After describing new rooms with schedules, `./cave apply` and then
+`./cave bootstrap` create their schedule helpers.
+
+The owner's password in `.env` is used to create the account and, later, only to log in when the
+script token has to be renewed; the bootstrap never changes it. If you change the password in
+Home Assistant, put the same into `.env`, or a token renewal stops with a message saying so. The
+passwords are handed to the setup on its standard input and never printed.
 
 ## Other commands
 
