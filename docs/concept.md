@@ -2,7 +2,7 @@
 
 | | |
 |---|---|
-| Status | Proposed. Becomes binding when this pull request is merged. |
+| Status | Proposed, second revision after review. Becomes binding when this pull request is merged. |
 | Date | 2026-11-15 |
 | Owner | Max Bielka |
 | Owner decisions | Build on Home Assistant. Hot-water radiators only. Everything runs locally. |
@@ -18,14 +18,14 @@ Requirements, referenced by ID in the work packages:
 | ID | Requirement |
 |---|---|
 | R1 | **Local.** Every control path works with the internet unplugged. The internet is used only to fetch updates and, optionally, for phone push notifications. |
-| R2 | **Heating first.** Per-room radiator control with schedules, window-open pause, away setback, boost, and regulation on a room sensor instead of the sensor next to the hot radiator. |
+| R2 | **Heating first.** Per-room radiator control with schedules, window-open pause, away setback and boost. Thermostats that accept an external temperature (Sonoff, Bosch) regulate on the room sensor instead of the sensor next to the hot radiator; FRITZ! thermostats regulate on their own sensor. |
 | R3 | **Connects to every recommended product** in section 3, and each of them has a simulated counterpart in the tests. |
 | R4 | **Web UI.** Home Assistant's frontend plus a heating dashboard generated from the room configuration. |
 | R5 | **Phone apps.** The official Home Assistant apps for Android and iOS work from day one. A custom app stays possible later (section 7). |
-| R6 | **Reproducible.** A fresh server becomes a working system from this repository plus one `.env` file. |
+| R6 | **Reproducible.** A fresh server becomes the same working system from this repository, one `.env` file and the latest backup. Without a backup the system still comes up, but devices have to be paired again and schedules start from defaults. |
 | R7 | **Tested before it reaches home.** Every change runs in CI against the simulated devices. |
 | R8 | **Safe self-update.** The server pulls released versions on its own and rolls back if the new version is unhealthy. |
-| R9 | **Fails gently.** If the server is down, radiators keep their last setpoint and their built-in frost protection. |
+| R9 | **Fails gently.** If the server is down, radiators keep their last setpoint and their built-in frost protection. A radiator that was off at that moment, because of an open window or a room switched off, stays off with frost protection only. |
 
 Out of scope for now: underfloor heating, boiler or heat-pump integration, a custom phone app, voice control, and community add-ons installed through HACS. Section 11 says how each could be added later.
 
@@ -34,18 +34,20 @@ Out of scope for now: underfloor heating, boiler or heat-pump integration, a cus
 | Topic | Decision | Why | Rejected |
 |---|---|---|---|
 | Platform | Home Assistant | Owner decision. It runs locally, supports every device in section 3, and has a web UI and phone apps today. | Custom-built system; custom UI on top of Home Assistant. |
-| Install type | Home Assistant **Container** under Docker Compose on Debian | The repository can then be the single source of truth: versions are pinned in Git, the exact stack that runs at home is booted in CI, and a release can be rolled back. Container is one of the two install types Home Assistant supports. | Home Assistant OS: an appliance with its own update channel and add-on store, which is convenient by hand but cannot be pinned, tested and rolled back from Git. Core and Supervised: unsupported since release 2025.12. |
+| Install type | Home Assistant **Container** under Docker Compose on Debian | The repository can then be the single source of truth for the software: versions are pinned in Git, the exact stack that runs at home is booted in CI, and a release can be rolled back. Container is one of the two install types Home Assistant supports. | Home Assistant OS: an appliance with its own update channel and add-on store, which is convenient by hand but cannot be pinned, tested and rolled back from Git. Core and Supervised: unsupported since release 2025.12. |
 | Device network | **Zigbee through Zigbee2MQTT** as the main network; **FRITZ!Box DECT** as a second, fully supported path | Zigbee devices are cheap, vendor-neutral, respond within seconds and expose more control (external temperature input, valve data). The FRITZ! path needs no extra radio and is the fallback where Zigbee does not reach. | FRITZ!Box as the only hub: small, expensive device range and slow command delivery. Thread/Matter: fewer suitable radiator thermostats, and Matter exposes only the basics. |
-| Heating logic | A small custom integration, `cave_heating`, configured in YAML and covered by tests | One thermostat per room instead of one per radiator; the logic is reviewable in Git and tested against every Home Assistant upgrade. | Better Thermostat and Versatile Thermostat: capable, but configured through UI dialogs, so the configuration is not reviewable, and they add a third-party update risk. Plain YAML automations: no room-level thermostat entity and no unit tests. |
-| Schedules | Home Assistant schedule helpers, one per room | They are edited on a weekly calendar in the web UI and the phone apps, with no redeploy. | Schedules in YAML: not editable in the UI. |
+| Heating logic | A small custom integration, `cave_heating`, covered by tests | One thermostat per room instead of one per radiator, and logic that is tested against every Home Assistant upgrade. | Better Thermostat and Versatile Thermostat: capable, but they add a third-party update risk and are configured through UI dialogs. Plain YAML automations: no room-level thermostat entity and no unit tests. |
+| Where the home is described | `heating.yaml` — rooms and their devices — is **state on the server**, not a file in Git | Adding a thermostat is then an edit and `./cave apply`, taking seconds. In Git it would take a pull request, the pipeline, a release and an update for every change. It is validated before it is applied and included in every backup. | Tracking the home description in Git. |
+| Schedules | Home Assistant schedule helpers, one per room | They are edited on a weekly calendar in the web UI and the phone apps. | Schedules in YAML: not editable in the UI. |
+| Operations tooling | The `cave` command is **Python, standard library only**, running on the server's own Python (3.11 or newer) | Update and rollback must be right the first time, so they need real tests; Python is testable on any machine, and shell written for Debian is not. | Bash scripts. |
 | Deployment | The server **pulls** tagged releases from GitHub | No inbound access to the home network, no credentials for the home in GitHub. | A self-hosted Actions runner or SSH push from GitHub into the home. |
-| Versions | Everything pinned; Dependabot proposes upgrades; CI gates them | Upgrades are the main source of breakage for a custom integration. | Floating tags such as `stable` or `latest`. |
+| Versions | Everything pinned; upgrades arrive as pull requests; CI gates them | Upgrades are the main source of breakage for a custom integration. | Floating tags such as `stable` or `latest`. |
 
-Pinned versions at the time of writing: Home Assistant 2026.10.4 (the newest release the test library `pytest-homeassistant-custom-component` 0.13.375 supports; 2026.11.1 is current and follows as soon as the library does), Zigbee2MQTT 2.14.3, Mosquitto 2.0.22, Python 3.14.
+Pinned versions at the time of writing: Home Assistant 2026.10.4 (the newest release the test library `pytest-homeassistant-custom-component` 0.13.375 supports; 2026.11.1 is current and follows as soon as the library does), Zigbee2MQTT 2.14.3, Mosquitto 2.0.22, Python 3.14 for development and inside the Home Assistant container.
 
 ## 3. Hardware
 
-Prices are German street prices from mid-November 2026. Sources are listed in section 13.
+Prices are German street prices from mid-November 2026 unless marked. Sources are listed in section 13.
 
 ### 3.1 Recommended products
 
@@ -56,18 +58,18 @@ These are the products the system must connect to (R3). The last column says how
 | **Sonoff TRV Gen2** (TRV-ZBT) | Radiator thermostat, main pick | €31–35 | Zigbee → Zigbee2MQTT → MQTT discovery | Simulator model `TRV-ZBT` |
 | **Sonoff TRVZB** | Radiator thermostat, proven fallback | €25–29 | same | Simulator model `TRVZB` |
 | **Bosch Heizkörper-Thermostat II [+M]** (BTH-RA) | Radiator thermostat for quiet rooms | about €63 | same, with the device switched to Zigbee mode | Simulator model `BTH-RA` |
-| **FRITZ!Smart Thermo 302** (and the older 301) | Radiator thermostat without an extra radio | €45–55 | DECT ULE → FRITZ!Box → "AVM FRITZ!SmartHome" integration | Fake FRITZ!Box |
+| **FRITZ!Smart Thermo 302** (and the older 301) | Radiator thermostat without an extra radio | €45–55 | DECT ULE → FRITZ!Box → "FRITZ!SmartHome" integration | Fake FRITZ!Box |
 | **Sonoff SNZB-02P** | Room temperature and humidity | €10–12 | Zigbee → Zigbee2MQTT | Simulator model `SNZB-02P` |
 | **Sonoff SNZB-04P** | Window and door contact | €10–12 | Zigbee → Zigbee2MQTT | Simulator model `SNZB-04P` |
 | **SMLIGHT SLZB-06MG24** (Ethernet/PoE) | Zigbee coordinator | €40–45 | TCP → Zigbee2MQTT | Not simulated; Zigbee2MQTT itself is replaced by the simulator |
-| **FRITZ!Box** (already owned) | Router, presence, VPN, DECT base | — | "FRITZ!Box Tools" and "AVM FRITZ!SmartHome" integrations | Smart-home API faked; presence replaced by a test entity |
+| **FRITZ!Box** (already owned) | Router, presence, VPN, DECT base | — | "FRITZ!Box Tools" and "FRITZ!SmartHome" integrations | Smart-home API faked; presence replaced by a test entity |
 
 Why these:
 
 - **Sonoff TRV Gen2** is heise's pick for Home Assistant (rated 4.5 of 5 on 1 November 2026): PID regulation, an input for an external room temperature, and three weekly plans stored on the device. It needs Zigbee2MQTT 2.12.1 or newer, which the pinned version satisfies. It only went on sale on 20 August 2026 and there are scattered early reports of connection drop-outs, so **buy one or two first** and check fit and noise on your own valves before equipping every radiator. Sonoff states up to six months on two AA cells.
 - **Sonoff TRVZB** is the three-year-old predecessor: larger and louder, but well understood and driven by the same integration. Use it if the Gen2 disappoints.
 - **Bosch Thermostat II [+M]** costs twice as much and is the choice where motor noise matters, typically a bedroom. It ships in Matter mode; it is switched to Zigbee on the device and paired with its install code. The Bosch controller is not needed.
-- **FRITZ!Smart Thermo 302** talks straight to the FRITZ!Box you own, with DECT range that usually covers a whole flat. Home Assistant polls the FRITZ!Box locally every 30 seconds; a new setpoint reaches the valve after about three minutes (up to fifteen on the older 301). It was rated "gut (1.9)" and price tip by Stiftung Warentest in 2023 as the FRITZ!DECT 302. It is the right choice for a room the Zigbee network does not reach, or if you would rather not run Zigbee at all.
+- **FRITZ!Smart Thermo 302** talks straight to the FRITZ!Box you own, with DECT range that usually covers a whole flat. Home Assistant polls the FRITZ!Box locally every 30 seconds; a new setpoint reaches the valve after about three minutes (up to fifteen on the older 301). It was rated "gut (1.9)" and price tip by Stiftung Warentest in 2023 as the FRITZ!DECT 302. It is the right choice for a room the Zigbee network does not reach, or if you would rather not run Zigbee at all. It cannot use a Zigbee room sensor; it regulates on its own.
 - **One room sensor per room**, placed away from the radiator, is what makes regulation accurate: the thermostat's own sensor sits next to the hot radiator and reads high.
 - **A contact on every window that gets opened** lets the heating pause during airing (Stoßlüften) instead of heating the street.
 - **A network-attached coordinator** can sit centrally in the flat, away from the server and the router. Battery-powered Zigbee devices do not relay for each other; if a room turns out to be out of reach, add a mains-powered Zigbee plug in between as a relay, or use a FRITZ!Smart Thermo 302 there.
@@ -80,10 +82,10 @@ The stack needs about 2 GB of memory and very little CPU. What matters is storag
 |---|---|---|
 | **Mini PC with Intel N100 or N150**, 8–16 GB RAM, NVMe SSD | €190–280 new, refurbished business mini PCs from about €150 | **Recommended for a new purchase.** Real SSD, more headroom, 6–8 W idle. |
 | **Raspberry Pi 4 or 5 you already own**, 4 GB or more | — | **Fine to start on**, provided it boots from an SSD (USB 3 or NVMe HAT) with the official power supply and a 64-bit OS. SD cards wear out under database writes. |
-| Raspberry Pi 5 bought new | about $110 (4 GB) / $175 (8 GB) for the bare board | Not recommended. After this year's memory price rises a complete mini PC costs about the same. The Pi's lower idle draw (about 3 W) saves roughly €14 a year. |
+| Raspberry Pi 5 bought new | US list price $110 (4 GB) / $175 (8 GB) for the bare board | Not recommended. After this year's memory price rises a complete mini PC costs about the same. The Pi's lower idle draw (about 3 W) saves roughly €14 a year. |
 | Home Assistant Green | €179 | Not recommended here. It is an appliance for Home Assistant OS; this design uses Container. |
 
-Both paths run Debian 13 (Raspberry Pi OS Lite 64-bit on the Pi) with Docker Engine and the Compose plugin. All images used are published for x86-64 and ARM64.
+Both paths run Debian 13 (Raspberry Pi OS Lite 64-bit on the Pi) with Docker Engine, the Compose plugin, Git and the system Python. All images used are published for x86-64 and ARM64.
 
 ### 3.3 Example budget
 
@@ -135,44 +137,64 @@ flowchart LR
 
 ### 4.1 Runtime services
 
-Service names are part of the contract between work packages.
+Service names and ports are part of the contract between work packages.
 
 | Compose service | Image | Role | Network |
 |---|---|---|---|
 | `homeassistant` | `ghcr.io/home-assistant/home-assistant` | Devices, automation, web UI, API. Loads `cave_heating`. | Host network, port 8123 on the LAN |
-| `mosquitto` | `eclipse-mosquitto` | MQTT broker with password authentication | Port 1883 on localhost and the Compose network only |
+| `mosquitto` | `eclipse-mosquitto` | MQTT broker with password authentication | Port 1883 on `127.0.0.1` and on the Compose network only |
 | `zigbee2mqtt` | `ghcr.io/koenkk/zigbee2mqtt` | Zigbee network, pairing, firmware updates. Compose profile `zigbee`, so the stack also starts without a coordinator. | Web UI on port 8080 on the LAN, protected by a token |
-| `sim` | built from `sim/` | Simulated devices. Only in the demo and CI overlay `compose.sim.yaml`, never at home. | Compose network, control API on localhost |
+| `sim` | built from `sim/` | Simulated devices. Only in the overlay `compose.sim.yaml` used by the demo and CI, never at home. | Fake FRITZ!Box on `127.0.0.1:8480`, control API on `127.0.0.1:8481`, MQTT through the Compose network |
 
-Zigbee2MQTT publishes its devices to Home Assistant through MQTT discovery under the prefix `homeassistant`, with device state under `zigbee2mqtt/<name>`.
+Home Assistant runs on the host network and therefore reaches the broker and the simulators through `127.0.0.1`, never by Compose service name.
+
+Zigbee2MQTT publishes its devices to Home Assistant through MQTT discovery under the prefix `homeassistant`, with device state under `zigbee2mqtt/<name>`. The entity IDs Home Assistant derives from it follow Zigbee2MQTT's scheme: the device's friendly name in lower case with spaces as underscores, followed by the property where there is one.
 
 ### 4.2 Code and state are separate
 
 | | Where | Contents |
 |---|---|---|
-| Code | The repository checkout, mounted **read-only** into the containers | Compose files, `homeassistant/` (`configuration.yaml`, `packages/`, `dashboards/`, `cave/`), `custom_components/cave_heating`, `tools/` |
-| State | `CAVE_DATA`, `/var/lib/cave` on the server and `./data` in development; never in Git | Home Assistant's `/config` (`.storage`, database, `secrets.yaml`, automations made in the UI), Zigbee2MQTT's data (network key, device database, coordinator backup), Mosquitto's data |
-| Secrets | `.env` on the server, created by `./cave init`, mode 0600 | Generated passwords and tokens, FRITZ!Box credentials |
+| Code | The repository checkout, mounted **read-only** into the containers | `compose.yaml`; `homeassistant/configuration.yaml` and `homeassistant/packages/`; `custom_components/cave_heating/`; `tools/` |
+| State | `CAVE_DATA`: `/var/lib/cave` on the server, `./data` in a development checkout; never in Git | Home Assistant's `/config`: `.storage`, the database, `secrets.yaml`, `automations.yaml`, `scripts.yaml`, `scenes.yaml`, **`cave/heating.yaml`** (the description of the home), **`dashboards/heating.yaml`** (generated from it), and `.cave/token`. Zigbee2MQTT's data: its configuration with the network key, the device database, the coordinator backup. Mosquitto's data. |
+| Secrets | `.env` in the checkout on the server, created by `./cave init`, mode 0600, never committed | Generated passwords and tokens, FRITZ!Box credentials |
 
-Because code is read-only and state lives elsewhere, moving the server to another release is a `git checkout` plus a container restart, and a backup is a copy of `CAVE_DATA` and `.env`.
+`/config` is the state directory. The tracked pieces are mounted into it read-only as directories; `configuration.yaml` is the only single-file mount. A changed checkout takes effect when the containers are recreated, which `cave up` and `cave update` do.
 
-The description of the home itself — rooms and which devices belong to them — is `homeassistant/cave/heating.yaml`. It is code: versioned, reviewed, and the single source for both the heating logic and the generated dashboard.
+Home Assistant does not create the files its configuration includes, so `cave init` creates `secrets.yaml`, empty `automations.yaml`, `scripts.yaml` and `scenes.yaml`, a starter `cave/heating.yaml` with no rooms, and a placeholder dashboard.
+
+Because code is read-only and state lives elsewhere, moving the server to another release is a `git checkout` plus recreating the containers, and a backup is a copy of `CAVE_DATA` and `.env`.
+
+**The `.env` file.** `./cave init` writes every variable; `.env.example` documents them.
+
+| Variable | Set by | Read by | Meaning |
+|---|---|---|---|
+| `CAVE_DATA` | init, default as above | Compose, every command | State directory |
+| `TZ` | init, default `Europe/Berlin` | all services | Time zone |
+| `COMPOSE_PROFILES` | owner; empty, or `zigbee` once a coordinator is connected | Compose | Whether Zigbee2MQTT runs |
+| `CAVE_MQTT_USER`, `CAVE_MQTT_PASSWORD` | init, password generated | Mosquitto's password file, Zigbee2MQTT, bootstrap, simulators | Broker login |
+| `CAVE_HA_OWNER_NAME`, `CAVE_HA_OWNER_USER`, `CAVE_HA_OWNER_PASSWORD` | init, password generated | bootstrap | Home Assistant's owner account |
+| `CAVE_Z2M_SERIAL_PORT`, `CAVE_Z2M_ADAPTER` | owner | Zigbee2MQTT | Coordinator address (`tcp://<address>:6638` or a `/dev/serial/by-id/` path) and driver (`ember` or `zstack`) |
+| `CAVE_Z2M_FRONTEND_TOKEN` | init, generated | Zigbee2MQTT | Token for its web UI |
+| `CAVE_FRITZ_HOST`, `CAVE_FRITZ_USER`, `CAVE_FRITZ_PASSWORD` | owner, optional | bootstrap | FRITZ!Box login for the two integrations |
+| `CAVE_AUTO_UPDATE` | init, default `1` | update timer | `0` means manual updates only |
+| `CAVE_BACKUP_DIR`, `CAVE_BACKUP_KEEP`, `CAVE_BACKUP_COPY_TO` | init, defaults `/var/backups/cave`, `14`, empty | backup | Archive directory, number of archives kept, optional second location |
 
 ### 4.3 Repository layout
 
 ```
 compose.yaml              production stack
 compose.sim.yaml          overlay adding simulated devices (demo, CI)
-cave                      command-line entry point; commands live in scripts/cave.d/
-homeassistant/            tracked Home Assistant configuration
+cave                      command-line entry point
+ops/cave_ops/             the cave command: Python, standard library only
+  commands/               one module per command
+homeassistant/
   configuration.yaml
   packages/               notifications and helper entities
-  dashboards/heating.yaml generated, do not edit
-  cave/heating.yaml       rooms and devices of the real home
+  heating.example.yaml    starter copied to the state directory by cave init
 custom_components/cave_heating/   the heating integration
 sim/                      simulator package, demo home, Dockerfile
-tools/                    bootstrap and dashboard generator (run inside the Home Assistant container or in CI)
-scripts/                  host provisioning, update, backup, systemd units
+tools/                    bootstrap and dashboard generator; run inside the Home Assistant container
+scripts/                  provision-host.sh and systemd units
 tests/                    unit, integration and end-to-end tests
 docs/
 .github/workflows/
@@ -180,54 +202,96 @@ docs/
 
 ### 4.4 The `cave` command
 
-One entry point on the server and in CI: `init` (create data directories and secrets), `up`, `down`, `restart`, `ps`, `logs`, `check` (validate Compose and Home Assistant configuration), `bootstrap` (first-run setup of Home Assistant), `demo` (start with simulated devices), `update`, `backup`, `restore`, `status`, `version`. The host needs only Bash, Git and Docker; anything written in Python runs inside the Home Assistant container.
+One entry point on the server and in CI. It is Python using only the standard library, must run on Python 3.11 or newer, and calls `docker compose` and `git`. Each command is its own module, so work packages add commands without touching each other's files.
+
+| Command | Does | Work package |
+|---|---|---|
+| `init` | Creates the state directories and the files listed in 4.2, generates secrets, writes `.env` and the broker's password file. Changes nothing when run again. | 2 |
+| `up`, `down`, `restart`, `ps`, `logs` | Wrap Compose for the active profiles. | 2 |
+| `check` | Validates the Compose file and the Home Assistant configuration in the pinned image. | 2 |
+| `version` | Prints the release that is checked out and the image versions. | 2 |
+| `apply` | Validates `cave/heating.yaml`, regenerates the dashboard from it, and tells Home Assistant to reload `cave_heating`. | 5 |
+| `bootstrap` | First-run setup of Home Assistant (section 8). | 6 |
+| `demo` | Starts the stack with simulated devices. | 6 |
+| `update`, `status` | Installs the newest release with rollback; shows what is installed and whether it is healthy. | 7 |
+| `backup`, `restore` | Archives and restores the state. | 7 |
+
+Whatever needs Home Assistant's own Python packages (the bootstrap, the dashboard generator, configuration validation) lives in `tools/` and runs inside the Home Assistant container, started by the corresponding `cave` command.
+
+### 4.5 Contracts between components
+
+| Contract | Definition |
+|---|---|
+| Script token | `CAVE_DATA/homeassistant/.cave/token`, seen in the container as `/config/.cave/token`: one line holding a Home Assistant long-lived access token named `cave-scripts`, mode 0600. Created by `cave bootstrap`; read by `apply`, `update`, `status` and the end-to-end tests. |
+| Healthy | Every container of the active profiles is running and its Docker health check passes. If the script token exists, additionally `GET http://127.0.0.1:8123/api/config` returns 200 and its `components` list contains `cave_heating`. |
+| Notifications from scripts | `persistent_notification.create` over Home Assistant's REST API with a fixed `notification_id` per topic (`cave_update`, `cave_backup`), and a line in the system journal. |
+| Heating dashboard | YAML mode, URL path `cave-heating`, file `/config/dashboards/heating.yaml`. |
+| Home Assistant version | The image tag in `compose.yaml` equals the `homeassistant` version locked in `uv.lock`. A check enforces it. |
 
 ## 5. Heating logic: `cave_heating`
 
 ### 5.1 Configuration
 
+The description of the home is `cave/heating.yaml` in the state directory. Change it on the server and run `./cave apply`.
+
 ```yaml
-# homeassistant/cave/heating.yaml
-presence: zone.home            # optional; a count above 0, or "home"/"on", means someone is home
+presence:                      # optional; someone is home if any of these says so
+  - device_tracker.max_phone
 away_delay: "00:30:00"
-defaults:
-  comfort_temperature: 21.0
+away_temperature: 16.0         # first-start value, see below
+defaults:                      # for every room unless the room sets its own
+  comfort_temperature: 21.0    # first-start values, see below
   eco_temperature: 17.5
-  away_temperature: 16.0
   boost_temperature: 25.0
   boost_duration: "00:30:00"
   override_max: "06:00:00"
   window_open_delay: "00:01:00"
   window_close_delay: "00:02:00"
 rooms:
-  - id: living_room            # ASCII slug, used in entity IDs
+  - id: living_room            # ASCII slug, fixes the entity IDs
     name: Wohnzimmer           # display name, also the Home Assistant area
     trvs:
       - entity: climate.wohnzimmer_heizung_fenster
         external_temperature: number.wohnzimmer_heizung_fenster_external_temperature_input
+        enforce:               # device settings the controller keeps as given
+          select.wohnzimmer_heizung_fenster_temperature_sensor_select: external
+          switch.wohnzimmer_heizung_fenster_open_window: "off"
       - entity: climate.wohnzimmer_heizung_tuer
+        external_temperature: number.wohnzimmer_heizung_tuer_external_temperature_input
     temperature_sensor: sensor.wohnzimmer_temperature
     humidity_sensor: sensor.wohnzimmer_humidity
     windows:
       - binary_sensor.wohnzimmer_fenster_contact
     schedule: schedule.living_room_heating
-    comfort_temperature: 21.5  # optional per-room starting values
+  - id: bathroom
+    name: Bad
+    trvs:
+      - entity: climate.bad_heizung      # a FRITZ!Smart Thermo 302
+    window_open_delay: "00:05:00"
 ```
 
-Only `id`, `name` and at least one thermostat are required per room. Everything else is optional, and a room degrades sensibly without it: no schedule means comfort whenever someone is home, no room sensor means the average of the thermostats' own readings, no window contacts means no window pause.
+- Per room only `id`, `name` and one thermostat are required. A room without a schedule is at comfort whenever someone is home; without a room sensor it shows the average of its thermostats' own readings; without window contacts it has no window pause. An empty room list is valid.
+- `presence` takes one entity or a list. A zone counts as home when its count is above zero, a person or device tracker when it is `home`, anything else when it is `on`.
+- **Temperatures are adjusted in the UI, not in this file.** The comfort, eco and away values in the file are used only the first time an entity appears. After that the value set in the UI wins, and a differing value in the file is reported in the log on load.
+- A thermostat may be marked `slow: true`. Thermostats from the FRITZ!Box integration are slow by default.
+- The exact option names in an `enforce` block are those the device shows in Home Assistant. The pairing guide lists them per model.
+- An optional `timing:` block overrides the timing values named in section 5.5. The defaults suit real devices. The demo home sets them to seconds so that end-to-end tests finish quickly.
 
-The configuration is validated on load with messages that name the room and field. Entities that do not exist yet, because a device is not paired, put the room into a degraded state with a visible warning; they never stop Home Assistant or the other rooms. `cave_heating.reload` applies configuration changes without a restart.
+The file is validated completely before it is applied, with messages that name the room and field. If it is invalid, the configuration that is running stays in effect and the error is reported. Entities that do not exist yet, because a device is not paired, are handled as in section 5.4; they never stop Home Assistant or the other rooms.
 
 ### 5.2 Entities
 
-Per room, grouped under one device that is placed in the room's area:
+The integration sets every entity ID explicitly from the room `id`, so the IDs below are a contract for the dashboard, the tests and any later app. Unique IDs follow the scheme `<room id>_<key>`. The YAML is imported into one config entry so that each room is a device placed in its area.
+
+Per room:
 
 | Entity | Purpose |
 |---|---|
-| `climate.cave_<room>` | The room thermostat. Modes `heat` and `off`. Presets `comfort`, `eco`, `away`, `boost` and `none`, showing what currently determines the target. Current temperature from the room sensor. |
-| `number.cave_<room>_comfort_temperature`, `number.cave_<room>_eco_temperature` | The two schedule temperatures, adjustable in the UI. |
+| `climate.cave_<room>` | The room thermostat. Modes `heat` and `off`. Target in 0.5 K steps from 5 to 30 °C. Presets `comfort`, `eco`, `away`, `boost` and `none`. Attributes `reason`, `override_until` and `boost_until`. |
+| `number.cave_<room>_comfort_temperature`, `number.cave_<room>_eco_temperature` | The two schedule temperatures, 5 to 30 °C in 0.5 K steps. |
 | `button.cave_<room>_resume_schedule` | Ends a boost or override. |
-| `binary_sensor.cave_<room>_window_open` | True while the window pause is in effect. |
+| `binary_sensor.cave_<room>_window_open` | On while the window pause is in effect. |
+| `binary_sensor.cave_<room>_problem` | On when something needs attention. The attribute `thermostats` maps each thermostat to `ok`, `pending`, `unresponsive`, `blocked`, `unavailable` or `missing`; the attribute `messages` lists what is wrong in words. |
 | `sensor.cave_<room>_reason` | Why the room is at its current target: one of the reasons in section 5.3. |
 
 Once for the home:
@@ -235,59 +299,99 @@ Once for the home:
 | Entity | Purpose |
 |---|---|
 | `select.cave_home_mode` | `auto` (normal), `away` (forced setback, for holidays), `off` (summer). |
-| `number.cave_away_temperature` | Setback temperature. |
+| `number.cave_away_temperature` | Setback temperature for the whole home. |
 | `binary_sensor.cave_home_occupied` | Presence after the away delay has been applied. |
 
-Services: `cave_heating.boost` (rooms, optional duration and temperature), `cave_heating.resume_schedule`, `cave_heating.reload`. Entity names ship in English and German.
+Services: `cave_heating.boost` (rooms, optional duration and temperature), `cave_heating.resume_schedule` (rooms), `cave_heating.reload`. Entity names ship in English and German.
 
 ### 5.3 What a room does
 
 The first matching row wins.
 
-| # | Condition | Radiators | Reason shown |
+| # | Condition | Radiators | Reason |
 |---|---|---|---|
 | 1 | Home mode is `off` | Off | `summer` |
 | 2 | The room is switched `off` | Off | `room_off` |
-| 3 | A window contact has been open longer than the open delay, until all have been closed longer than the close delay | Off | `window` |
-| 4 | A boost is running | Boost temperature | `boost` |
-| 5 | An override is active: a temperature or preset chosen by hand, in the UI or on a thermostat | That temperature | `override` |
-| 6 | Away: home mode is `away`, or presence reports nobody home for longer than the away delay | Away temperature | `away` |
-| 7 | The schedule is on, or the room has no schedule | Comfort temperature | `comfort` |
-| 8 | The schedule is off | Eco temperature | `eco` |
+| 3 | The window pause is in effect | Off | `window` |
+| 4 | A boost or an override is active; if both were set, the later one | Boost temperature, or the chosen temperature | `boost` or `override` |
+| 5 | Away: home mode is `away`, or presence reports nobody home for longer than the away delay | Away temperature | `away` |
+| 6 | The schedule is on, or the room has no schedule | Comfort temperature | `comfort` |
+| 7 | The schedule is off | Eco temperature | `eco` |
 
-Rules around boost and override:
+The room's target and preset always show the outcome of rows 4 to 7, also while the radiators are off, so the room returns to it when the pause ends.
 
-- A boost ends after its duration. An override ends at the next schedule change, after `override_max`, or when the schedule is resumed by hand, whichever comes first.
-- When the home becomes away, a running boost or override is cancelled.
-- An override set **while** away is honoured, so the flat can be pre-heated from the phone. It ends when someone arrives or after `override_max`; schedule changes do not end it.
-- "Off" leaves frost protection to the thermostat. The room's own target is kept and restored when the pause ends.
+**Window pause.** It starts when any contact has been open for the room's open delay and ends when all have been closed for the close delay.
 
-### 5.4 How thermostats are driven
+**Boost** starts with the preset `boost` or the service and ends after its duration. Its clock keeps running during a window pause.
 
-- **Only on change.** A thermostat receives a command only when what it should do differs from what it last reported and from what was last sent. Changes arriving together are sent once. This protects batteries.
-- **Off** is the thermostat's `off` mode where it has one, otherwise its minimum temperature.
-- **Confirmation.** A command counts as confirmed when the thermostat reports the commanded target. If it does not within the timeout — 5 minutes, or 20 minutes for thermostats from the FRITZ!Box integration and any marked `slow: true` — the command is resent up to three times, after which the thermostat is flagged unresponsive, a repair notice is raised, and it is retried every 30 minutes.
-- **Changes made on the thermostat.** If a thermostat reports a target that is neither the commanded value nor the value it had before the command, someone turned it by hand. The room adopts that as an override and brings the room's other thermostats to the same target. While the room is paused or off, the thermostat is put back instead.
-- **Room temperature to the thermostat.** Where a thermostat lists an `external_temperature` input, the room sensor's reading is written to it when it changes by at least 0.1 K, at most every 5 minutes and at least every 20 minutes. If the room sensor has been silent for an hour the writes stop, and the thermostat falls back to its own sensor by itself.
+**Override** starts when a temperature is set by hand in the UI, when one of the presets `comfort`, `eco` or `away` is chosen by hand, or when a thermostat's dial is turned. The latest hand action replaces an earlier boost or override. An override ends at the earliest of:
+
+- `override_max` after it was set;
+- the next change of the room's schedule; for an override set while the home was away, the first schedule change after someone is home again, so the flat can be pre-heated from the phone;
+- home mode being switched to `away` or `off` by hand;
+- the room being switched `off`;
+- resuming the schedule: the button, the service, or the preset `none`.
+
+A boost ends on the last three as well.
+
+Becoming away through presence does **not** cancel a boost or override, because phones drop off the Wi-Fi when they sleep. The cost is bounded by the rules above.
+
+**Hand actions while the radiators are off.** While home mode is `off` or the room is switched `off`, setting a temperature or preset is refused with a message saying why. During a window pause it is accepted and takes effect when the pause ends.
+
+### 5.4 Inputs that are missing, unknown or unavailable
+
+The rule is to fail warm.
+
+| Input | Treated as |
+|---|---|
+| Window contact | Closed. If it was open when it went silent, the pause continues for `window_unavailable_grace` (30 minutes) and then ends, and the room's problem sensor turns on. |
+| Presence | Home. |
+| Schedule | On, so the room is at comfort. |
+| Room temperature sensor, also when it has not reported for `sensor_stale` (1 hour) | The room shows the average of its thermostats' own readings, and the external-temperature feed stops. |
+| Humidity sensor | Not shown. |
+| A thermostat | Skipped and brought in line when it returns. If no thermostat of a room is available, the room entity is unavailable. |
+| A configured entity that does not exist | As unavailable, with the problem sensor on and a repair notice naming it. |
+
+### 5.5 How thermostats are driven
+
+Timing names in `code font` are keys of the `timing:` block with the defaults given.
+
+- **What is wanted from a thermostat** is either *off*, or *heat at a target*. The target is rounded to the thermostat's own step, half up, and clamped to its own minimum and maximum before it is sent and before it is compared.
+- **Commands.** Heat is one `climate.set_temperature` call with the target, including `hvac_mode: heat` when the thermostat is not in `heat` already. The mode is never set to `heat` on its own, because a FRITZ! thermostat would then apply the FRITZ!Box's own temperatures. Off is `climate.set_hvac_mode` with `off` where the thermostat has that mode, otherwise its minimum temperature.
+- **Only on change.** A command is sent only when what is wanted differs from what the thermostat reports and from what was last sent. Changes within `debounce` (2 seconds) are sent once.
+- **Confirmation.** Heat is confirmed when the thermostat reports the mode `heat` (or its only heating mode) and the wanted target. Off is confirmed by the mode `off`, or by the minimum target where there is no such mode. If confirmation does not arrive within `confirm_timeout` (5 minutes; `confirm_timeout_slow`, 20 minutes, for slow thermostats), the command is resent, at most `resend_attempts` (3) times. After that the thermostat is `unresponsive`, the problem sensor turns on, a repair notice is raised, and it is retried every `retry_interval` (30 minutes).
+- **Refused commands.** If Home Assistant rejects a command — the FRITZ!Box does while its summer or holiday mode or the key lock is active — the thermostat is `blocked`. It is not resent into; it is tried again every `retry_interval` or when its state changes.
+- **Changes made on the thermostat.** The controller remembers, per thermostat, every target it sent within the last confirmation window and the last target the thermostat confirmed. A reported target is a hand change only if it differs from the wanted target, from every remembered sent target and from the last confirmed one, so a late report of an earlier command never counts. Hand changes are collected per room: `manual_settle` (45 seconds) after the last one, that thermostat's settled target becomes the room's override and the room's other thermostats are brought to it. Turning a dial through intermediate values, or two dials at nearly the same time, therefore produces one override and one round of commands. Only the target is adopted; a thermostat that changes its mode on its own is put back. While the radiators are off (rows 1 to 3), and after a restart, nothing is adopted: the controller's state is authoritative and a differing thermostat is corrected.
+- **Command budget.** At most `command_budget_per_hour` (20) commands go to one thermostat within an hour, counting everything except the temperature feed. Beyond that, commands are held until the hour has passed and the problem sensor turns on. This bounds battery use if a device and the controller ever disagree persistently.
+- **Room temperature to the thermostat.** Where a thermostat lists an `external_temperature` input, the room sensor's reading is written to it when it has changed by `feed_threshold` (0.2 K) and `feed_min_interval` (10 minutes) have passed since the last write, and in any case after `feed_max_interval` (25 minutes; Bosch requires a value at least every 30). The feed pauses while the radiators are off and resumes with an immediate write. It stops when the room sensor is unavailable or stale; the thermostat then falls back to its own sensor by itself.
+- **Enforced settings.** Each entry of a thermostat's `enforce` block is checked at start-up and whenever that entity changes, and set back if it differs, under the same confirmation and resend rules.
 - **Start-up.** Room state (mode, override, boost end time, temperatures) is restored. Nothing is sent to a thermostat that already matches, and nothing is sent until the thermostat is available.
-- **Unavailable devices** are skipped and shown as such, then reconciled when they return.
+- **Reload.** A new configuration is validated completely first. If it is invalid, the running configuration stays in effect.
 
-### 5.5 One brain
+### 5.6 One brain
 
-Schedules on the devices themselves are switched off, because two schedulers fight each other: Sonoff and Bosch thermostats run in manual mode, and each FRITZ! thermostat gets a FRITZ!Box timetable without switching points. What stays on the devices is what must work without the server: frost protection, the periodic valve exercise, the display and the manual dial.
+Two schedulers fight each other, and device-side automatic functions look like hand changes. So the devices are reduced to what must work without the server: frost protection, the periodic valve exercise, the display and the dial.
+
+| Device | Kept off or neutral | How |
+|---|---|---|
+| Sonoff TRV Gen2 and TRVZB | On-device schedule; on-device open-window detection; the internal sensor as regulation input where a room sensor exists | The controller holds the mode at `heat`; `enforce` entries for the window detection switch and the sensor selection |
+| Bosch Thermostat II | On-device schedule; on-device window detection | The controller holds the mode at `heat`; an `enforce` entry for the window detection |
+| FRITZ!Smart Thermo 302 | The FRITZ!Box timetable | Set up once in the FRITZ!Box so that it does not change the temperature during the day. Its own window detection may stay on in rooms without a contact. |
+
+The pairing guide gives the exact entries per model. What a FRITZ!Box timetable has to look like to stay neutral is confirmed on real hardware (section 12).
 
 ## 6. Web UI
 
 - **Home Assistant frontend** on port 8123: its own overview dashboards, device pages, history and settings.
-- **Heating dashboard**, generated from `homeassistant/cave/heating.yaml` so it cannot drift from the room configuration. One card per room with target, preset, resume button, temperature and humidity history, window state and the reason; a header with home mode, away temperature and who is home; a maintenance view with battery levels, unavailable devices and unconfirmed thermostats. It uses built-in cards only, so there is no third-party frontend code.
+- **Heating dashboard** at `/cave-heating`, generated from `cave/heating.yaml` by `./cave apply`, so it cannot drift from the room configuration. One card per room with target, preset, resume button, temperature and humidity history, window state and the reason; a header with home mode, away temperature and who is home; a maintenance view with battery levels, unavailable devices and each room's problem sensor. It uses built-in cards only, so there is no third-party frontend code.
 - **Schedules** are edited under Settings → Devices & services → Helpers, on a weekly calendar.
 - **Zigbee2MQTT's own web UI** on port 8080 is used for pairing and firmware updates.
-- **Notifications** for a low battery, a device that has gone silent, a window left open, high humidity (a prompt to air the room) and the result of each self-update, as persistent notifications in the UI and, if configured, on the phone.
+- **Notifications** for a low battery, a device that has gone silent, a window left open, high humidity (a prompt to air the room), a room's problem sensor, and the result of each self-update. All go through one script, `script.cave_notify`, which always creates a persistent notification in the UI and also calls the notify service named in the helper `input_text.cave_notify_service` when one is set there, for example the phone app's service.
 
 ## 7. Phone apps and remote access
 
-- **Apps:** the official Home Assistant apps for Android and iOS are free and open source. They show the same dashboards, deliver notifications, and can report the phone's location for presence.
-- **Presence without an app:** the FRITZ!Box knows which phones are on the Wi-Fi. The "FRITZ!Box Tools" integration turns that into presence, entirely locally.
+- **Apps:** the official Home Assistant apps for Android and iOS are free and open source. They show the same dashboards and deliver notifications.
+- **Presence:** the FRITZ!Box knows which phones are on the Wi-Fi. The "FRITZ!Box Tools" integration exposes each as a device tracker, entirely locally; the trackers for the household's phones are enabled once and listed under `presence`. The apps can report location too, but outside the home that only reaches the server while the phone is connected to the VPN.
 - **Remote access without a cloud:** the WireGuard VPN built into the FRITZ!Box. The phone connects to the VPN and the app uses the same address as at home. Connections where the provider gives no public IPv4 address (DS-Lite) need IPv6 on the phone's side.
 - **Push notifications** to a phone outside the home travel through Apple's or Google's push service. This is the one place the internet is involved, and nothing depends on it.
 - **A custom app later:** Home Assistant exposes a documented WebSocket and REST API with token authentication. The entities and services in section 5.2 are the stable contract; a custom app would be another client of that API and needs no change on the server.
@@ -298,21 +402,24 @@ No hardware is needed to develop or test, and the same simulators power a demo m
 
 **Simulators** (`sim/`):
 
-- A **Zigbee2MQTT stand-in** that publishes, over MQTT, the same discovery and state messages Zigbee2MQTT publishes for the TRV-ZBT, TRVZB, BTH-RA, SNZB-02P and SNZB-04P, and reacts to the same commands.
-- A **fake FRITZ!Box** that implements the login and smart-home HTTP API used by Home Assistant's integration, with FRITZ!Smart Thermo 302 devices and a configurable delay before a setpoint takes effect.
+- A **Zigbee2MQTT stand-in** that publishes, over MQTT, the same discovery and state messages Zigbee2MQTT publishes for the TRV-ZBT, TRVZB, BTH-RA, SNZB-02P and SNZB-04P, including the settings entities used by `enforce`, and reacts to the same commands. Models are described as data, so a further model is mostly a new description.
+- A **fake FRITZ!Box** that implements the session login and the smart-home HTTP API used by Home Assistant's integration, with FRITZ!Smart Thermo 302 devices. Whether a new setpoint is reported at once or only after a delay is configurable, because which of the two a real FRITZ!Box does is not yet confirmed.
 - A simple **room model**, so temperatures move when a valve opens or a window is opened, and a small **control API** for tests and demos: open a window, change a temperature, take a device offline.
-- A **demo home** definition used by the simulators, the demo configuration and the end-to-end tests.
+- A **demo home** used by the simulators, the demo configuration and the end-to-end tests, with timings set to seconds.
+
+**First-run setup.** `cave bootstrap` creates Home Assistant's owner account, sets up the MQTT and FRITZ! integrations, creates a schedule helper with a default timetable for every room that names one, and stores the script token. Running it again changes nothing.
 
 **Test levels:**
 
-| Level | Proves | Runs |
-|---|---|---|
-| Unit | The decision table in 5.3 and the rules in 5.4, with simulated time | Locally and in CI, seconds |
-| Integration, in-process | `cave_heating` driving real Home Assistant thermostat entities built from the simulators' messages; the fake FRITZ!Box driven by the real client library | Locally and in CI, under a minute |
-| Stack | The Compose file and configuration are valid and Home Assistant boots healthy in the pinned image | CI |
-| End-to-end | The complete stack with simulated devices: first-run setup, then scenarios across both device families — schedule, window pause, away, boost, room-sensor feed, slow thermostat, offline device — and a screenshot of the heating dashboard | CI, a few minutes |
+| Level | Proves | Runs | Work package |
+|---|---|---|---|
+| Unit | The decision table in 5.3 and the rules in 5.4 and 5.5, with simulated time. The `cave` commands, with `docker` and `git` replaced by fakes. | Locally and in CI, seconds | 4, 2, 7 |
+| Integration, in-process | The simulators against Home Assistant's real MQTT integration and the real FRITZ! client library; then `cave_heating` driving the thermostat entities Home Assistant builds from the simulators | Locally and in CI, under a minute | 3, 6 |
+| Stack | The Compose file and configuration are valid and Home Assistant boots healthy in the pinned image | CI | 2 |
+| End-to-end | The complete stack with simulated devices: first-run setup, then scenarios across both device families — schedule, window pause, away, boost, room-sensor feed, slow thermostat, offline device | CI, a few minutes | 6 |
+| Browser | The heating dashboard loads in a browser with no error cards; a screenshot is kept | CI | 8 |
 
-**Limit of this approach:** the simulators are models built from documentation and source code. A hardware acceptance checklist covers what only real devices can show — pairing, radio range, coordinator attachment, FRITZ!Box presence — and includes recording the real devices' messages into the simulator fixtures, so the simulators converge on reality.
+**Limit of this approach:** the simulators are models built from documentation and source code. A hardware acceptance checklist covers what only real devices can show — pairing, radio range, coordinator attachment, FRITZ!Box presence and timetable, how fast a FRITZ!Box reports a new setpoint — and includes recording the real devices' messages into the simulator fixtures, so the simulators converge on reality.
 
 ## 9. CI/CD
 
@@ -323,15 +430,15 @@ flowchart LR
   review --> merge["Squash merge to main"]
   merge --> main["Same checks on main"]
   main --> rel["Tag and GitHub Release"]
-  rel -. "pulled at night by the server" .-> upd["Snapshot → check out → pull images → config check → restart → health check"]
-  upd -- "unhealthy" --> rb["Roll back and notify"]
+  rel -. "pulled at night by the server" .-> upd["Pull images → stop → snapshot → check out → config check → start → health check"]
+  upd -- "unhealthy" --> rb["Restore snapshot and previous release, notify"]
 ```
 
 - **One pipeline** in GitHub Actions. Checks: Ruff, mypy, yamllint, ShellCheck and actionlint; unit and integration tests; hassfest; the stack check; the end-to-end test.
 - **Release:** when the pipeline passes on `main`, it creates a tag `vYYYY.MM.DD.N` and a GitHub Release with generated notes.
-- **Deployment:** a systemd timer on the server runs `cave update` at night. It fetches tags and, if there is a newer release, takes a snapshot of the state, checks out the release, pulls images, validates the Home Assistant configuration in the new image, restarts, and verifies that Home Assistant is up and `cave_heating` is loaded. If any step fails it restores the snapshot and the previous release, and reports the outcome as a notification. `CAVE_AUTO_UPDATE=0` switches to manual updates.
-- **Upgrades:** Dependabot proposes new versions of the container images, Python packages and Actions weekly. They pass through the same pipeline and review as any other change.
-- **Rules:** no direct pushes to `main` after the bootstrap commit. Every change is a pull request with a green pipeline and a review by an Opus-class model or better, then a squash merge.
+- **Deployment:** a systemd timer on the server runs `cave update` at night. It fetches tags and, if there is a newer release: pulls the new images while the old stack still runs; stops the stack; takes a snapshot of the state, which is consistent because nothing is writing; checks out the release; validates the Home Assistant configuration in the new image; starts the stack; and waits for it to be healthy as defined in 4.5. If any step fails, it restores the snapshot and the previous release, starts that, and reports the outcome as a notification. A lock prevents two runs at once. `CAVE_AUTO_UPDATE=0` switches to manual updates.
+- **Upgrades:** Dependabot proposes new versions of the Python packages, Actions and the other container images weekly. The Home Assistant image is excluded from Dependabot: it must match the Home Assistant version the tests run against (4.5), so both are raised together in one pull request, and every level of testing then runs against the same Home Assistant.
+- **Rules:** no direct pushes to `main` after the bootstrap commit. Every change is a pull request with a green pipeline and a review by an Opus-class model or better, then a squash merge. GitHub does not offer branch protection for a private repository on the free plan, so these rules are conventions followed by whoever works on the repository, not something GitHub enforces.
 
 ## 10. Security and privacy
 
@@ -343,15 +450,16 @@ flowchart LR
 
 ## 11. Operations and extension points
 
-**Installing:** provision the host with `scripts/provision-host.sh`, clone the repository, run `./cave init`, add the FRITZ!Box credentials and coordinator address to `.env`, then `./cave up` and `./cave bootstrap`. Pair devices, enter them in `homeassistant/cave/heating.yaml`, and release.
+**Installing:** provision the host with `scripts/provision-host.sh`, clone the repository, run `./cave init`, add the FRITZ!Box credentials and the coordinator address to `.env`, then `./cave up` and `./cave bootstrap`. Pair the devices, describe the rooms in `cave/heating.yaml`, and run `./cave apply`.
 
-**Backup:** `cave backup` runs nightly and before every update. It archives `CAVE_DATA` and `.env` with a retention period, optionally to a second location such as storage attached to the FRITZ!Box. `cave restore` is the documented way back, including onto a new server.
+**Backup:** `cave backup` runs nightly. It archives `CAVE_DATA` and `.env` without stopping anything, using the database's own online backup so the copy is consistent, keeps a set number of archives, and can copy them to a second location such as storage attached to the FRITZ!Box. `cave restore` is the documented way back, including onto a new server.
 
 **Later additions, none of which changes the architecture:**
 
 | Addition | How |
 |---|---|
 | Underfloor heating | Relays on the manifold through Home Assistant; `cave_heating` gains an on/off actuator type next to thermostats. |
+| Room-sensor regulation for thermostats without an input, such as FRITZ! | A slow, bounded correction of the setpoint in `cave_heating`. |
 | Boiler or heat pump | Local bus adapters that speak MQTT, such as ebusd for Vaillant or EMS-ESP for Bosch and Buderus. |
 | Anything else | Home Assistant's own integrations, added in its UI. |
 | Custom phone app | A client of Home Assistant's API (section 7). |
@@ -361,12 +469,14 @@ flowchart LR
 | Risk | Mitigation |
 |---|---|
 | Simulators differ from real devices | Hardware acceptance checklist; recording real messages into the fixtures. Until hardware arrives, "connects to" means proven against the simulators and Home Assistant's own integrations. |
+| Not confirmed without hardware: whether the FRITZ!Box reports a new setpoint before the valve has it; what a neutral FRITZ!Box timetable looks like; how long a Sonoff keeps using an external temperature that stops arriving | Listed on the hardware acceptance checklist. The fake FRITZ!Box supports both reporting behaviours, and the controller is tested against both. |
 | The Sonoff TRV Gen2 is three months old | Buy one or two first. The TRVZB and the FRITZ!Smart Thermo 302 are tested alternatives. |
-| A Home Assistant upgrade breaks `cave_heating` | Pinned versions; every upgrade runs the full pipeline. If the integration fails at home, the thermostats remain directly controllable in Home Assistant. |
-| A rollback after Home Assistant has migrated its database | The pre-update snapshot is restored together with the previous release. |
+| Adopting changes made on a thermostat is the most delicate rule | The rule only counts reports that match nothing the controller sent; the command budget bounds the damage if a device behaves unexpectedly. |
+| A Home Assistant upgrade breaks `cave_heating` | Pinned versions; every upgrade runs the full pipeline against one Home Assistant version. If the integration fails at home, the thermostats remain directly controllable in Home Assistant. |
+| A rollback after Home Assistant has migrated its database | The snapshot taken with the stack stopped is restored together with the previous release. |
 | Zigbee range in concrete buildings | Network-attached coordinator placed centrally; relay plugs; FRITZ! thermostats as the alternative. |
 | First-run setup relies on Home Assistant's onboarding and config-flow endpoints, which are not a formal public API | Exercised by the end-to-end test on every upgrade. |
-| GitHub Actions minutes on a private repository | The pipeline is kept short, superseded runs are cancelled, and usage is checked after the first work packages. |
+| GitHub Actions minutes on a private repository | The pipeline is kept short, superseded runs on pull requests are cancelled, and usage is checked after the first work packages. |
 
 ## 13. Sources
 
