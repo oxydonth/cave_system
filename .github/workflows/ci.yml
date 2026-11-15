@@ -11,9 +11,13 @@ on:
     branches: [main]
 
 # Cancel a pull request's run when a newer commit supersedes it. Runs on main are never
-# cancelled: every commit that lands on main gets its own complete result.
+# cancelled: each gets a group of its own. A shared group would not be enough, because GitHub
+# also cancels a run that is merely pending when a newer one is queued in the same group.
 concurrency:
-  group: ci-${{ github.event.pull_request.number || github.ref }}
+  group: >-
+    ${{ github.event_name == 'pull_request'
+    && format('ci-pr-{0}', github.event.pull_request.number)
+    || format('ci-{0}-{1}', github.ref, github.run_id) }}
   cancel-in-progress: ${{ github.event_name == 'pull_request' }}
 
 permissions:
@@ -36,6 +40,7 @@ jobs:
           version: ${{ env.UV_VERSION }}
           enable-cache: true
           cache-dependency-glob: uv.lock
+          cache-python: true
       - run: make setup
       - run: make lint
       - run: make typecheck
@@ -53,6 +58,7 @@ jobs:
           version: ${{ env.UV_VERSION }}
           enable-cache: true
           cache-dependency-glob: uv.lock
+          cache-python: true
       - run: make setup
       - run: make test
 
@@ -64,31 +70,30 @@ jobs:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           persist-credentials: false
-      # The action has no releases, only a tag 1.0.0 that predates its current form;
-      # the upstream documentation tells users to follow master, so this pins its tip.
-      - uses: home-assistant/actions/hassfest@86d4564712fa02543c808e3a693dd04f9d3f8361 # master, 2026-10-26
+      # Runs the official hassfest image directly instead of through home-assistant/actions,
+      # whose action.yml uses the untagged :latest image: a new Home Assistant release could
+      # then turn this job red with no change here. The Home Assistant version appears in
+      # three places that move together, in one pull request: `homeassistant` in uv.lock
+      # (through pytest-homeassistant-custom-component), this image tag, and later the image
+      # tag in compose.yaml. The runtime stack work package adds the check that enforces it.
+      # The digest is the registry's Docker-Content-Digest for the tag.
+      - name: hassfest (Home Assistant 2026.10.4, as in uv.lock)
+        run: >-
+          docker run --rm -v "${GITHUB_WORKSPACE}:/github/workspace"
+          ghcr.io/home-assistant/hassfest:2026.10.4@sha256:e5828f7e305518506d8b4e8346411357d68358531b761bd118fe6a1631feff44
 
   ci-ok:
     name: ci-ok
-    # Fails when any job it depends on failed, was cancelled or was skipped, so it can be
-    # the one check to wait for. Add every new job to `needs` and to `env` below.
+    # Fails when any job it depends on failed, was cancelled or was skipped, so it can be the
+    # one check to wait for. The list of jobs is `needs`; it is the only place to edit.
     if: always()
     needs: [lint, test, hassfest]
     runs-on: ubuntu-24.04
     timeout-minutes: 5
     env:
-      LINT: ${{ needs.lint.result }}
-      TEST: ${{ needs.test.result }}
-      HASSFEST: ${{ needs.hassfest.result }}
+      NEEDS: ${{ toJSON(needs) }}
     steps:
       - name: Require every job to have succeeded
         run: |
-          status=0
-          for job in LINT TEST HASSFEST; do
-            result="${!job}"
-            echo "${job}: ${result}"
-            if [ "${result}" != "success" ]; then
-              status=1
-            fi
-          done
-          exit "${status}"
+          jq -r 'to_entries[] | "\(.key): \(.value.result)"' <<< "${NEEDS}"
+          jq -e 'all(.[]; .result == "success")' <<< "${NEEDS}" > /dev/null
