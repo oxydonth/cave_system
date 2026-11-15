@@ -34,8 +34,17 @@ services:
       mosquitto:
         condition: service_healthy
     healthcheck:
-      # The frontend answers without a login once Home Assistant has finished starting.
-      test: ["CMD", "curl", "--fail", "--silent", "--output", "/dev/null", "http://127.0.0.1:8123/manifest.json"]
+      # Both must hold: the frontend answers (it does so early in the start, and also in recovery
+      # mode), and Home Assistant has logged that it finished starting. The line is written to
+      # /config/home-assistant.log at INFO because configuration.yaml sets that level for
+      # homeassistant.bootstrap; the log is renewed at every start, so an old line cannot
+      # count. Without a login this is the strongest check there is; `cave` asks the API once
+      # the script token exists.
+      test:
+        - CMD-SHELL
+        - >-
+          curl --fail --silent --output /dev/null http://127.0.0.1:8123/manifest.json
+          && grep -q 'Home Assistant initialized' /config/home-assistant.log
       interval: 30s
       timeout: 10s
       retries: 3
@@ -49,6 +58,7 @@ services:
     image: eclipse-mosquitto:2.0.22
     restart: unless-stopped
     environment:
+      TZ: ${TZ:-Europe/Berlin}
       # Only for the health check below, which logs in like every other client.
       CAVE_MQTT_USER: ${CAVE_MQTT_USER:-cave}
       CAVE_MQTT_PASSWORD: ${CAVE_MQTT_PASSWORD:?run ./cave init first}

@@ -11,7 +11,9 @@ PRUNE := -path ./.git -prune -o -path ./.venv -prune -o -path ./.claude -prune -
 # mypy strict: only directories that exist. sim/ and tools/ arrive in later work packages.
 # ops/ (the `cave` tool, Python 3.11+, standard library only) has its own mypy run with
 # `--python-version 3.11`; see the note in pyproject.toml.
-TYPED_DIRS := custom_components $(wildcard sim tools)
+# A directory counts once it holds Python files: `./cave init` creates an empty tools/ (the
+# mount source for Home Assistant), and mypy refuses a directory without any.
+TYPED_DIRS := custom_components $(foreach dir,sim tools,$(if $(shell find $(dir) -name '*.py' -print -quit 2>/dev/null),$(dir)))
 COV_ARGS := $(addprefix --cov=,$(TYPED_DIRS)) --cov=cave_ops
 YAML_FILES = $(shell find . $(PRUNE) -type f \( -name '*.yml' -o -name '*.yaml' \) -print)
 # A literal # cannot be written inside a function call in a way that make 3.81 (macOS) and 4.3

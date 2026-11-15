@@ -63,6 +63,8 @@ def test_dry_run_lists_every_step_and_runs_nothing_that_changes_the_system(repo_
         "git",
         "python3",
         "useradd",
+        "--home-dir /var/lib/cave-home",  # not the checkout: a clone needs an empty directory
+        "9DC858229FC7DD38854AE2D88D81803C0EBFCD88",  # Docker's published key fingerprint
         "/opt/cave",
         "/var/lib/cave",
     ):

@@ -107,6 +107,7 @@ def test_zigbee_template_has_discovery_availability_and_last_seen(repo_root):
     assert config["availability"]["enabled"] is True
     assert config["availability"]["passive"]["timeout"] == 25 * 60  # minutes
     assert config["advanced"]["last_seen"] == "ISO_8601"
+    assert "permit_join" not in config  # not a setting of Zigbee2MQTT 2.x
     # Secrets and the coordinator come from the environment, never from this file.
     assert "port" not in config["serial"]
     assert "auth_token" not in config["frontend"]
@@ -123,7 +124,11 @@ def test_home_assistant_configuration_has_the_hooks_of_the_work_packages(repo_ro
     assert dashboard["mode"] == "yaml"
     assert dashboard["filename"] == "dashboards/heating.yaml"
     assert config["recorder"]["purge_keep_days"] > 0
+    assert "default_config" not in config
     assert {"automation", "script", "scene"} <= set(config)
+    # What the system needs on top of Home Assistant's core set, and nothing that phones home.
+    assert {"history", "logbook", "sun", "mobile_app", "zeroconf", "ssdp"} <= set(config)
+    assert not {"cloud", "homeassistant_alerts", "go2rtc", "bluetooth", "usb"} & set(config)
     # The stack job reads these two log lines.
     assert config["logger"]["logs"]["homeassistant.setup"] == "info"
     assert config["logger"]["logs"]["homeassistant.bootstrap"] == "info"
@@ -156,3 +161,20 @@ def test_password_file_format_is_what_mosquitto_passwd_writes():
     digest = hashlib.pbkdf2_hmac("sha512", b"not-a-real-password", salt, 101)
     assert line.strip().endswith("$" + base64.b64encode(digest).decode())
     assert password_line("cave", "x") != password_line("cave", "x")  # random salt
+
+
+def test_zigbee_template_never_leads_to_the_published_default_network_key(repo_root):
+    """Without GENERATE, Zigbee2MQTT 2.14.3 uses a network key, PAN ID and extended PAN ID that
+    are in its source code. It replaces GENERATE at the first start and writes the values back
+    (lib/zigbee.ts), but only for a file that says so, and init always creates the file."""
+    advanced = load(repo_root / "zigbee2mqtt/configuration.template.yaml")["advanced"]
+
+    for setting in ("network_key", "pan_id", "ext_pan_id"):
+        assert advanced.get(setting) == "GENERATE", setting
+
+
+def test_core_settings_are_not_in_yaml_because_that_locks_them_in_the_ui(repo_root):
+    """Home Assistant 2026.10.4 core_config.py: any of them in YAML sets config_source=yaml."""
+    core = load(repo_root / "homeassistant/configuration.yaml")["homeassistant"]
+
+    assert set(core) == {"packages"}

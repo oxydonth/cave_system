@@ -4,19 +4,39 @@
 # that a person changes (areas, schedules, users, integrations) live in the UI and in the state
 # directory, never here.
 
+# Core settings (name, time zone, units, country, currency, location) are deliberately not set
+# here. Any one of them in YAML would make Home Assistant treat all of them as managed by this
+# file and lock them in the UI, including the home's location, which presence and sun-based
+# rules need and which only the owner knows. The first-run setup (`cave bootstrap`) and the
+# onboarding set them once, and the owner can change them in the UI.
 homeassistant:
-  name: Cave
-  unit_system: metric
-  currency: EUR
-  country: DE
-  # The container's TZ comes from .env, so the two cannot disagree.
-  time_zone: !env_var TZ Europe/Berlin
   # Every file in packages/ adds entities and scripts (notifications, helpers). The directory is
   # tracked, mounted read-only and may be empty.
   packages: !include_dir_named packages
 
-# The standard set: frontend, history, logbook, the phone apps' API, discovery, person and zone.
-default_config:
+# The integrations the system needs, listed one by one instead of `default_config:`. Home
+# Assistant sets up its core set anyway (frontend, config, onboarding, automation, script,
+# scene, person, zone, tag, the input_* and schedule helpers, the base platforms, logger,
+# network, backup, system_health, analytics, which stays off until the owner opts in).
+# On top of that:
+history:
+logbook:
+sun:
+# The phone apps: their API, and discovery (the apps find the server through mDNS).
+mobile_app:
+zeroconf:
+# The FRITZ!Box is found by SSDP.
+ssdp:
+# Left out of `default_config` on purpose, each for a reason:
+#   homeassistant_alerts  fetches https://alerts.home-assistant.io/alerts.json every 3 hours
+#   cloud                 Nabu Casa's cloud service; this system has no vendor cloud (concept 10)
+#   go2rtc, stream        camera streaming; there are no cameras
+#   bluetooth, usb        the server has no Bluetooth or USB radio in use, and they log errors on
+#                         a host without them
+#   dhcp                  discovery by DHCP sniffing; devices are added by name, not discovered
+#   conversation, assist_pipeline, media_source, file, energy, usage_prediction, my
+#                         voice, media and energy features that are out of scope
+# Push notifications to the phone apps do not need `cloud`: the apps use their own relay.
 
 # Keep the database small and its writes rare, which matters on an SSD or SD card. Heating
 # graphs need weeks, not years.

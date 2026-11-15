@@ -3,7 +3,7 @@
 #
 #   * Docker Engine and the Compose plugin, from Docker's own package repository
 #   * Git and Python 3 (the `cave` command needs Python 3.11 or newer)
-#   * the service user, /opt/cave (the checkout) and /var/lib/cave (the state)
+#   * the service user (home /var/lib/cave-home), /opt/cave (the checkout) and /var/lib/cave (the state)
 #
 # Idempotent: every step first looks whether it is already done. Run it as root:
 #
@@ -16,9 +16,14 @@ set -euo pipefail
 
 SERVICE_USER=cave
 APP_DIR=/opt/cave
+# Outside the checkout: the deploy key and Git's and SSH's state go here, and a clone needs an
+# empty target directory.
+HOME_DIR=/var/lib/cave-home
 DATA_DIR=/var/lib/cave
 BACKUP_DIR=/var/backups/cave
 DOCKER_KEYRING=/etc/apt/keyrings/docker.asc
+# The fingerprint Docker publishes for its package signing key.
+DOCKER_KEY_FINGERPRINT=9DC858229FC7DD38854AE2D88D81803C0EBFCD88
 DOCKER_SOURCES=/etc/apt/sources.list.d/docker.sources
 DOCKER_PACKAGES="docker-ce docker-ce-cli containerd.io docker-buildx-plugin docker-compose-plugin"
 DRY_RUN=0
@@ -112,7 +117,7 @@ ARCH=$(dpkg --print-architecture 2>/dev/null || echo arm64)
 # --- packages
 say "[1/5] Base packages"
 missing=""
-for pkg in ca-certificates curl git python3; do
+for pkg in ca-certificates curl git gnupg python3; do
   if dpkg -s "$pkg" >/dev/null 2>&1; then
     say "  $pkg: installed"
   else
@@ -126,6 +131,11 @@ if [ -n "$missing" ]; then
   run apt-get install -y $missing
 fi
 
+# The first fingerprint of a key file (the primary key).
+key_fingerprint() {
+  gpg --show-keys --with-colons "$1" 2>/dev/null | awk -F: '/^fpr:/ { print $10; exit }'
+}
+
 say "[2/5] Docker's package repository"
 SOURCES_TEXT="Types: deb
 URIs: $DOCKER_DEB_URL
@@ -134,12 +144,23 @@ Components: stable
 Architectures: $ARCH
 Signed-By: $DOCKER_KEYRING"
 if [ -f "$DOCKER_KEYRING" ]; then
+  if [ "$DRY_RUN" -eq 0 ] && [ "$(key_fingerprint "$DOCKER_KEYRING")" != "$DOCKER_KEY_FINGERPRINT" ]; then
+    die "$DOCKER_KEYRING is not Docker's signing key (fingerprint $DOCKER_KEY_FINGERPRINT); remove it and run again"
+  fi
   say "  signing key: present"
 else
-  say "  signing key: to be downloaded to $DOCKER_KEYRING"
-  run install -m 0755 -d /etc/apt/keyrings
-  run curl -fsSL "$DOCKER_DEB_URL/gpg" -o "$DOCKER_KEYRING"
-  run chmod a+r "$DOCKER_KEYRING"
+  say "  signing key: to be downloaded to $DOCKER_KEYRING and checked against $DOCKER_KEY_FINGERPRINT"
+  if [ "$DRY_RUN" -eq 1 ]; then
+    say "  would run: curl -fsSL $DOCKER_DEB_URL/gpg, compare its fingerprint, install it as $DOCKER_KEYRING"
+  else
+    install -m 0755 -d /etc/apt/keyrings
+    key_tmp=$(mktemp)
+    trap 'rm -f "$key_tmp"' EXIT
+    curl -fsSL "$DOCKER_DEB_URL/gpg" -o "$key_tmp"
+    [ "$(key_fingerprint "$key_tmp")" = "$DOCKER_KEY_FINGERPRINT" ] ||
+      die "the key downloaded from $DOCKER_DEB_URL/gpg has an unexpected fingerprint; nothing was installed"
+    install -m 0644 "$key_tmp" "$DOCKER_KEYRING"
+  fi
 fi
 if [ -f "$DOCKER_SOURCES" ] && [ "$(cat "$DOCKER_SOURCES")" = "$SOURCES_TEXT" ]; then
   say "  $DOCKER_SOURCES: up to date"
@@ -150,7 +171,6 @@ else
     printf '%s\n' "$SOURCES_TEXT" | sed 's/^/    /'
   else
     printf '%s\n' "$SOURCES_TEXT" >"$DOCKER_SOURCES"
-    apt-get update
   fi
 fi
 
@@ -158,6 +178,9 @@ say "[3/5] Docker Engine and the Compose plugin"
 if dpkg -s docker-ce docker-compose-plugin >/dev/null 2>&1; then
   say "  installed"
 else
+  # Always refresh the package lists first: an earlier run may have been interrupted between
+  # writing the repository and updating, and then apt would not know the packages.
+  run apt-get update
   # shellcheck disable=SC2086  # word splitting of the package list is intended
   run apt-get install -y $DOCKER_PACKAGES
 fi
@@ -173,7 +196,7 @@ say "[4/5] Service user '$SERVICE_USER'"
 if id -u "$SERVICE_USER" >/dev/null 2>&1; then
   say "  exists"
 else
-  run useradd --system --home-dir "$APP_DIR" --no-create-home --shell /usr/sbin/nologin "$SERVICE_USER"
+  run useradd --system --home-dir "$HOME_DIR" --create-home --shell /usr/sbin/nologin "$SERVICE_USER"
 fi
 if id -nG "$SERVICE_USER" 2>/dev/null | grep -qw docker; then
   say "  is in the docker group"
@@ -207,7 +230,7 @@ cat <<EOF
 
 Done. Next, as the service user:
 
-  sudo -u $SERVICE_USER git clone <repository> $APP_DIR   # an empty directory
+  # clone the repository into the empty $APP_DIR as $SERVICE_USER (docs/install.md, step 2)
   cd $APP_DIR && sudo -u $SERVICE_USER ./cave init
   # edit .env, then:  sudo -u $SERVICE_USER ./cave up
 
