@@ -1,0 +1,93 @@
+name: CI
+
+# This file only lists jobs. A larger check lives in its own reusable workflow file
+# (stack.yml, e2e.yml, release.yml) and is added here as a short calling job that
+# `ci-ok` also depends on. `ci-ok` is the single required status check.
+
+on:
+  pull_request:
+  push:
+    branches: [main]
+
+# Cancel a pull request's run when a newer commit supersedes it. Runs on main are never
+# cancelled: every commit that lands on main gets its own complete result.
+concurrency:
+  group: ci-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
+permissions:
+  contents: read
+
+env:
+  UV_VERSION: "0.13.8"
+
+jobs:
+  lint:
+    name: lint
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: astral-sh/setup-uv@68559e99cc807c1eb7e9238fd43a15bba460eec2 # v10.3.3
+        with:
+          version: ${{ env.UV_VERSION }}
+          enable-cache: true
+          cache-dependency-glob: uv.lock
+      - run: make setup
+      - run: make lint
+      - run: make typecheck
+
+  test:
+    name: test
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: astral-sh/setup-uv@68559e99cc807c1eb7e9238fd43a15bba460eec2 # v10.3.3
+        with:
+          version: ${{ env.UV_VERSION }}
+          enable-cache: true
+          cache-dependency-glob: uv.lock
+      - run: make setup
+      - run: make test
+
+  hassfest:
+    name: hassfest
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      # The action has no releases, only a tag 1.0.0 that predates its current form;
+      # the upstream documentation tells users to follow master, so this pins its tip.
+      - uses: home-assistant/actions/hassfest@86d4564712fa02543c808e3a693dd04f9d3f8361 # master, 2026-10-26
+
+  ci-ok:
+    name: ci-ok
+    # Fails when any job it depends on failed, was cancelled or was skipped, so it can be
+    # the one required check. Add every new job to `needs` and to `env` below.
+    if: always()
+    needs: [lint, test, hassfest]
+    runs-on: ubuntu-24.04
+    timeout-minutes: 5
+    env:
+      LINT: ${{ needs.lint.result }}
+      TEST: ${{ needs.test.result }}
+      HASSFEST: ${{ needs.hassfest.result }}
+    steps:
+      - name: Require every job to have succeeded
+        run: |
+          status=0
+          for job in LINT TEST HASSFEST; do
+            result="${!job}"
+            echo "${job}: ${result}"
+            if [ "${result}" != "success" ]; then
+              status=1
+            fi
+          done
+          exit "${status}"
