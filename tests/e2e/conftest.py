@@ -22,8 +22,8 @@ import aiohttp
 import pytest
 
 from cave_ops.envfile import load_env
-from cave_ops.ha import HAClient
-from tools.bootstrap import WebSocket
+from cave_ops.ha import HAClient, HAError
+from tools.bootstrap import ONBOARDING_STEPS, WebSocket
 
 REPO = Path(__file__).resolve().parents[2]
 URL = "http://127.0.0.1:8123"
@@ -95,6 +95,19 @@ class Stack:
 
         return asyncio.run(run())
 
+    def onboarding(self) -> dict[str, bool]:
+        """Onboarding's steps and whether each is done.
+
+        A Home Assistant started with onboarding complete has no onboarding views: 404.
+        """
+        try:
+            steps = self.api().request("GET", "/api/onboarding")
+        except HAError as error:
+            if error.status != 404:
+                raise
+            return dict.fromkeys(ONBOARDING_STEPS, True)
+        return {step["step"]: step["done"] for step in steps}
+
     def state(self) -> dict[str, Any]:
         """Everything the bootstrap could change, comparable between two runs.
 
@@ -134,7 +147,7 @@ class Stack:
             "core": {
                 key: config[key] for key in ("time_zone", "country", "currency", "unit_system")
             },
-            "onboarding": api.request("GET", "/api/onboarding"),
+            "onboarding": self.onboarding(),
             "token_file": (
                 hashlib.sha256(self.token_file.read_bytes()).hexdigest(),
                 info.st_mode,
