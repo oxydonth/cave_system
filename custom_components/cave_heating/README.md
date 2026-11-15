@@ -97,6 +97,23 @@ in quotes, or a number of seconds.
 | `window_unavailable_grace` | 30 min | A window contact that goes silent while open keeps the pause this long. |
 | `presence_unavailable_grace` | 30 min | A presence entity that becomes unavailable keeps its last reading this long. |
 
+## Turning a dial
+
+A dial turned on a radiator thermostat becomes the room's override `manual_settle` after the last
+turn, and the room's other thermostats follow.
+
+For `confirm_timeout` (5 minutes) after Home Assistant or the integration starts, after a
+thermostat returns from being unavailable, and after a hold ends, a dial turn is not taken over:
+the controller puts the thermostat back to the room's target with one command, because a report in
+that time can still be the late answer to a command sent before. Turn the dial again once the five
+minutes are over, or set the temperature in the app. A short radio outage starts the five minutes
+again for that thermostat.
+
+The window is the same five minutes for slow thermostats (FRITZ!), although their commands may
+take up to `confirm_timeout_slow` to arrive. The cost: a late report of a command from before the
+restart or the outage that arrives after the five minutes on a slow thermostat can be taken for a
+dial turn, and the room then takes that target as its override.
+
 ## The validator
 
 Run in Home Assistant's configuration directory, also while Home Assistant is down:

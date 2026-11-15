@@ -814,3 +814,19 @@ async def test_a_schedule_change_during_a_restart_ends_the_override(
     home.set("schedule.living", schedule_now)
     await home.start(config(room("living_room", "climate.a", schedule="schedule.living")))
     assert home.state("climate.cave_living_room").attributes["reason"] == reason
+
+
+async def test_a_reload_keeps_owed_settings_only_while_the_file_lists_them(
+    hass: HomeAssistant, home: FakeHome
+) -> None:
+    """N4: an owed setting removed from the file is forgotten; one still listed is kept."""
+    await home.thermostat("climate.a", target=21.0)
+    settings = {"select.a_sensor": "external", "switch.a_window": "off"}
+    trv = {"entity": "climate.a", "settings": settings}
+    await home.start(config(room("living_room", trv)))
+    owed = home.runtime().diagnostics()["rooms"]["living_room"]["pending_settings"]
+    assert owed == {"select.a_sensor": "climate.a", "switch.a_window": "climate.a"}
+    trv = {"entity": "climate.a", "settings": {"switch.a_window": "off"}}
+    await home.reload(config(room("living_room", trv)))
+    owed = home.runtime().diagnostics()["rooms"]["living_room"]["pending_settings"]
+    assert owed == {"switch.a_window": "climate.a"}
