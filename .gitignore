@@ -20,6 +20,8 @@ build/
 .env.*
 !.env.example
 secrets.yaml
+# A local Compose override, for example to pass a USB coordinator into Zigbee2MQTT
+compose.override.yaml
 /data/
 
 # Agent worktrees

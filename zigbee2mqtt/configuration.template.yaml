@@ -1,0 +1,51 @@
+# Zigbee2MQTT's initial configuration. `./cave init` copies this file to
+# CAVE_DATA/zigbee2mqtt/configuration.yaml, where Zigbee2MQTT keeps writing to it (paired devices,
+# the network key, the PAN IDs and so on). It is never overwritten, so changes here reach only new installs.
+#
+# Not set here, because they come from the environment (compose.yaml, from `.env`):
+#   serial.port     CAVE_Z2M_SERIAL_PORT      coordinator address
+#   serial.adapter  CAVE_Z2M_ADAPTER          coordinator driver
+#   frontend.auth_token  CAVE_Z2M_FRONTEND_TOKEN
+#   mqtt.server, mqtt.user, mqtt.password     the broker of this stack
+version: 5
+
+mqtt:
+  base_topic: zigbee2mqtt
+  server: mqtt://mosquitto:1883
+
+serial: {}
+
+frontend:
+  enabled: true
+  port: 8080
+
+# Home Assistant discovers every device through MQTT discovery under the prefix `homeassistant`.
+homeassistant:
+  enabled: true
+  discovery_topic: homeassistant
+  status_topic: homeassistant/status
+
+# Availability on. Active devices (mains powered) are pinged every 10 minutes. Battery devices
+# are passive: they are declared offline only after Zigbee2MQTT's own default of 25 hours
+# (1500 minutes) without a message, because they sleep and report rarely. Stated explicitly so
+# that a change of Zigbee2MQTT's default cannot change it unnoticed.
+availability:
+  enabled: true
+  active:
+    timeout: 10
+  passive:
+    timeout: 1500
+
+advanced:
+  # This home's own Zigbee network. Zigbee2MQTT replaces each GENERATE with a random value the
+  # first time it starts and writes it back to this file, which `./cave init` never overwrites
+  # (back it up: without the network key every device has to be paired again). Without these
+  # three, Zigbee2MQTT 2.x uses defaults that are published in its source code: anyone in radio
+  # range could read and inject this home's Zigbee traffic.
+  network_key: GENERATE
+  pan_id: GENERATE
+  ext_pan_id: GENERATE
+  # Add `last_seen` to every device's state, so that the dashboard and the problem sensors can
+  # tell how long a device has been silent.
+  last_seen: ISO_8601
+  log_level: info

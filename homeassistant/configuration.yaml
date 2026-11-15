@@ -1,0 +1,78 @@
+# Home Assistant's configuration for cave_system (concept sections 4.2, 4.5 and 6).
+#
+# Mounted read-only at /config/configuration.yaml; /config itself is the state directory. Settings
+# that a person changes (areas, schedules, users, integrations) live in the UI and in the state
+# directory, never here.
+
+# Core settings (name, time zone, units, country, currency, location) are deliberately not set
+# here. Any one of them in YAML would make Home Assistant treat all of them as managed by this
+# file and lock them in the UI, including the home's location, which presence and sun-based
+# rules need and which only the owner knows. The first-run setup (`cave bootstrap`) and the
+# onboarding set them once, and the owner can change them in the UI.
+homeassistant:
+  # Every file in packages/ adds entities and scripts (notifications, helpers). The directory is
+  # tracked, mounted read-only and may be empty.
+  packages: !include_dir_named packages
+
+# The integrations the system needs, listed one by one instead of `default_config:`. Home
+# Assistant sets up its core set anyway (frontend, config, onboarding, automation, script,
+# scene, person, zone, tag, the input_* and schedule helpers, the base platforms, logger,
+# network, backup, system_health, analytics, which stays off until the owner opts in).
+# On top of that:
+history:
+logbook:
+sun:
+# The phone apps: their API, and discovery (the apps find the server through mDNS).
+mobile_app:
+zeroconf:
+# The FRITZ!Box is found by SSDP.
+ssdp:
+# Left out of `default_config` on purpose, each for a reason:
+#   homeassistant_alerts  fetches https://alerts.home-assistant.io/alerts.json every 3 hours
+#   cloud                 Nabu Casa's cloud service; this system has no vendor cloud (concept 10)
+#   go2rtc, stream        camera streaming; there are no cameras
+#   bluetooth, usb        the server has no Bluetooth or USB radio in use, and they log errors on
+#                         a host without them
+#   dhcp                  discovery by DHCP sniffing; devices are added by name, not discovered
+#   conversation, assist_pipeline, media_source, file, energy, usage_prediction, my
+#                         voice, media and energy features that are out of scope
+# Push notifications to the phone apps do not need `cloud`: the apps use their own relay (the
+# one connection to the internet that concept 7 accepts). Home Assistant's built-in `brands`
+# integration still fetches an icon from brands.home-assistant.io when one is shown.
+
+# Keep the database small and its writes rare, which matters on an SSD or SD card. Heating
+# graphs need weeks, not years.
+recorder:
+  purge_keep_days: 30
+  commit_interval: 30
+
+# Only warnings and errors, plus two kinds of line that others read: "Setting up <integration>"
+# (the pipeline's stack job, to see that `cave_heating` was loaded) and "Home Assistant
+# initialized" (the health check in compose.yaml, which is not healthy before it, and the stack
+# job). Removing these levels would make Home Assistant never healthy.
+logger:
+  default: warning
+  logs:
+    homeassistant.setup: info
+    homeassistant.bootstrap: info
+
+# The heating integration. The empty entry is on purpose: it reads its own configuration from
+# the applied copy of cave/heating.yaml (concept sections 4.5 and 5.1), and Home Assistant
+# creates its config entry on first start.
+cave_heating:
+
+# The heating dashboard, in YAML mode, generated from the applied heating.yaml by `./cave apply`
+# (concept sections 4.5 and 6). `./cave init` writes a placeholder until then.
+lovelace:
+  dashboards:
+    cave-heating:
+      mode: yaml
+      title: Heizung
+      icon: mdi:radiator
+      show_in_sidebar: true
+      filename: dashboards/heating.yaml
+
+# The files the UI edits. Home Assistant does not create them, so `./cave init` does.
+automation: !include automations.yaml
+script: !include scripts.yaml
+scene: !include scenes.yaml

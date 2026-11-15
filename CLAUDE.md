@@ -11,13 +11,15 @@ updates the concept in the same pull request.
 | Command | Does |
 |---|---|
 | `make setup` | Install Python 3.14 and all dependencies from `uv.lock` (uv only; no Homebrew, pip or system packages) |
-| `make check` | Everything that can run locally: `lint`, `typecheck`, `test`. Run it before every push |
+| `make check` | Everything that can run locally: `lint`, `typecheck`, `test`, `test-py311`, `versions`. Run it before every push |
 | `make lint` | Ruff check and format check, yamllint, ShellCheck, actionlint |
 | `make format` | Apply Ruff fixes and formatting |
-| `make typecheck` | mypy `--strict` on `custom_components`, `sim` and `tools` (the ones that exist) |
+| `make typecheck` | mypy `--strict` on `custom_components`, `sim` and `tools` (the ones that exist); `ops/` and `cave` against Python 3.11 |
 | `make test` | pytest with coverage |
+| `make test-py311` | `tests/ops` on Python 3.11 without Home Assistant (needs network once, for uv to fetch Python 3.11) |
+| `make versions` | The Home Assistant version in `uv.lock`, `compose.yaml` and `ci.yml` agree; `paho-mqtt` and `pyfritzhome` match Home Assistant |
 
-hassfest needs Docker and runs only in the pipeline. Run any tool by hand with `uv run <tool>`.
+hassfest and the `stack` job need Docker and run only in the pipeline. The `cave` command (`ops/`, see `ops/README.md`) is standard library only and runs on Python 3.11; run it here with `uv run python cave ...`. Run any tool by hand with `uv run <tool>`.
 
 ## Delivery rules
 
@@ -48,8 +50,8 @@ hassfest needs Docker and runs only in the pipeline. Run any tool by hand with `
   `custom_components.cave_heating` and the autouse `enable_custom_integrations` fixture. Keep both, or the loader
   reports "Integration not found".
 - The Home Assistant version appears in `uv.lock` (through `pytest-homeassistant-custom-component`), in the hassfest
-  image tag in `ci.yml` and later in the image tag in `compose.yaml`. They are bumped together by hand, in one pull
-  request; Dependabot ignores them. See the comment at the hassfest step.
+  image tag in `ci.yml` and in the image tag in `compose.yaml`. They are bumped together by hand, in one pull
+  request; Dependabot ignores them and `make versions` enforces it. See the comment at the hassfest step.
 - Linters skip `.venv`, `.claude` and the root `data/`, anchored to the repository root so that nested directories
   named `data` are still linted. Keep the virtualenv out of every linter's path: it is about 650 MB.
 - Shared lint settings, including per-directory Ruff ignores for `tests/`, `sim/`, `ops/` and `tools/`, are in `pyproject.toml`.

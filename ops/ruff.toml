@@ -1,0 +1,4 @@
+# Ruff settings for ops/ (the `cave` command). Same rules as the rest of the repository, but the
+# code must run on the server's own Python, 3.11 or newer, with the standard library only.
+extend = "../pyproject.toml"
+target-version = "py311"
