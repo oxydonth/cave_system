@@ -31,7 +31,7 @@ Check the last column before you order.
 | **Sonoff TRV Gen2** (TRV-ZBT) | Radiator thermostat, the main pick. Regulates on the room sensor, stores three weekly plans on the device (the system does not use them). Sonoff states up to six months on two AA cells. | €31–35 | The valve: see "Will it fit your valve?" below. Buy one or two first. |
 | **Sonoff TRVZB** | Radiator thermostat, the fallback. Three years old, larger and louder than the Gen2, but well understood. Regulates on the room sensor. | €25–29 | The same. |
 | **Bosch Heizkörper-Thermostat II [+M]** (BTH-RA) | Radiator thermostat for a quiet room, typically a bedroom. Regulates on the room sensor. | about €63 | It ships in Matter mode and must be switched to Zigbee on the device; you pair it with its install code. You do not need the Bosch controller. |
-| **FRITZ!Smart Thermo 302** (or the older 301) | Radiator thermostat that talks to your FRITZ!Box over DECT, with no Zigbee involved. For a room Zigbee does not reach, or if you would rather not run Zigbee. Regulates on its own sensor only. | €45–55 | Your FRITZ!Box must have a DECT base station (AVM's product page says every FRITZ!Box except the 7312 and 7412) and FRITZ!OS 6.83 or later. A new setpoint reaches the valve after about three minutes, up to fifteen on the 301. Prefer the 302. |
+| **FRITZ!Smart Thermo 302** (or the older 301) | Radiator thermostat that talks to your FRITZ!Box over DECT, with no Zigbee involved. For a room Zigbee does not reach, or if you would rather not run Zigbee. Regulates on its own sensor only. | €45–55 | Your FRITZ!Box must have a DECT base station (not every model has one: look for DECT in its specification), must not be a 7312 or 7412, and needs FRITZ!OS 6.83 or later. A new setpoint reaches the valve after about three minutes, up to fifteen on the 301. Prefer the 302. |
 | **Sonoff SNZB-02P** | Room temperature and humidity. | €10–12 | Nothing special. |
 | **Sonoff SNZB-04P** | Window and door contact. | €10–12 | Nothing special. |
 | **SMLIGHT SLZB-06MG24** | Zigbee coordinator, connected by Ethernet (PoE capable). | €40–45 | You need an Ethernet socket, or a PoE switch (power and network through one cable), at the place where you mount it. |
@@ -52,7 +52,7 @@ Which adapters come in the box differs by model:
 | Model | Adapters in the box |
 |---|---|
 | Sonoff TRV Gen2 | CAL, GIA, M28, RA, RAV, RAVL |
-| Sonoff TRVZB | Sonoff's compatibility guide names the same adapters (RA, RAV, RAVL, CAL, GIA, M28); it does not say which are in the box, so check the shop page |
+| Sonoff TRVZB | RA, RAV, RAVL, CAL, GIA and M28 are the adapters Sonoff's compatibility guide names for it; it does not say "in the box", so check the shop page |
 | Bosch Thermostat II [+M] | RA and RAVL only |
 | FRITZ!Smart Thermo 302 | RA only |
 

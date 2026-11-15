@@ -12,7 +12,7 @@ The official Home Assistant app is free and open source. It needs iOS 16.4 or ne
 2. Open the app and choose **Connect to my Home Assistant server**.
 3. The app searches the network. If it finds your server, pick it. If not, tap **Enter address manually** and enter `http://<server address>:8123`, where the address is the server's IP address or name on your home network.
 4. Log in with your Home Assistant account.
-5. Name the phone. Home Assistant builds the phone's entities and its notify action from the name (part 2).
+5. Name the phone. The field is filled in with the phone's own name; keep it or change it. Home Assistant builds the phone's entities and its notify action from this name (part 2).
 6. Grant the permissions. Android: location "all the time" and "Nearby devices". iOS: "Allow While Using the App", then "Allow always". Allow notifications when asked.
 7. If you entered an `http://` address, the app asks for a connection security level. What you choose decides whether the app works over the VPN of part 4:
    - **Android:** choose **Most secure** and confirm your home Wi-Fi. After part 4, also open **Settings**, **Companion app**, your server, **Home network** in the app and tick **VPN connected**.
@@ -29,13 +29,13 @@ To find the name:
 1. In Home Assistant, open **Developer tools**, **Actions**.
 2. Type `notify.mobile_app` in the action field. The list shows one action per phone with the app installed, for example `notify.mobile_app_pixel_8`. Copy that name.
 
-The name is `notify.mobile_app_` followed by the phone's device ID, which defaults to the phone's own name (iOS: **Settings**, **General**, **About**; Android: **Settings**, **About phone**) with spaces and special characters replaced by underscores. The action exists only if you allowed notifications when you set up the app.
+The name is `notify.mobile_app_` followed by the phone's device ID, which is the name from step 5 of part 1, pre-filled with the phone's own name (iOS: **Settings**, **General**, **About**; Android: **Settings**, **About phone**) with spaces and special characters replaced by underscores. The action exists only if you allowed notifications when you set up the app.
 
 To enter it:
 
 1. Open **Settings**, **Devices & services**, **Helpers**.
 2. Search for `input_text.cave_notify_service` and open it. Enter the full name, for example `notify.mobile_app_pixel_8`, and save. What you enter stays across restarts and updates.
-3. To test, run `script.cave_notify` from **Developer tools**, **Actions** with a title and a message. The phone should show it within seconds.
+3. To test, run `script.cave_notify` from **Developer tools**, **Actions** with a `title` and a `message`. The phone should show it within seconds.
 
 Notifications to a phone away from home pass through Apple's or Google's push service. This is the only place the internet is involved. If it is down, the notification still appears in Home Assistant.
 
@@ -110,13 +110,13 @@ No port is opened to the internet and no cloud is involved. You connect the phon
 
 On a cable box do not use 192.168.100.x: it is reserved for the provider.
 
-Changing the range renumbers every device in the home. Before you install, do it first and then give the server and the coordinator fixed addresses. If the system is already running, afterwards update:
+Changing the range renumbers every device in the home. Before you install, do it first and then give the server and the coordinator fixed addresses. If the system is already running, find the new addresses in the FRITZ!Box under **Home Network**, **Network**, and update:
 
 - the coordinator address in `.env` (`CAVE_Z2M_SERIAL_PORT=tcp://<address>:6638`); otherwise every Zigbee device is lost;
 - `CAVE_FRITZ_HOST` in `.env`;
-- the FRITZ!Box Tools and FRITZ!SmartHome integrations, under **Settings**, **Devices & services** (change the host of each);
+- the FRITZ!Box Tools and FRITZ!SmartHome integrations, under **Settings**, **Devices & services** (three-dot menu of the integration, **Reconfigure**, new host);
 - the server address saved in the phone app, and any bookmark;
-- then recreate the containers with `./cave up` so they read `.env` again (the install guide confirms this).
+- then recreate the containers with `./cave up` so they read `.env` again.
 
 ### 4.2 Set it up
 
