@@ -1,0 +1,320 @@
+{
+  "discovery": {
+    "binary_sensor/@IEEE@/battery_low/config": {
+      "availability": [
+        {
+          "topic": "zigbee2mqtt/bridge/state",
+          "value_template": "{{ value_json.state }}"
+        },
+        {
+          "topic": "zigbee2mqtt/@FRIENDLY_NAME@/availability",
+          "value_template": "{{ value_json.state }}"
+        }
+      ],
+      "availability_mode": "all",
+      "default_entity_id": "binary_sensor.@OBJECT_ID@_battery_low",
+      "device": {
+        "identifiers": [
+          "zigbee2mqtt_@IEEE@"
+        ],
+        "manufacturer": "SONOFF",
+        "model": "Contact sensor",
+        "model_id": "SNZB-04P",
+        "name": "@FRIENDLY_NAME@",
+        "sw_version": "Zigbee2MQTT 2.14.3",
+        "via_device": "zigbee2mqtt_bridge_@COORDINATOR_IEEE@"
+      },
+      "device_class": "battery",
+      "entity_category": "diagnostic",
+      "object_id": "@OBJECT_ID@_battery_low",
+      "origin": {
+        "name": "Zigbee2MQTT",
+        "sw": "2.14.3",
+        "url": "https://www.zigbee2mqtt.io"
+      },
+      "payload_off": false,
+      "payload_on": true,
+      "state_topic": "zigbee2mqtt/@FRIENDLY_NAME@",
+      "unique_id": "@IEEE@_battery_low_zigbee2mqtt",
+      "value_template": "{% if \"battery_low\" in value_json %}{{ value_json[\"battery_low\"] }}{% endif %}"
+    },
+    "binary_sensor/@IEEE@/contact/config": {
+      "availability": [
+        {
+          "topic": "zigbee2mqtt/bridge/state",
+          "value_template": "{{ value_json.state }}"
+        },
+        {
+          "topic": "zigbee2mqtt/@FRIENDLY_NAME@/availability",
+          "value_template": "{{ value_json.state }}"
+        }
+      ],
+      "availability_mode": "all",
+      "default_entity_id": "binary_sensor.@OBJECT_ID@_contact",
+      "device": {
+        "identifiers": [
+          "zigbee2mqtt_@IEEE@"
+        ],
+        "manufacturer": "SONOFF",
+        "model": "Contact sensor",
+        "model_id": "SNZB-04P",
+        "name": "@FRIENDLY_NAME@",
+        "sw_version": "Zigbee2MQTT 2.14.3",
+        "via_device": "zigbee2mqtt_bridge_@COORDINATOR_IEEE@"
+      },
+      "device_class": "door",
+      "object_id": "@OBJECT_ID@_contact",
+      "origin": {
+        "name": "Zigbee2MQTT",
+        "sw": "2.14.3",
+        "url": "https://www.zigbee2mqtt.io"
+      },
+      "payload_off": true,
+      "payload_on": false,
+      "state_topic": "zigbee2mqtt/@FRIENDLY_NAME@",
+      "unique_id": "@IEEE@_contact_zigbee2mqtt",
+      "value_template": "{% if \"contact\" in value_json %}{{ value_json[\"contact\"] }}{% endif %}"
+    },
+    "binary_sensor/@IEEE@/tamper/config": {
+      "availability": [
+        {
+          "topic": "zigbee2mqtt/bridge/state",
+          "value_template": "{{ value_json.state }}"
+        },
+        {
+          "topic": "zigbee2mqtt/@FRIENDLY_NAME@/availability",
+          "value_template": "{{ value_json.state }}"
+        }
+      ],
+      "availability_mode": "all",
+      "default_entity_id": "binary_sensor.@OBJECT_ID@_tamper",
+      "device": {
+        "identifiers": [
+          "zigbee2mqtt_@IEEE@"
+        ],
+        "manufacturer": "SONOFF",
+        "model": "Contact sensor",
+        "model_id": "SNZB-04P",
+        "name": "@FRIENDLY_NAME@",
+        "sw_version": "Zigbee2MQTT 2.14.3",
+        "via_device": "zigbee2mqtt_bridge_@COORDINATOR_IEEE@"
+      },
+      "device_class": "tamper",
+      "object_id": "@OBJECT_ID@_tamper",
+      "origin": {
+        "name": "Zigbee2MQTT",
+        "sw": "2.14.3",
+        "url": "https://www.zigbee2mqtt.io"
+      },
+      "payload_off": false,
+      "payload_on": true,
+      "state_topic": "zigbee2mqtt/@FRIENDLY_NAME@",
+      "unique_id": "@IEEE@_tamper_zigbee2mqtt",
+      "value_template": "{% if \"tamper\" in value_json %}{{ value_json[\"tamper\"] }}{% endif %}"
+    },
+    "sensor/@IEEE@/battery/config": {
+      "availability": [
+        {
+          "topic": "zigbee2mqtt/bridge/state",
+          "value_template": "{{ value_json.state }}"
+        },
+        {
+          "topic": "zigbee2mqtt/@FRIENDLY_NAME@/availability",
+          "value_template": "{{ value_json.state }}"
+        }
+      ],
+      "availability_mode": "all",
+      "default_entity_id": "sensor.@OBJECT_ID@_battery",
+      "device": {
+        "identifiers": [
+          "zigbee2mqtt_@IEEE@"
+        ],
+        "manufacturer": "SONOFF",
+        "model": "Contact sensor",
+        "model_id": "SNZB-04P",
+        "name": "@FRIENDLY_NAME@",
+        "sw_version": "Zigbee2MQTT 2.14.3",
+        "via_device": "zigbee2mqtt_bridge_@COORDINATOR_IEEE@"
+      },
+      "device_class": "battery",
+      "enabled_by_default": true,
+      "entity_category": "diagnostic",
+      "object_id": "@OBJECT_ID@_battery",
+      "origin": {
+        "name": "Zigbee2MQTT",
+        "sw": "2.14.3",
+        "url": "https://www.zigbee2mqtt.io"
+      },
+      "state_class": "measurement",
+      "state_topic": "zigbee2mqtt/@FRIENDLY_NAME@",
+      "unique_id": "@IEEE@_battery_zigbee2mqtt",
+      "unit_of_measurement": "%",
+      "value_template": "{% if \"battery\" in value_json %}{{ value_json[\"battery\"] }}{% endif %}"
+    },
+    "sensor/@IEEE@/last_seen/config": {
+      "availability": [
+        {
+          "topic": "zigbee2mqtt/bridge/state",
+          "value_template": "{{ value_json.state }}"
+        },
+        {
+          "topic": "zigbee2mqtt/@FRIENDLY_NAME@/availability",
+          "value_template": "{{ value_json.state }}"
+        }
+      ],
+      "availability_mode": "all",
+      "default_entity_id": "sensor.@OBJECT_ID@_last_seen",
+      "device": {
+        "identifiers": [
+          "zigbee2mqtt_@IEEE@"
+        ],
+        "manufacturer": "SONOFF",
+        "model": "Contact sensor",
+        "model_id": "SNZB-04P",
+        "name": "@FRIENDLY_NAME@",
+        "sw_version": "Zigbee2MQTT 2.14.3",
+        "via_device": "zigbee2mqtt_bridge_@COORDINATOR_IEEE@"
+      },
+      "device_class": "timestamp",
+      "enabled_by_default": false,
+      "entity_category": "diagnostic",
+      "icon": "mdi:clock",
+      "name": "Last seen",
+      "object_id": "@OBJECT_ID@_last_seen",
+      "origin": {
+        "name": "Zigbee2MQTT",
+        "sw": "2.14.3",
+        "url": "https://www.zigbee2mqtt.io"
+      },
+      "state_topic": "zigbee2mqtt/@FRIENDLY_NAME@",
+      "unique_id": "@IEEE@_last_seen_zigbee2mqtt",
+      "value_template": "{% if \"last_seen\" in value_json %}{{ value_json[\"last_seen\"] }}{% endif %}"
+    },
+    "sensor/@IEEE@/linkquality/config": {
+      "availability": [
+        {
+          "topic": "zigbee2mqtt/bridge/state",
+          "value_template": "{{ value_json.state }}"
+        },
+        {
+          "topic": "zigbee2mqtt/@FRIENDLY_NAME@/availability",
+          "value_template": "{{ value_json.state }}"
+        }
+      ],
+      "availability_mode": "all",
+      "default_entity_id": "sensor.@OBJECT_ID@_linkquality",
+      "device": {
+        "identifiers": [
+          "zigbee2mqtt_@IEEE@"
+        ],
+        "manufacturer": "SONOFF",
+        "model": "Contact sensor",
+        "model_id": "SNZB-04P",
+        "name": "@FRIENDLY_NAME@",
+        "sw_version": "Zigbee2MQTT 2.14.3",
+        "via_device": "zigbee2mqtt_bridge_@COORDINATOR_IEEE@"
+      },
+      "enabled_by_default": false,
+      "entity_category": "diagnostic",
+      "icon": "mdi:signal",
+      "name": "Linkquality",
+      "object_id": "@OBJECT_ID@_linkquality",
+      "origin": {
+        "name": "Zigbee2MQTT",
+        "sw": "2.14.3",
+        "url": "https://www.zigbee2mqtt.io"
+      },
+      "state_class": "measurement",
+      "state_topic": "zigbee2mqtt/@FRIENDLY_NAME@",
+      "unique_id": "@IEEE@_linkquality_zigbee2mqtt",
+      "unit_of_measurement": "lqi",
+      "value_template": "{% if \"linkquality\" in value_json %}{{ value_json[\"linkquality\"] }}{% endif %}"
+    },
+    "sensor/@IEEE@/voltage/config": {
+      "availability": [
+        {
+          "topic": "zigbee2mqtt/bridge/state",
+          "value_template": "{{ value_json.state }}"
+        },
+        {
+          "topic": "zigbee2mqtt/@FRIENDLY_NAME@/availability",
+          "value_template": "{{ value_json.state }}"
+        }
+      ],
+      "availability_mode": "all",
+      "default_entity_id": "sensor.@OBJECT_ID@_voltage",
+      "device": {
+        "identifiers": [
+          "zigbee2mqtt_@IEEE@"
+        ],
+        "manufacturer": "SONOFF",
+        "model": "Contact sensor",
+        "model_id": "SNZB-04P",
+        "name": "@FRIENDLY_NAME@",
+        "sw_version": "Zigbee2MQTT 2.14.3",
+        "via_device": "zigbee2mqtt_bridge_@COORDINATOR_IEEE@"
+      },
+      "enabled_by_default": true,
+      "entity_category": "diagnostic",
+      "name": "Voltage",
+      "object_id": "@OBJECT_ID@_voltage",
+      "origin": {
+        "name": "Zigbee2MQTT",
+        "sw": "2.14.3",
+        "url": "https://www.zigbee2mqtt.io"
+      },
+      "state_topic": "zigbee2mqtt/@FRIENDLY_NAME@",
+      "unique_id": "@IEEE@_voltage_zigbee2mqtt",
+      "unit_of_measurement": "mV",
+      "value_template": "{% if \"voltage\" in value_json %}{{ value_json[\"voltage\"] }}{% endif %}"
+    },
+    "update/@IEEE@/update/config": {
+      "availability": [
+        {
+          "topic": "zigbee2mqtt/bridge/state",
+          "value_template": "{{ value_json.state }}"
+        },
+        {
+          "topic": "zigbee2mqtt/@FRIENDLY_NAME@/availability",
+          "value_template": "{{ value_json.state }}"
+        }
+      ],
+      "availability_mode": "all",
+      "command_topic": "zigbee2mqtt/bridge/request/device/ota_update/update",
+      "default_entity_id": "update.@OBJECT_ID@",
+      "device": {
+        "identifiers": [
+          "zigbee2mqtt_@IEEE@"
+        ],
+        "manufacturer": "SONOFF",
+        "model": "Contact sensor",
+        "model_id": "SNZB-04P",
+        "name": "@FRIENDLY_NAME@",
+        "sw_version": "Zigbee2MQTT 2.14.3",
+        "via_device": "zigbee2mqtt_bridge_@COORDINATOR_IEEE@"
+      },
+      "device_class": "firmware",
+      "entity_category": "config",
+      "entity_picture": "https://github.com/Koenkk/zigbee2mqtt/raw/master/images/logo.png",
+      "name": null,
+      "object_id": "@OBJECT_ID@",
+      "origin": {
+        "name": "Zigbee2MQTT",
+        "sw": "2.14.3",
+        "url": "https://www.zigbee2mqtt.io"
+      },
+      "payload_install": "{\"id\": \"@IEEE@\"}",
+      "state_topic": "zigbee2mqtt/@FRIENDLY_NAME@",
+      "unique_id": "@IEEE@_update_zigbee2mqtt",
+      "value_template": "{% if \"update\" in value_json %}{\"latest_version\":\"{{ value_json['update']['latest_version'] }}\",\"installed_version\":\"{{ value_json['update']['installed_version'] }}\",\"update_percentage\":{{ value_json['update'].get('progress', 'null') }},\"in_progress\":{{ (value_json['update'].get('state') == 'updating')|lower }}}{% endif %}"
+    }
+  },
+  "model": "SNZB-04P",
+  "source": "generated: cave_sim.zigbee.models (zigbee-herdsman-converters v26.125.0) through cave_sim.zigbee.discovery (Zigbee2MQTT 2.14.3 lib/extension/homeassistant.ts)",
+  "state": {
+    "battery": 100,
+    "battery_low": false,
+    "tamper": false,
+    "voltage": 3000
+  }
+}

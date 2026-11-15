@@ -1,0 +1,1196 @@
+{
+  "discovery": {
+    "binary_sensor/@IEEE@/automatic_valve_adapt/config": {
+      "availability": [
+        {
+          "topic": "zigbee2mqtt/bridge/state",
+          "value_template": "{{ value_json.state }}"
+        },
+        {
+          "topic": "zigbee2mqtt/@FRIENDLY_NAME@/availability",
+          "value_template": "{{ value_json.state }}"
+        }
+      ],
+      "availability_mode": "all",
+      "default_entity_id": "binary_sensor.@OBJECT_ID@_automatic_valve_adapt",
+      "device": {
+        "identifiers": [
+          "zigbee2mqtt_@IEEE@"
+        ],
+        "manufacturer": "Bosch",
+        "model": "Radiator thermostat II",
+        "model_id": "BTH-RA",
+        "name": "@FRIENDLY_NAME@",
+        "sw_version": "Zigbee2MQTT 2.14.3",
+        "via_device": "zigbee2mqtt_bridge_@COORDINATOR_IEEE@"
+      },
+      "entity_category": "diagnostic",
+      "name": "Automatic valve adaptation requested",
+      "object_id": "@OBJECT_ID@_automatic_valve_adapt",
+      "origin": {
+        "name": "Zigbee2MQTT",
+        "sw": "2.14.3",
+        "url": "https://www.zigbee2mqtt.io"
+      },
+      "payload_off": false,
+      "payload_on": true,
+      "state_topic": "zigbee2mqtt/@FRIENDLY_NAME@",
+      "unique_id": "@IEEE@_automatic_valve_adapt_zigbee2mqtt",
+      "value_template": "{% if \"automatic_valve_adapt\" in value_json %}{{ value_json[\"automatic_valve_adapt\"] }}{% endif %}"
+    },
+    "binary_sensor/@IEEE@/battery_low/config": {
+      "availability": [
+        {
+          "topic": "zigbee2mqtt/bridge/state",
+          "value_template": "{{ value_json.state }}"
+        },
+        {
+          "topic": "zigbee2mqtt/@FRIENDLY_NAME@/availability",
+          "value_template": "{{ value_json.state }}"
+        }
+      ],
+      "availability_mode": "all",
+      "default_entity_id": "binary_sensor.@OBJECT_ID@_battery_low",
+      "device": {
+        "identifiers": [
+          "zigbee2mqtt_@IEEE@"
+        ],
+        "manufacturer": "Bosch",
+        "model": "Radiator thermostat II",
+        "model_id": "BTH-RA",
+        "name": "@FRIENDLY_NAME@",
+        "sw_version": "Zigbee2MQTT 2.14.3",
+        "via_device": "zigbee2mqtt_bridge_@COORDINATOR_IEEE@"
+      },
+      "device_class": "battery",
+      "entity_category": "diagnostic",
+      "object_id": "@OBJECT_ID@_battery_low",
+      "origin": {
+        "name": "Zigbee2MQTT",
+        "sw": "2.14.3",
+        "url": "https://www.zigbee2mqtt.io"
+      },
+      "payload_off": false,
+      "payload_on": true,
+      "state_topic": "zigbee2mqtt/@FRIENDLY_NAME@",
+      "unique_id": "@IEEE@_battery_low_zigbee2mqtt",
+      "value_template": "{% if \"battery_low\" in value_json %}{{ value_json[\"battery_low\"] }}{% endif %}"
+    },
+    "button/@IEEE@/valve_adapt_process/config": {
+      "availability": [
+        {
+          "topic": "zigbee2mqtt/bridge/state",
+          "value_template": "{{ value_json.state }}"
+        },
+        {
+          "topic": "zigbee2mqtt/@FRIENDLY_NAME@/availability",
+          "value_template": "{{ value_json.state }}"
+        }
+      ],
+      "availability_mode": "all",
+      "command_topic": "zigbee2mqtt/@FRIENDLY_NAME@/set/valve_adapt_process",
+      "default_entity_id": "button.@OBJECT_ID@_valve_adapt_process",
+      "device": {
+        "identifiers": [
+          "zigbee2mqtt_@IEEE@"
+        ],
+        "manufacturer": "Bosch",
+        "model": "Radiator thermostat II",
+        "model_id": "BTH-RA",
+        "name": "@FRIENDLY_NAME@",
+        "sw_version": "Zigbee2MQTT 2.14.3",
+        "via_device": "zigbee2mqtt_bridge_@COORDINATOR_IEEE@"
+      },
+      "entity_category": "config",
+      "name": "Trigger adaptation process",
+      "object_id": "@OBJECT_ID@_valve_adapt_process",
+      "origin": {
+        "name": "Zigbee2MQTT",
+        "sw": "2.14.3",
+        "url": "https://www.zigbee2mqtt.io"
+      },
+      "payload_press": "adapt",
+      "unique_id": "@IEEE@_valve_adapt_process_zigbee2mqtt"
+    },
+    "climate/@IEEE@/climate/config": {
+      "action_template": "{% if \"running_state\" in value_json %}{% set values = {None:None,'idle':'idle','heat':'heating','cool':'cooling','fan_only':'fan'} %}{{ values[value_json[\"running_state\"]] }}{% endif %}",
+      "action_topic": "zigbee2mqtt/@FRIENDLY_NAME@",
+      "availability": [
+        {
+          "topic": "zigbee2mqtt/bridge/state",
+          "value_template": "{{ value_json.state }}"
+        },
+        {
+          "topic": "zigbee2mqtt/@FRIENDLY_NAME@/availability",
+          "value_template": "{{ value_json.state }}"
+        }
+      ],
+      "availability_mode": "all",
+      "current_temperature_template": "{% if \"local_temperature\" in value_json %}{{ value_json[\"local_temperature\"] }}{% endif %}",
+      "current_temperature_topic": "zigbee2mqtt/@FRIENDLY_NAME@",
+      "default_entity_id": "climate.@OBJECT_ID@",
+      "device": {
+        "identifiers": [
+          "zigbee2mqtt_@IEEE@"
+        ],
+        "manufacturer": "Bosch",
+        "model": "Radiator thermostat II",
+        "model_id": "BTH-RA",
+        "name": "@FRIENDLY_NAME@",
+        "sw_version": "Zigbee2MQTT 2.14.3",
+        "via_device": "zigbee2mqtt_bridge_@COORDINATOR_IEEE@"
+      },
+      "max_temp": "30",
+      "min_temp": "5",
+      "mode_command_template": "{% set values = { 'auto':'schedule','heat':'manual','off':'pause'} %}{\"operating_mode\": \"{{ values[value] if value in values.keys() else 'pause' }}\"}",
+      "mode_command_topic": "zigbee2mqtt/@FRIENDLY_NAME@/set",
+      "mode_state_template": "{% set values = {'schedule':'auto','manual':'heat','pause':'off'} %}{% set value = value_json.operating_mode %}{{ values[value] if value in values.keys() else 'off' }}",
+      "mode_state_topic": "zigbee2mqtt/@FRIENDLY_NAME@",
+      "modes": [
+        "off",
+        "heat",
+        "auto"
+      ],
+      "name": null,
+      "object_id": "@OBJECT_ID@",
+      "origin": {
+        "name": "Zigbee2MQTT",
+        "sw": "2.14.3",
+        "url": "https://www.zigbee2mqtt.io"
+      },
+      "temp_step": 0.5,
+      "temperature_command_topic": "zigbee2mqtt/@FRIENDLY_NAME@/set/occupied_heating_setpoint",
+      "temperature_state_template": "{% if \"occupied_heating_setpoint\" in value_json %}{{ value_json[\"occupied_heating_setpoint\"] }}{% endif %}",
+      "temperature_state_topic": "zigbee2mqtt/@FRIENDLY_NAME@",
+      "temperature_unit": "C",
+      "unique_id": "@IEEE@_climate_zigbee2mqtt"
+    },
+    "number/@IEEE@/display_brightness/config": {
+      "availability": [
+        {
+          "topic": "zigbee2mqtt/bridge/state",
+          "value_template": "{{ value_json.state }}"
+        },
+        {
+          "topic": "zigbee2mqtt/@FRIENDLY_NAME@/availability",
+          "value_template": "{{ value_json.state }}"
+        }
+      ],
+      "availability_mode": "all",
+      "command_topic": "zigbee2mqtt/@FRIENDLY_NAME@/set/display_brightness",
+      "default_entity_id": "number.@OBJECT_ID@_display_brightness",
+      "device": {
+        "identifiers": [
+          "zigbee2mqtt_@IEEE@"
+        ],
+        "manufacturer": "Bosch",
+        "model": "Radiator thermostat II",
+        "model_id": "BTH-RA",
+        "name": "@FRIENDLY_NAME@",
+        "sw_version": "Zigbee2MQTT 2.14.3",
+        "via_device": "zigbee2mqtt_bridge_@COORDINATOR_IEEE@"
+      },
+      "entity_category": "config",
+      "max": 100,
+      "min": 0,
+      "name": "Display brightness",
+      "object_id": "@OBJECT_ID@_display_brightness",
+      "origin": {
+        "name": "Zigbee2MQTT",
+        "sw": "2.14.3",
+        "url": "https://www.zigbee2mqtt.io"
+      },
+      "state_topic": "zigbee2mqtt/@FRIENDLY_NAME@",
+      "step": 10,
+      "unique_id": "@IEEE@_display_brightness_zigbee2mqtt",
+      "unit_of_measurement": "%",
+      "value_template": "{% if \"display_brightness\" in value_json %}{{ value_json[\"display_brightness\"] }}{% endif %}"
+    },
+    "number/@IEEE@/display_switch_on_duration/config": {
+      "availability": [
+        {
+          "topic": "zigbee2mqtt/bridge/state",
+          "value_template": "{{ value_json.state }}"
+        },
+        {
+          "topic": "zigbee2mqtt/@FRIENDLY_NAME@/availability",
+          "value_template": "{{ value_json.state }}"
+        }
+      ],
+      "availability_mode": "all",
+      "command_topic": "zigbee2mqtt/@FRIENDLY_NAME@/set/display_switch_on_duration",
+      "default_entity_id": "number.@OBJECT_ID@_display_switch_on_duration",
+      "device": {
+        "identifiers": [
+          "zigbee2mqtt_@IEEE@"
+        ],
+        "manufacturer": "Bosch",
+        "model": "Radiator thermostat II",
+        "model_id": "BTH-RA",
+        "name": "@FRIENDLY_NAME@",
+        "sw_version": "Zigbee2MQTT 2.14.3",
+        "via_device": "zigbee2mqtt_bridge_@COORDINATOR_IEEE@"
+      },
+      "entity_category": "config",
+      "max": 30,
+      "min": 5,
+      "name": "Display switch-on duration",
+      "object_id": "@OBJECT_ID@_display_switch_on_duration",
+      "origin": {
+        "name": "Zigbee2MQTT",
+        "sw": "2.14.3",
+        "url": "https://www.zigbee2mqtt.io"
+      },
+      "state_topic": "zigbee2mqtt/@FRIENDLY_NAME@",
+      "unique_id": "@IEEE@_display_switch_on_duration_zigbee2mqtt",
+      "unit_of_measurement": "s",
+      "value_template": "{% if \"display_switch_on_duration\" in value_json %}{{ value_json[\"display_switch_on_duration\"] }}{% endif %}"
+    },
+    "number/@IEEE@/local_temperature_calibration/config": {
+      "availability": [
+        {
+          "topic": "zigbee2mqtt/bridge/state",
+          "value_template": "{{ value_json.state }}"
+        },
+        {
+          "topic": "zigbee2mqtt/@FRIENDLY_NAME@/availability",
+          "value_template": "{{ value_json.state }}"
+        }
+      ],
+      "availability_mode": "all",
+      "command_topic": "zigbee2mqtt/@FRIENDLY_NAME@/set/local_temperature_calibration",
+      "default_entity_id": "number.@OBJECT_ID@_local_temperature_calibration",
+      "device": {
+        "identifiers": [
+          "zigbee2mqtt_@IEEE@"
+        ],
+        "manufacturer": "Bosch",
+        "model": "Radiator thermostat II",
+        "model_id": "BTH-RA",
+        "name": "@FRIENDLY_NAME@",
+        "sw_version": "Zigbee2MQTT 2.14.3",
+        "via_device": "zigbee2mqtt_bridge_@COORDINATOR_IEEE@"
+      },
+      "device_class": "temperature_delta",
+      "entity_category": "config",
+      "max": 5,
+      "min": -5,
+      "object_id": "@OBJECT_ID@_local_temperature_calibration",
+      "origin": {
+        "name": "Zigbee2MQTT",
+        "sw": "2.14.3",
+        "url": "https://www.zigbee2mqtt.io"
+      },
+      "state_topic": "zigbee2mqtt/@FRIENDLY_NAME@",
+      "step": 0.1,
+      "unique_id": "@IEEE@_local_temperature_calibration_zigbee2mqtt",
+      "unit_of_measurement": "°C",
+      "value_template": "{% if \"local_temperature_calibration\" in value_json %}{{ value_json[\"local_temperature_calibration\"] }}{% endif %}"
+    },
+    "number/@IEEE@/pi_heating_demand/config": {
+      "availability": [
+        {
+          "topic": "zigbee2mqtt/bridge/state",
+          "value_template": "{{ value_json.state }}"
+        },
+        {
+          "topic": "zigbee2mqtt/@FRIENDLY_NAME@/availability",
+          "value_template": "{{ value_json.state }}"
+        }
+      ],
+      "availability_mode": "all",
+      "command_topic": "zigbee2mqtt/@FRIENDLY_NAME@/set/pi_heating_demand",
+      "default_entity_id": "number.@OBJECT_ID@_pi_heating_demand",
+      "device": {
+        "identifiers": [
+          "zigbee2mqtt_@IEEE@"
+        ],
+        "manufacturer": "Bosch",
+        "model": "Radiator thermostat II",
+        "model_id": "BTH-RA",
+        "name": "@FRIENDLY_NAME@",
+        "sw_version": "Zigbee2MQTT 2.14.3",
+        "via_device": "zigbee2mqtt_bridge_@COORDINATOR_IEEE@"
+      },
+      "icon": "mdi:radiator",
+      "max": 100,
+      "min": 0,
+      "name": "PI heating demand",
+      "object_id": "@OBJECT_ID@_pi_heating_demand",
+      "origin": {
+        "name": "Zigbee2MQTT",
+        "sw": "2.14.3",
+        "url": "https://www.zigbee2mqtt.io"
+      },
+      "state_topic": "zigbee2mqtt/@FRIENDLY_NAME@",
+      "unique_id": "@IEEE@_pi_heating_demand_zigbee2mqtt",
+      "unit_of_measurement": "%",
+      "value_template": "{% if \"pi_heating_demand\" in value_json %}{{ value_json[\"pi_heating_demand\"] }}{% endif %}"
+    },
+    "number/@IEEE@/remote_temperature/config": {
+      "availability": [
+        {
+          "topic": "zigbee2mqtt/bridge/state",
+          "value_template": "{{ value_json.state }}"
+        },
+        {
+          "topic": "zigbee2mqtt/@FRIENDLY_NAME@/availability",
+          "value_template": "{{ value_json.state }}"
+        }
+      ],
+      "availability_mode": "all",
+      "command_topic": "zigbee2mqtt/@FRIENDLY_NAME@/set/remote_temperature",
+      "default_entity_id": "number.@OBJECT_ID@_remote_temperature",
+      "device": {
+        "identifiers": [
+          "zigbee2mqtt_@IEEE@"
+        ],
+        "manufacturer": "Bosch",
+        "model": "Radiator thermostat II",
+        "model_id": "BTH-RA",
+        "name": "@FRIENDLY_NAME@",
+        "sw_version": "Zigbee2MQTT 2.14.3",
+        "via_device": "zigbee2mqtt_bridge_@COORDINATOR_IEEE@"
+      },
+      "entity_category": "config",
+      "max": 35,
+      "min": 0,
+      "name": "Remote temperature",
+      "object_id": "@OBJECT_ID@_remote_temperature",
+      "origin": {
+        "name": "Zigbee2MQTT",
+        "sw": "2.14.3",
+        "url": "https://www.zigbee2mqtt.io"
+      },
+      "state_topic": "zigbee2mqtt/@FRIENDLY_NAME@",
+      "step": 0.2,
+      "unique_id": "@IEEE@_remote_temperature_zigbee2mqtt",
+      "unit_of_measurement": "°C",
+      "value_template": "{% if \"remote_temperature\" in value_json %}{{ value_json[\"remote_temperature\"] }}{% endif %}"
+    },
+    "select/@IEEE@/display_orientation/config": {
+      "availability": [
+        {
+          "topic": "zigbee2mqtt/bridge/state",
+          "value_template": "{{ value_json.state }}"
+        },
+        {
+          "topic": "zigbee2mqtt/@FRIENDLY_NAME@/availability",
+          "value_template": "{{ value_json.state }}"
+        }
+      ],
+      "availability_mode": "all",
+      "command_topic": "zigbee2mqtt/@FRIENDLY_NAME@/set/display_orientation",
+      "default_entity_id": "select.@OBJECT_ID@_display_orientation",
+      "device": {
+        "identifiers": [
+          "zigbee2mqtt_@IEEE@"
+        ],
+        "manufacturer": "Bosch",
+        "model": "Radiator thermostat II",
+        "model_id": "BTH-RA",
+        "name": "@FRIENDLY_NAME@",
+        "sw_version": "Zigbee2MQTT 2.14.3",
+        "via_device": "zigbee2mqtt_bridge_@COORDINATOR_IEEE@"
+      },
+      "entity_category": "config",
+      "name": "Display orientation",
+      "object_id": "@OBJECT_ID@_display_orientation",
+      "options": [
+        "standard_arrangement",
+        "rotated_by_180_degrees"
+      ],
+      "origin": {
+        "name": "Zigbee2MQTT",
+        "sw": "2.14.3",
+        "url": "https://www.zigbee2mqtt.io"
+      },
+      "state_topic": "zigbee2mqtt/@FRIENDLY_NAME@",
+      "unique_id": "@IEEE@_display_orientation_zigbee2mqtt",
+      "value_template": "{% if \"display_orientation\" in value_json %}{{ value_json[\"display_orientation\"] }}{% endif %}"
+    },
+    "select/@IEEE@/displayed_temperature/config": {
+      "availability": [
+        {
+          "topic": "zigbee2mqtt/bridge/state",
+          "value_template": "{{ value_json.state }}"
+        },
+        {
+          "topic": "zigbee2mqtt/@FRIENDLY_NAME@/availability",
+          "value_template": "{{ value_json.state }}"
+        }
+      ],
+      "availability_mode": "all",
+      "command_topic": "zigbee2mqtt/@FRIENDLY_NAME@/set/displayed_temperature",
+      "default_entity_id": "select.@OBJECT_ID@_displayed_temperature",
+      "device": {
+        "identifiers": [
+          "zigbee2mqtt_@IEEE@"
+        ],
+        "manufacturer": "Bosch",
+        "model": "Radiator thermostat II",
+        "model_id": "BTH-RA",
+        "name": "@FRIENDLY_NAME@",
+        "sw_version": "Zigbee2MQTT 2.14.3",
+        "via_device": "zigbee2mqtt_bridge_@COORDINATOR_IEEE@"
+      },
+      "entity_category": "config",
+      "name": "Displayed temperature",
+      "object_id": "@OBJECT_ID@_displayed_temperature",
+      "options": [
+        "set_temperature",
+        "measured_temperature"
+      ],
+      "origin": {
+        "name": "Zigbee2MQTT",
+        "sw": "2.14.3",
+        "url": "https://www.zigbee2mqtt.io"
+      },
+      "state_topic": "zigbee2mqtt/@FRIENDLY_NAME@",
+      "unique_id": "@IEEE@_displayed_temperature_zigbee2mqtt",
+      "value_template": "{% if \"displayed_temperature\" in value_json %}{{ value_json[\"displayed_temperature\"] }}{% endif %}"
+    },
+    "select/@IEEE@/operating_mode/config": {
+      "availability": [
+        {
+          "topic": "zigbee2mqtt/bridge/state",
+          "value_template": "{{ value_json.state }}"
+        },
+        {
+          "topic": "zigbee2mqtt/@FRIENDLY_NAME@/availability",
+          "value_template": "{{ value_json.state }}"
+        }
+      ],
+      "availability_mode": "all",
+      "command_topic": "zigbee2mqtt/@FRIENDLY_NAME@/set/operating_mode",
+      "default_entity_id": "select.@OBJECT_ID@_operating_mode",
+      "device": {
+        "identifiers": [
+          "zigbee2mqtt_@IEEE@"
+        ],
+        "manufacturer": "Bosch",
+        "model": "Radiator thermostat II",
+        "model_id": "BTH-RA",
+        "name": "@FRIENDLY_NAME@",
+        "sw_version": "Zigbee2MQTT 2.14.3",
+        "via_device": "zigbee2mqtt_bridge_@COORDINATOR_IEEE@"
+      },
+      "entity_category": "config",
+      "name": "Operating mode",
+      "object_id": "@OBJECT_ID@_operating_mode",
+      "options": [
+        "schedule",
+        "manual",
+        "pause"
+      ],
+      "origin": {
+        "name": "Zigbee2MQTT",
+        "sw": "2.14.3",
+        "url": "https://www.zigbee2mqtt.io"
+      },
+      "state_topic": "zigbee2mqtt/@FRIENDLY_NAME@",
+      "unique_id": "@IEEE@_operating_mode_zigbee2mqtt",
+      "value_template": "{% if \"operating_mode\" in value_json %}{{ value_json[\"operating_mode\"] }}{% endif %}"
+    },
+    "sensor/@IEEE@/battery/config": {
+      "availability": [
+        {
+          "topic": "zigbee2mqtt/bridge/state",
+          "value_template": "{{ value_json.state }}"
+        },
+        {
+          "topic": "zigbee2mqtt/@FRIENDLY_NAME@/availability",
+          "value_template": "{{ value_json.state }}"
+        }
+      ],
+      "availability_mode": "all",
+      "default_entity_id": "sensor.@OBJECT_ID@_battery",
+      "device": {
+        "identifiers": [
+          "zigbee2mqtt_@IEEE@"
+        ],
+        "manufacturer": "Bosch",
+        "model": "Radiator thermostat II",
+        "model_id": "BTH-RA",
+        "name": "@FRIENDLY_NAME@",
+        "sw_version": "Zigbee2MQTT 2.14.3",
+        "via_device": "zigbee2mqtt_bridge_@COORDINATOR_IEEE@"
+      },
+      "device_class": "battery",
+      "enabled_by_default": true,
+      "entity_category": "diagnostic",
+      "object_id": "@OBJECT_ID@_battery",
+      "origin": {
+        "name": "Zigbee2MQTT",
+        "sw": "2.14.3",
+        "url": "https://www.zigbee2mqtt.io"
+      },
+      "state_class": "measurement",
+      "state_topic": "zigbee2mqtt/@FRIENDLY_NAME@",
+      "unique_id": "@IEEE@_battery_zigbee2mqtt",
+      "unit_of_measurement": "%",
+      "value_template": "{% if \"battery\" in value_json %}{{ value_json[\"battery\"] }}{% endif %}"
+    },
+    "sensor/@IEEE@/error_state/config": {
+      "availability": [
+        {
+          "topic": "zigbee2mqtt/bridge/state",
+          "value_template": "{{ value_json.state }}"
+        },
+        {
+          "topic": "zigbee2mqtt/@FRIENDLY_NAME@/availability",
+          "value_template": "{{ value_json.state }}"
+        }
+      ],
+      "availability_mode": "all",
+      "default_entity_id": "sensor.@OBJECT_ID@_error_state",
+      "device": {
+        "identifiers": [
+          "zigbee2mqtt_@IEEE@"
+        ],
+        "manufacturer": "Bosch",
+        "model": "Radiator thermostat II",
+        "model_id": "BTH-RA",
+        "name": "@FRIENDLY_NAME@",
+        "sw_version": "Zigbee2MQTT 2.14.3",
+        "via_device": "zigbee2mqtt_bridge_@COORDINATOR_IEEE@"
+      },
+      "entity_category": "diagnostic",
+      "name": "Error state",
+      "object_id": "@OBJECT_ID@_error_state",
+      "origin": {
+        "name": "Zigbee2MQTT",
+        "sw": "2.14.3",
+        "url": "https://www.zigbee2mqtt.io"
+      },
+      "state_topic": "zigbee2mqtt/@FRIENDLY_NAME@",
+      "unique_id": "@IEEE@_error_state_zigbee2mqtt",
+      "value_template": "{% if \"error_state\" in value_json %}{{ value_json[\"error_state\"] | default('',True) | string | truncate(254, True, '', 0) }}{% endif %}"
+    },
+    "sensor/@IEEE@/last_seen/config": {
+      "availability": [
+        {
+          "topic": "zigbee2mqtt/bridge/state",
+          "value_template": "{{ value_json.state }}"
+        },
+        {
+          "topic": "zigbee2mqtt/@FRIENDLY_NAME@/availability",
+          "value_template": "{{ value_json.state }}"
+        }
+      ],
+      "availability_mode": "all",
+      "default_entity_id": "sensor.@OBJECT_ID@_last_seen",
+      "device": {
+        "identifiers": [
+          "zigbee2mqtt_@IEEE@"
+        ],
+        "manufacturer": "Bosch",
+        "model": "Radiator thermostat II",
+        "model_id": "BTH-RA",
+        "name": "@FRIENDLY_NAME@",
+        "sw_version": "Zigbee2MQTT 2.14.3",
+        "via_device": "zigbee2mqtt_bridge_@COORDINATOR_IEEE@"
+      },
+      "device_class": "timestamp",
+      "enabled_by_default": false,
+      "entity_category": "diagnostic",
+      "icon": "mdi:clock",
+      "name": "Last seen",
+      "object_id": "@OBJECT_ID@_last_seen",
+      "origin": {
+        "name": "Zigbee2MQTT",
+        "sw": "2.14.3",
+        "url": "https://www.zigbee2mqtt.io"
+      },
+      "state_topic": "zigbee2mqtt/@FRIENDLY_NAME@",
+      "unique_id": "@IEEE@_last_seen_zigbee2mqtt",
+      "value_template": "{% if \"last_seen\" in value_json %}{{ value_json[\"last_seen\"] }}{% endif %}"
+    },
+    "sensor/@IEEE@/linkquality/config": {
+      "availability": [
+        {
+          "topic": "zigbee2mqtt/bridge/state",
+          "value_template": "{{ value_json.state }}"
+        },
+        {
+          "topic": "zigbee2mqtt/@FRIENDLY_NAME@/availability",
+          "value_template": "{{ value_json.state }}"
+        }
+      ],
+      "availability_mode": "all",
+      "default_entity_id": "sensor.@OBJECT_ID@_linkquality",
+      "device": {
+        "identifiers": [
+          "zigbee2mqtt_@IEEE@"
+        ],
+        "manufacturer": "Bosch",
+        "model": "Radiator thermostat II",
+        "model_id": "BTH-RA",
+        "name": "@FRIENDLY_NAME@",
+        "sw_version": "Zigbee2MQTT 2.14.3",
+        "via_device": "zigbee2mqtt_bridge_@COORDINATOR_IEEE@"
+      },
+      "enabled_by_default": false,
+      "entity_category": "diagnostic",
+      "icon": "mdi:signal",
+      "name": "Linkquality",
+      "object_id": "@OBJECT_ID@_linkquality",
+      "origin": {
+        "name": "Zigbee2MQTT",
+        "sw": "2.14.3",
+        "url": "https://www.zigbee2mqtt.io"
+      },
+      "state_class": "measurement",
+      "state_topic": "zigbee2mqtt/@FRIENDLY_NAME@",
+      "unique_id": "@IEEE@_linkquality_zigbee2mqtt",
+      "unit_of_measurement": "lqi",
+      "value_template": "{% if \"linkquality\" in value_json %}{{ value_json[\"linkquality\"] }}{% endif %}"
+    },
+    "sensor/@IEEE@/local_temperature/config": {
+      "availability": [
+        {
+          "topic": "zigbee2mqtt/bridge/state",
+          "value_template": "{{ value_json.state }}"
+        },
+        {
+          "topic": "zigbee2mqtt/@FRIENDLY_NAME@/availability",
+          "value_template": "{{ value_json.state }}"
+        }
+      ],
+      "availability_mode": "all",
+      "default_entity_id": "sensor.@OBJECT_ID@_local_temperature",
+      "device": {
+        "identifiers": [
+          "zigbee2mqtt_@IEEE@"
+        ],
+        "manufacturer": "Bosch",
+        "model": "Radiator thermostat II",
+        "model_id": "BTH-RA",
+        "name": "@FRIENDLY_NAME@",
+        "sw_version": "Zigbee2MQTT 2.14.3",
+        "via_device": "zigbee2mqtt_bridge_@COORDINATOR_IEEE@"
+      },
+      "device_class": "temperature",
+      "object_id": "@OBJECT_ID@_local_temperature",
+      "origin": {
+        "name": "Zigbee2MQTT",
+        "sw": "2.14.3",
+        "url": "https://www.zigbee2mqtt.io"
+      },
+      "state_class": "measurement",
+      "state_topic": "zigbee2mqtt/@FRIENDLY_NAME@",
+      "unique_id": "@IEEE@_local_temperature_zigbee2mqtt",
+      "unit_of_measurement": "°C",
+      "value_template": "{% if \"local_temperature\" in value_json %}{{ value_json[\"local_temperature\"] }}{% endif %}"
+    },
+    "sensor/@IEEE@/setpoint_change_source/config": {
+      "availability": [
+        {
+          "topic": "zigbee2mqtt/bridge/state",
+          "value_template": "{{ value_json.state }}"
+        },
+        {
+          "topic": "zigbee2mqtt/@FRIENDLY_NAME@/availability",
+          "value_template": "{{ value_json.state }}"
+        }
+      ],
+      "availability_mode": "all",
+      "default_entity_id": "sensor.@OBJECT_ID@_setpoint_change_source",
+      "device": {
+        "identifiers": [
+          "zigbee2mqtt_@IEEE@"
+        ],
+        "manufacturer": "Bosch",
+        "model": "Radiator thermostat II",
+        "model_id": "BTH-RA",
+        "name": "@FRIENDLY_NAME@",
+        "sw_version": "Zigbee2MQTT 2.14.3",
+        "via_device": "zigbee2mqtt_bridge_@COORDINATOR_IEEE@"
+      },
+      "entity_category": "diagnostic",
+      "name": "Setpoint change source",
+      "object_id": "@OBJECT_ID@_setpoint_change_source",
+      "origin": {
+        "name": "Zigbee2MQTT",
+        "sw": "2.14.3",
+        "url": "https://www.zigbee2mqtt.io"
+      },
+      "state_topic": "zigbee2mqtt/@FRIENDLY_NAME@",
+      "unique_id": "@IEEE@_setpoint_change_source_zigbee2mqtt",
+      "value_template": "{% if \"setpoint_change_source\" in value_json %}{{ value_json[\"setpoint_change_source\"] }}{% endif %}"
+    },
+    "sensor/@IEEE@/valve_adapt_status/config": {
+      "availability": [
+        {
+          "topic": "zigbee2mqtt/bridge/state",
+          "value_template": "{{ value_json.state }}"
+        },
+        {
+          "topic": "zigbee2mqtt/@FRIENDLY_NAME@/availability",
+          "value_template": "{{ value_json.state }}"
+        }
+      ],
+      "availability_mode": "all",
+      "default_entity_id": "sensor.@OBJECT_ID@_valve_adapt_status",
+      "device": {
+        "identifiers": [
+          "zigbee2mqtt_@IEEE@"
+        ],
+        "manufacturer": "Bosch",
+        "model": "Radiator thermostat II",
+        "model_id": "BTH-RA",
+        "name": "@FRIENDLY_NAME@",
+        "sw_version": "Zigbee2MQTT 2.14.3",
+        "via_device": "zigbee2mqtt_bridge_@COORDINATOR_IEEE@"
+      },
+      "entity_category": "diagnostic",
+      "name": "Valve adaptation status",
+      "object_id": "@OBJECT_ID@_valve_adapt_status",
+      "origin": {
+        "name": "Zigbee2MQTT",
+        "sw": "2.14.3",
+        "url": "https://www.zigbee2mqtt.io"
+      },
+      "state_topic": "zigbee2mqtt/@FRIENDLY_NAME@",
+      "unique_id": "@IEEE@_valve_adapt_status_zigbee2mqtt",
+      "value_template": "{% if \"valve_adapt_status\" in value_json %}{{ value_json[\"valve_adapt_status\"] }}{% endif %}"
+    },
+    "switch/@IEEE@/switch_boost_heating/config": {
+      "availability": [
+        {
+          "topic": "zigbee2mqtt/bridge/state",
+          "value_template": "{{ value_json.state }}"
+        },
+        {
+          "topic": "zigbee2mqtt/@FRIENDLY_NAME@/availability",
+          "value_template": "{{ value_json.state }}"
+        }
+      ],
+      "availability_mode": "all",
+      "command_topic": "zigbee2mqtt/@FRIENDLY_NAME@/set/boost_heating",
+      "default_entity_id": "switch.@OBJECT_ID@_boost_heating",
+      "device": {
+        "identifiers": [
+          "zigbee2mqtt_@IEEE@"
+        ],
+        "manufacturer": "Bosch",
+        "model": "Radiator thermostat II",
+        "model_id": "BTH-RA",
+        "name": "@FRIENDLY_NAME@",
+        "sw_version": "Zigbee2MQTT 2.14.3",
+        "via_device": "zigbee2mqtt_bridge_@COORDINATOR_IEEE@"
+      },
+      "name": "Activate boost heating",
+      "object_id": "@OBJECT_ID@_boost_heating",
+      "origin": {
+        "name": "Zigbee2MQTT",
+        "sw": "2.14.3",
+        "url": "https://www.zigbee2mqtt.io"
+      },
+      "payload_off": "OFF",
+      "payload_on": "ON",
+      "state_topic": "zigbee2mqtt/@FRIENDLY_NAME@",
+      "unique_id": "@IEEE@_switch_boost_heating_zigbee2mqtt",
+      "value_template": "{% if \"boost_heating\" in value_json %}{{ value_json[\"boost_heating\"] }}{% endif %}"
+    },
+    "switch/@IEEE@/switch_child_lock/config": {
+      "availability": [
+        {
+          "topic": "zigbee2mqtt/bridge/state",
+          "value_template": "{{ value_json.state }}"
+        },
+        {
+          "topic": "zigbee2mqtt/@FRIENDLY_NAME@/availability",
+          "value_template": "{{ value_json.state }}"
+        }
+      ],
+      "availability_mode": "all",
+      "command_topic": "zigbee2mqtt/@FRIENDLY_NAME@/set/child_lock",
+      "default_entity_id": "switch.@OBJECT_ID@_child_lock",
+      "device": {
+        "identifiers": [
+          "zigbee2mqtt_@IEEE@"
+        ],
+        "manufacturer": "Bosch",
+        "model": "Radiator thermostat II",
+        "model_id": "BTH-RA",
+        "name": "@FRIENDLY_NAME@",
+        "sw_version": "Zigbee2MQTT 2.14.3",
+        "via_device": "zigbee2mqtt_bridge_@COORDINATOR_IEEE@"
+      },
+      "entity_category": "config",
+      "icon": "mdi:account-lock",
+      "name": "Child lock",
+      "object_id": "@OBJECT_ID@_child_lock",
+      "origin": {
+        "name": "Zigbee2MQTT",
+        "sw": "2.14.3",
+        "url": "https://www.zigbee2mqtt.io"
+      },
+      "payload_off": "UNLOCK",
+      "payload_on": "LOCK",
+      "state_topic": "zigbee2mqtt/@FRIENDLY_NAME@",
+      "unique_id": "@IEEE@_switch_child_lock_zigbee2mqtt",
+      "value_template": "{% if \"child_lock\" in value_json %}{{ value_json[\"child_lock\"] }}{% endif %}"
+    },
+    "switch/@IEEE@/switch_window_detection/config": {
+      "availability": [
+        {
+          "topic": "zigbee2mqtt/bridge/state",
+          "value_template": "{{ value_json.state }}"
+        },
+        {
+          "topic": "zigbee2mqtt/@FRIENDLY_NAME@/availability",
+          "value_template": "{{ value_json.state }}"
+        }
+      ],
+      "availability_mode": "all",
+      "command_topic": "zigbee2mqtt/@FRIENDLY_NAME@/set/window_detection",
+      "default_entity_id": "switch.@OBJECT_ID@_window_detection",
+      "device": {
+        "identifiers": [
+          "zigbee2mqtt_@IEEE@"
+        ],
+        "manufacturer": "Bosch",
+        "model": "Radiator thermostat II",
+        "model_id": "BTH-RA",
+        "name": "@FRIENDLY_NAME@",
+        "sw_version": "Zigbee2MQTT 2.14.3",
+        "via_device": "zigbee2mqtt_bridge_@COORDINATOR_IEEE@"
+      },
+      "entity_category": "config",
+      "icon": "mdi:window-open-variant",
+      "name": "Window detection",
+      "object_id": "@OBJECT_ID@_window_detection",
+      "origin": {
+        "name": "Zigbee2MQTT",
+        "sw": "2.14.3",
+        "url": "https://www.zigbee2mqtt.io"
+      },
+      "payload_off": "OFF",
+      "payload_on": "ON",
+      "state_topic": "zigbee2mqtt/@FRIENDLY_NAME@",
+      "unique_id": "@IEEE@_switch_window_detection_zigbee2mqtt",
+      "value_template": "{% if \"window_detection\" in value_json %}{{ value_json[\"window_detection\"] }}{% endif %}"
+    },
+    "text/@IEEE@/weekly_schedule_friday/config": {
+      "availability": [
+        {
+          "topic": "zigbee2mqtt/bridge/state",
+          "value_template": "{{ value_json.state }}"
+        },
+        {
+          "topic": "zigbee2mqtt/@FRIENDLY_NAME@/availability",
+          "value_template": "{{ value_json.state }}"
+        }
+      ],
+      "availability_mode": "all",
+      "command_topic": "zigbee2mqtt/@FRIENDLY_NAME@/set/weekly_schedule_friday",
+      "default_entity_id": "text.@OBJECT_ID@_weekly_schedule_friday",
+      "device": {
+        "identifiers": [
+          "zigbee2mqtt_@IEEE@"
+        ],
+        "manufacturer": "Bosch",
+        "model": "Radiator thermostat II",
+        "model_id": "BTH-RA",
+        "name": "@FRIENDLY_NAME@",
+        "sw_version": "Zigbee2MQTT 2.14.3",
+        "via_device": "zigbee2mqtt_bridge_@COORDINATOR_IEEE@"
+      },
+      "entity_category": "config",
+      "name": "Weekly schedule friday",
+      "object_id": "@OBJECT_ID@_weekly_schedule_friday",
+      "origin": {
+        "name": "Zigbee2MQTT",
+        "sw": "2.14.3",
+        "url": "https://www.zigbee2mqtt.io"
+      },
+      "state_topic": "zigbee2mqtt/@FRIENDLY_NAME@",
+      "unique_id": "@IEEE@_weekly_schedule_friday_zigbee2mqtt",
+      "value_template": "{% if \"weekly_schedule_friday\" in value_json %}{{ value_json[\"weekly_schedule_friday\"] }}{% endif %}"
+    },
+    "text/@IEEE@/weekly_schedule_monday/config": {
+      "availability": [
+        {
+          "topic": "zigbee2mqtt/bridge/state",
+          "value_template": "{{ value_json.state }}"
+        },
+        {
+          "topic": "zigbee2mqtt/@FRIENDLY_NAME@/availability",
+          "value_template": "{{ value_json.state }}"
+        }
+      ],
+      "availability_mode": "all",
+      "command_topic": "zigbee2mqtt/@FRIENDLY_NAME@/set/weekly_schedule_monday",
+      "default_entity_id": "text.@OBJECT_ID@_weekly_schedule_monday",
+      "device": {
+        "identifiers": [
+          "zigbee2mqtt_@IEEE@"
+        ],
+        "manufacturer": "Bosch",
+        "model": "Radiator thermostat II",
+        "model_id": "BTH-RA",
+        "name": "@FRIENDLY_NAME@",
+        "sw_version": "Zigbee2MQTT 2.14.3",
+        "via_device": "zigbee2mqtt_bridge_@COORDINATOR_IEEE@"
+      },
+      "entity_category": "config",
+      "name": "Weekly schedule monday",
+      "object_id": "@OBJECT_ID@_weekly_schedule_monday",
+      "origin": {
+        "name": "Zigbee2MQTT",
+        "sw": "2.14.3",
+        "url": "https://www.zigbee2mqtt.io"
+      },
+      "state_topic": "zigbee2mqtt/@FRIENDLY_NAME@",
+      "unique_id": "@IEEE@_weekly_schedule_monday_zigbee2mqtt",
+      "value_template": "{% if \"weekly_schedule_monday\" in value_json %}{{ value_json[\"weekly_schedule_monday\"] }}{% endif %}"
+    },
+    "text/@IEEE@/weekly_schedule_saturday/config": {
+      "availability": [
+        {
+          "topic": "zigbee2mqtt/bridge/state",
+          "value_template": "{{ value_json.state }}"
+        },
+        {
+          "topic": "zigbee2mqtt/@FRIENDLY_NAME@/availability",
+          "value_template": "{{ value_json.state }}"
+        }
+      ],
+      "availability_mode": "all",
+      "command_topic": "zigbee2mqtt/@FRIENDLY_NAME@/set/weekly_schedule_saturday",
+      "default_entity_id": "text.@OBJECT_ID@_weekly_schedule_saturday",
+      "device": {
+        "identifiers": [
+          "zigbee2mqtt_@IEEE@"
+        ],
+        "manufacturer": "Bosch",
+        "model": "Radiator thermostat II",
+        "model_id": "BTH-RA",
+        "name": "@FRIENDLY_NAME@",
+        "sw_version": "Zigbee2MQTT 2.14.3",
+        "via_device": "zigbee2mqtt_bridge_@COORDINATOR_IEEE@"
+      },
+      "entity_category": "config",
+      "name": "Weekly schedule saturday",
+      "object_id": "@OBJECT_ID@_weekly_schedule_saturday",
+      "origin": {
+        "name": "Zigbee2MQTT",
+        "sw": "2.14.3",
+        "url": "https://www.zigbee2mqtt.io"
+      },
+      "state_topic": "zigbee2mqtt/@FRIENDLY_NAME@",
+      "unique_id": "@IEEE@_weekly_schedule_saturday_zigbee2mqtt",
+      "value_template": "{% if \"weekly_schedule_saturday\" in value_json %}{{ value_json[\"weekly_schedule_saturday\"] }}{% endif %}"
+    },
+    "text/@IEEE@/weekly_schedule_sunday/config": {
+      "availability": [
+        {
+          "topic": "zigbee2mqtt/bridge/state",
+          "value_template": "{{ value_json.state }}"
+        },
+        {
+          "topic": "zigbee2mqtt/@FRIENDLY_NAME@/availability",
+          "value_template": "{{ value_json.state }}"
+        }
+      ],
+      "availability_mode": "all",
+      "command_topic": "zigbee2mqtt/@FRIENDLY_NAME@/set/weekly_schedule_sunday",
+      "default_entity_id": "text.@OBJECT_ID@_weekly_schedule_sunday",
+      "device": {
+        "identifiers": [
+          "zigbee2mqtt_@IEEE@"
+        ],
+        "manufacturer": "Bosch",
+        "model": "Radiator thermostat II",
+        "model_id": "BTH-RA",
+        "name": "@FRIENDLY_NAME@",
+        "sw_version": "Zigbee2MQTT 2.14.3",
+        "via_device": "zigbee2mqtt_bridge_@COORDINATOR_IEEE@"
+      },
+      "entity_category": "config",
+      "name": "Weekly schedule sunday",
+      "object_id": "@OBJECT_ID@_weekly_schedule_sunday",
+      "origin": {
+        "name": "Zigbee2MQTT",
+        "sw": "2.14.3",
+        "url": "https://www.zigbee2mqtt.io"
+      },
+      "state_topic": "zigbee2mqtt/@FRIENDLY_NAME@",
+      "unique_id": "@IEEE@_weekly_schedule_sunday_zigbee2mqtt",
+      "value_template": "{% if \"weekly_schedule_sunday\" in value_json %}{{ value_json[\"weekly_schedule_sunday\"] }}{% endif %}"
+    },
+    "text/@IEEE@/weekly_schedule_thursday/config": {
+      "availability": [
+        {
+          "topic": "zigbee2mqtt/bridge/state",
+          "value_template": "{{ value_json.state }}"
+        },
+        {
+          "topic": "zigbee2mqtt/@FRIENDLY_NAME@/availability",
+          "value_template": "{{ value_json.state }}"
+        }
+      ],
+      "availability_mode": "all",
+      "command_topic": "zigbee2mqtt/@FRIENDLY_NAME@/set/weekly_schedule_thursday",
+      "default_entity_id": "text.@OBJECT_ID@_weekly_schedule_thursday",
+      "device": {
+        "identifiers": [
+          "zigbee2mqtt_@IEEE@"
+        ],
+        "manufacturer": "Bosch",
+        "model": "Radiator thermostat II",
+        "model_id": "BTH-RA",
+        "name": "@FRIENDLY_NAME@",
+        "sw_version": "Zigbee2MQTT 2.14.3",
+        "via_device": "zigbee2mqtt_bridge_@COORDINATOR_IEEE@"
+      },
+      "entity_category": "config",
+      "name": "Weekly schedule thursday",
+      "object_id": "@OBJECT_ID@_weekly_schedule_thursday",
+      "origin": {
+        "name": "Zigbee2MQTT",
+        "sw": "2.14.3",
+        "url": "https://www.zigbee2mqtt.io"
+      },
+      "state_topic": "zigbee2mqtt/@FRIENDLY_NAME@",
+      "unique_id": "@IEEE@_weekly_schedule_thursday_zigbee2mqtt",
+      "value_template": "{% if \"weekly_schedule_thursday\" in value_json %}{{ value_json[\"weekly_schedule_thursday\"] }}{% endif %}"
+    },
+    "text/@IEEE@/weekly_schedule_tuesday/config": {
+      "availability": [
+        {
+          "topic": "zigbee2mqtt/bridge/state",
+          "value_template": "{{ value_json.state }}"
+        },
+        {
+          "topic": "zigbee2mqtt/@FRIENDLY_NAME@/availability",
+          "value_template": "{{ value_json.state }}"
+        }
+      ],
+      "availability_mode": "all",
+      "command_topic": "zigbee2mqtt/@FRIENDLY_NAME@/set/weekly_schedule_tuesday",
+      "default_entity_id": "text.@OBJECT_ID@_weekly_schedule_tuesday",
+      "device": {
+        "identifiers": [
+          "zigbee2mqtt_@IEEE@"
+        ],
+        "manufacturer": "Bosch",
+        "model": "Radiator thermostat II",
+        "model_id": "BTH-RA",
+        "name": "@FRIENDLY_NAME@",
+        "sw_version": "Zigbee2MQTT 2.14.3",
+        "via_device": "zigbee2mqtt_bridge_@COORDINATOR_IEEE@"
+      },
+      "entity_category": "config",
+      "name": "Weekly schedule tuesday",
+      "object_id": "@OBJECT_ID@_weekly_schedule_tuesday",
+      "origin": {
+        "name": "Zigbee2MQTT",
+        "sw": "2.14.3",
+        "url": "https://www.zigbee2mqtt.io"
+      },
+      "state_topic": "zigbee2mqtt/@FRIENDLY_NAME@",
+      "unique_id": "@IEEE@_weekly_schedule_tuesday_zigbee2mqtt",
+      "value_template": "{% if \"weekly_schedule_tuesday\" in value_json %}{{ value_json[\"weekly_schedule_tuesday\"] }}{% endif %}"
+    },
+    "text/@IEEE@/weekly_schedule_wednesday/config": {
+      "availability": [
+        {
+          "topic": "zigbee2mqtt/bridge/state",
+          "value_template": "{{ value_json.state }}"
+        },
+        {
+          "topic": "zigbee2mqtt/@FRIENDLY_NAME@/availability",
+          "value_template": "{{ value_json.state }}"
+        }
+      ],
+      "availability_mode": "all",
+      "command_topic": "zigbee2mqtt/@FRIENDLY_NAME@/set/weekly_schedule_wednesday",
+      "default_entity_id": "text.@OBJECT_ID@_weekly_schedule_wednesday",
+      "device": {
+        "identifiers": [
+          "zigbee2mqtt_@IEEE@"
+        ],
+        "manufacturer": "Bosch",
+        "model": "Radiator thermostat II",
+        "model_id": "BTH-RA",
+        "name": "@FRIENDLY_NAME@",
+        "sw_version": "Zigbee2MQTT 2.14.3",
+        "via_device": "zigbee2mqtt_bridge_@COORDINATOR_IEEE@"
+      },
+      "entity_category": "config",
+      "name": "Weekly schedule wednesday",
+      "object_id": "@OBJECT_ID@_weekly_schedule_wednesday",
+      "origin": {
+        "name": "Zigbee2MQTT",
+        "sw": "2.14.3",
+        "url": "https://www.zigbee2mqtt.io"
+      },
+      "state_topic": "zigbee2mqtt/@FRIENDLY_NAME@",
+      "unique_id": "@IEEE@_weekly_schedule_wednesday_zigbee2mqtt",
+      "value_template": "{% if \"weekly_schedule_wednesday\" in value_json %}{{ value_json[\"weekly_schedule_wednesday\"] }}{% endif %}"
+    },
+    "update/@IEEE@/update/config": {
+      "availability": [
+        {
+          "topic": "zigbee2mqtt/bridge/state",
+          "value_template": "{{ value_json.state }}"
+        },
+        {
+          "topic": "zigbee2mqtt/@FRIENDLY_NAME@/availability",
+          "value_template": "{{ value_json.state }}"
+        }
+      ],
+      "availability_mode": "all",
+      "command_topic": "zigbee2mqtt/bridge/request/device/ota_update/update",
+      "default_entity_id": "update.@OBJECT_ID@",
+      "device": {
+        "identifiers": [
+          "zigbee2mqtt_@IEEE@"
+        ],
+        "manufacturer": "Bosch",
+        "model": "Radiator thermostat II",
+        "model_id": "BTH-RA",
+        "name": "@FRIENDLY_NAME@",
+        "sw_version": "Zigbee2MQTT 2.14.3",
+        "via_device": "zigbee2mqtt_bridge_@COORDINATOR_IEEE@"
+      },
+      "device_class": "firmware",
+      "entity_category": "config",
+      "entity_picture": "https://github.com/Koenkk/zigbee2mqtt/raw/master/images/logo.png",
+      "name": null,
+      "object_id": "@OBJECT_ID@",
+      "origin": {
+        "name": "Zigbee2MQTT",
+        "sw": "2.14.3",
+        "url": "https://www.zigbee2mqtt.io"
+      },
+      "payload_install": "{\"id\": \"@IEEE@\"}",
+      "state_topic": "zigbee2mqtt/@FRIENDLY_NAME@",
+      "unique_id": "@IEEE@_update_zigbee2mqtt",
+      "value_template": "{% if \"update\" in value_json %}{\"latest_version\":\"{{ value_json['update']['latest_version'] }}\",\"installed_version\":\"{{ value_json['update']['installed_version'] }}\",\"update_percentage\":{{ value_json['update'].get('progress', 'null') }},\"in_progress\":{{ (value_json['update'].get('state') == 'updating')|lower }}}{% endif %}"
+    }
+  },
+  "model": "BTH-RA",
+  "source": "generated: cave_sim.zigbee.models (zigbee-herdsman-converters v26.125.0) through cave_sim.zigbee.discovery (Zigbee2MQTT 2.14.3 lib/extension/homeassistant.ts)",
+  "state": {
+    "automatic_valve_adapt": false,
+    "battery": 100,
+    "battery_low": false,
+    "boost_heating": "OFF",
+    "child_lock": "UNLOCK",
+    "display_brightness": 70,
+    "display_orientation": "standard_arrangement",
+    "display_switch_on_duration": 10,
+    "displayed_temperature": "set_temperature",
+    "error_state": "ok",
+    "local_temperature_calibration": 0,
+    "operating_mode": "manual",
+    "setpoint_change_source": "manual",
+    "system_mode": "heat",
+    "valve_adapt_status": "success",
+    "window_detection": "OFF"
+  }
+}

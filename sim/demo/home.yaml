@@ -1,0 +1,50 @@
+# The demo home: three rooms that between them use every simulated model and both device families.
+# Used by `python -m cave_sim` (the default CAVE_SIM_HOME), the demo mode, the end-to-end tests and
+# cave_sim.testing.DEMO_HOME. The device names fix the entity IDs Home Assistant creates; they are
+# listed in sim/README.md and are what sim/demo/heating.yaml refers to. Change them only together.
+outdoor_temperature: 5.0
+fritzbox:
+  report_delay: 0
+rooms:
+  - id: living_room
+    name: Wohnzimmer
+    temperature: 19.0
+    humidity: 50
+    devices:
+      - model: TRV-ZBT
+        name: Wohnzimmer Heizung Fenster
+        ieee: "0x00158d0000000101"
+      - model: TRVZB
+        name: Wohnzimmer Heizung Tuer
+        ieee: "0x00158d0000000102"
+      - model: SNZB-02P
+        name: Wohnzimmer
+        ieee: "0x00158d0000000103"
+      - model: SNZB-04P
+        name: Wohnzimmer Fenster
+        ieee: "0x00158d0000000104"
+  - id: bedroom
+    name: Schlafzimmer
+    temperature: 18.0
+    humidity: 55
+    devices:
+      - model: BTH-RA
+        name: Schlafzimmer Heizung
+        ieee: "0x00158d0000000201"
+      - model: SNZB-02P
+        name: Schlafzimmer
+        ieee: "0x00158d0000000202"
+      - model: SNZB-04P
+        name: Schlafzimmer Fenster
+        ieee: "0x00158d0000000203"
+  - id: bathroom
+    name: Bad
+    temperature: 20.0
+    humidity: 65
+    devices:
+      - model: "FRITZ!Smart Thermo 302"
+        name: Bad Heizung
+        ain: "13979 0000001"
+      - model: SNZB-02P
+        name: Bad
+        ieee: "0x00158d0000000301"

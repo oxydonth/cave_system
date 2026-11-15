@@ -1,0 +1,1796 @@
+{
+  "discovery": {
+    "binary_sensor/@IEEE@/open_window_detected/config": {
+      "availability": [
+        {
+          "topic": "zigbee2mqtt/bridge/state",
+          "value_template": "{{ value_json.state }}"
+        },
+        {
+          "topic": "zigbee2mqtt/@FRIENDLY_NAME@/availability",
+          "value_template": "{{ value_json.state }}"
+        }
+      ],
+      "availability_mode": "all",
+      "default_entity_id": "binary_sensor.@OBJECT_ID@_open_window_detected",
+      "device": {
+        "identifiers": [
+          "zigbee2mqtt_@IEEE@"
+        ],
+        "manufacturer": "SONOFF",
+        "model": "Zigbee thermostatic radiator valve",
+        "model_id": "TRV-ZBT",
+        "name": "@FRIENDLY_NAME@",
+        "sw_version": "Zigbee2MQTT 2.14.3",
+        "via_device": "zigbee2mqtt_bridge_@COORDINATOR_IEEE@"
+      },
+      "name": "Open window detected",
+      "object_id": "@OBJECT_ID@_open_window_detected",
+      "origin": {
+        "name": "Zigbee2MQTT",
+        "sw": "2.14.3",
+        "url": "https://www.zigbee2mqtt.io"
+      },
+      "payload_off": false,
+      "payload_on": true,
+      "state_topic": "zigbee2mqtt/@FRIENDLY_NAME@",
+      "unique_id": "@IEEE@_open_window_detected_zigbee2mqtt",
+      "value_template": "{% if \"open_window_detected\" in value_json %}{{ value_json[\"open_window_detected\"] }}{% endif %}"
+    },
+    "button/@IEEE@/valve_travel_calibration/config": {
+      "availability": [
+        {
+          "topic": "zigbee2mqtt/bridge/state",
+          "value_template": "{{ value_json.state }}"
+        },
+        {
+          "topic": "zigbee2mqtt/@FRIENDLY_NAME@/availability",
+          "value_template": "{{ value_json.state }}"
+        }
+      ],
+      "availability_mode": "all",
+      "command_topic": "zigbee2mqtt/@FRIENDLY_NAME@/set/valve_travel_calibration",
+      "default_entity_id": "button.@OBJECT_ID@_valve_travel_calibration",
+      "device": {
+        "identifiers": [
+          "zigbee2mqtt_@IEEE@"
+        ],
+        "manufacturer": "SONOFF",
+        "model": "Zigbee thermostatic radiator valve",
+        "model_id": "TRV-ZBT",
+        "name": "@FRIENDLY_NAME@",
+        "sw_version": "Zigbee2MQTT 2.14.3",
+        "via_device": "zigbee2mqtt_bridge_@COORDINATOR_IEEE@"
+      },
+      "entity_category": "config",
+      "name": "Valve travel calibration",
+      "object_id": "@OBJECT_ID@_valve_travel_calibration",
+      "origin": {
+        "name": "Zigbee2MQTT",
+        "sw": "2.14.3",
+        "url": "https://www.zigbee2mqtt.io"
+      },
+      "payload_press": "calibrate",
+      "unique_id": "@IEEE@_valve_travel_calibration_zigbee2mqtt"
+    },
+    "climate/@IEEE@/climate/config": {
+      "action_template": "{% if \"running_state\" in value_json %}{% set values = {None:None,'idle':'idle','heat':'heating','cool':'cooling','fan_only':'fan'} %}{{ values[value_json[\"running_state\"]] }}{% endif %}",
+      "action_topic": "zigbee2mqtt/@FRIENDLY_NAME@",
+      "availability": [
+        {
+          "topic": "zigbee2mqtt/bridge/state",
+          "value_template": "{{ value_json.state }}"
+        },
+        {
+          "topic": "zigbee2mqtt/@FRIENDLY_NAME@/availability",
+          "value_template": "{{ value_json.state }}"
+        }
+      ],
+      "availability_mode": "all",
+      "current_temperature_template": "{% if \"local_temperature\" in value_json %}{{ value_json[\"local_temperature\"] }}{% endif %}",
+      "current_temperature_topic": "zigbee2mqtt/@FRIENDLY_NAME@",
+      "default_entity_id": "climate.@OBJECT_ID@",
+      "device": {
+        "identifiers": [
+          "zigbee2mqtt_@IEEE@"
+        ],
+        "manufacturer": "SONOFF",
+        "model": "Zigbee thermostatic radiator valve",
+        "model_id": "TRV-ZBT",
+        "name": "@FRIENDLY_NAME@",
+        "sw_version": "Zigbee2MQTT 2.14.3",
+        "via_device": "zigbee2mqtt_bridge_@COORDINATOR_IEEE@"
+      },
+      "max_temp": "30",
+      "min_temp": "5",
+      "mode_command_topic": "zigbee2mqtt/@FRIENDLY_NAME@/set/system_mode",
+      "mode_state_template": "{% if \"system_mode\" in value_json %}{{ value_json[\"system_mode\"] }}{% endif %}",
+      "mode_state_topic": "zigbee2mqtt/@FRIENDLY_NAME@",
+      "modes": [
+        "off",
+        "auto",
+        "heat"
+      ],
+      "name": null,
+      "object_id": "@OBJECT_ID@",
+      "origin": {
+        "name": "Zigbee2MQTT",
+        "sw": "2.14.3",
+        "url": "https://www.zigbee2mqtt.io"
+      },
+      "temp_step": 0.5,
+      "temperature_command_topic": "zigbee2mqtt/@FRIENDLY_NAME@/set/occupied_heating_setpoint",
+      "temperature_state_template": "{% if \"occupied_heating_setpoint\" in value_json %}{{ value_json[\"occupied_heating_setpoint\"] }}{% endif %}",
+      "temperature_state_topic": "zigbee2mqtt/@FRIENDLY_NAME@",
+      "temperature_unit": "C",
+      "unique_id": "@IEEE@_climate_zigbee2mqtt"
+    },
+    "number/@IEEE@/external_temperature_input/config": {
+      "availability": [
+        {
+          "topic": "zigbee2mqtt/bridge/state",
+          "value_template": "{{ value_json.state }}"
+        },
+        {
+          "topic": "zigbee2mqtt/@FRIENDLY_NAME@/availability",
+          "value_template": "{{ value_json.state }}"
+        }
+      ],
+      "availability_mode": "all",
+      "command_topic": "zigbee2mqtt/@FRIENDLY_NAME@/set/external_temperature_input",
+      "default_entity_id": "number.@OBJECT_ID@_external_temperature_input",
+      "device": {
+        "identifiers": [
+          "zigbee2mqtt_@IEEE@"
+        ],
+        "manufacturer": "SONOFF",
+        "model": "Zigbee thermostatic radiator valve",
+        "model_id": "TRV-ZBT",
+        "name": "@FRIENDLY_NAME@",
+        "sw_version": "Zigbee2MQTT 2.14.3",
+        "via_device": "zigbee2mqtt_bridge_@COORDINATOR_IEEE@"
+      },
+      "device_class": "temperature",
+      "entity_category": "config",
+      "icon": "mdi:thermometer",
+      "max": 99.9,
+      "min": 0,
+      "object_id": "@OBJECT_ID@_external_temperature_input",
+      "origin": {
+        "name": "Zigbee2MQTT",
+        "sw": "2.14.3",
+        "url": "https://www.zigbee2mqtt.io"
+      },
+      "state_topic": "zigbee2mqtt/@FRIENDLY_NAME@",
+      "step": 0.1,
+      "unique_id": "@IEEE@_external_temperature_input_zigbee2mqtt",
+      "unit_of_measurement": "°C",
+      "value_template": "{% if \"external_temperature_input\" in value_json %}{{ value_json[\"external_temperature_input\"] }}{% endif %}"
+    },
+    "number/@IEEE@/frost_protection_temperature/config": {
+      "availability": [
+        {
+          "topic": "zigbee2mqtt/bridge/state",
+          "value_template": "{{ value_json.state }}"
+        },
+        {
+          "topic": "zigbee2mqtt/@FRIENDLY_NAME@/availability",
+          "value_template": "{{ value_json.state }}"
+        }
+      ],
+      "availability_mode": "all",
+      "command_topic": "zigbee2mqtt/@FRIENDLY_NAME@/set/frost_protection_temperature",
+      "default_entity_id": "number.@OBJECT_ID@_frost_protection_temperature",
+      "device": {
+        "identifiers": [
+          "zigbee2mqtt_@IEEE@"
+        ],
+        "manufacturer": "SONOFF",
+        "model": "Zigbee thermostatic radiator valve",
+        "model_id": "TRV-ZBT",
+        "name": "@FRIENDLY_NAME@",
+        "sw_version": "Zigbee2MQTT 2.14.3",
+        "via_device": "zigbee2mqtt_bridge_@COORDINATOR_IEEE@"
+      },
+      "entity_category": "config",
+      "max": 15,
+      "min": 5,
+      "name": "Frost protection temperature",
+      "object_id": "@OBJECT_ID@_frost_protection_temperature",
+      "origin": {
+        "name": "Zigbee2MQTT",
+        "sw": "2.14.3",
+        "url": "https://www.zigbee2mqtt.io"
+      },
+      "state_topic": "zigbee2mqtt/@FRIENDLY_NAME@",
+      "step": 0.5,
+      "unique_id": "@IEEE@_frost_protection_temperature_zigbee2mqtt",
+      "unit_of_measurement": "°C",
+      "value_template": "{% if \"frost_protection_temperature\" in value_json %}{{ value_json[\"frost_protection_temperature\"] }}{% endif %}"
+    },
+    "number/@IEEE@/heating_valve_position/config": {
+      "availability": [
+        {
+          "topic": "zigbee2mqtt/bridge/state",
+          "value_template": "{{ value_json.state }}"
+        },
+        {
+          "topic": "zigbee2mqtt/@FRIENDLY_NAME@/availability",
+          "value_template": "{{ value_json.state }}"
+        }
+      ],
+      "availability_mode": "all",
+      "command_topic": "zigbee2mqtt/@FRIENDLY_NAME@/set/heating_valve_position",
+      "default_entity_id": "number.@OBJECT_ID@_heating_valve_position",
+      "device": {
+        "identifiers": [
+          "zigbee2mqtt_@IEEE@"
+        ],
+        "manufacturer": "SONOFF",
+        "model": "Zigbee thermostatic radiator valve",
+        "model_id": "TRV-ZBT",
+        "name": "@FRIENDLY_NAME@",
+        "sw_version": "Zigbee2MQTT 2.14.3",
+        "via_device": "zigbee2mqtt_bridge_@COORDINATOR_IEEE@"
+      },
+      "entity_category": "config",
+      "max": 100,
+      "min": 0,
+      "name": "Heating valve position",
+      "object_id": "@OBJECT_ID@_heating_valve_position",
+      "origin": {
+        "name": "Zigbee2MQTT",
+        "sw": "2.14.3",
+        "url": "https://www.zigbee2mqtt.io"
+      },
+      "state_topic": "zigbee2mqtt/@FRIENDLY_NAME@",
+      "step": 1,
+      "unique_id": "@IEEE@_heating_valve_position_zigbee2mqtt",
+      "unit_of_measurement": "%",
+      "value_template": "{% if \"heating_valve_position\" in value_json %}{{ value_json[\"heating_valve_position\"] }}{% endif %}"
+    },
+    "number/@IEEE@/idle_valve_position/config": {
+      "availability": [
+        {
+          "topic": "zigbee2mqtt/bridge/state",
+          "value_template": "{{ value_json.state }}"
+        },
+        {
+          "topic": "zigbee2mqtt/@FRIENDLY_NAME@/availability",
+          "value_template": "{{ value_json.state }}"
+        }
+      ],
+      "availability_mode": "all",
+      "command_topic": "zigbee2mqtt/@FRIENDLY_NAME@/set/idle_valve_position",
+      "default_entity_id": "number.@OBJECT_ID@_idle_valve_position",
+      "device": {
+        "identifiers": [
+          "zigbee2mqtt_@IEEE@"
+        ],
+        "manufacturer": "SONOFF",
+        "model": "Zigbee thermostatic radiator valve",
+        "model_id": "TRV-ZBT",
+        "name": "@FRIENDLY_NAME@",
+        "sw_version": "Zigbee2MQTT 2.14.3",
+        "via_device": "zigbee2mqtt_bridge_@COORDINATOR_IEEE@"
+      },
+      "entity_category": "config",
+      "max": 100,
+      "min": 0,
+      "name": "Idle valve position",
+      "object_id": "@OBJECT_ID@_idle_valve_position",
+      "origin": {
+        "name": "Zigbee2MQTT",
+        "sw": "2.14.3",
+        "url": "https://www.zigbee2mqtt.io"
+      },
+      "state_topic": "zigbee2mqtt/@FRIENDLY_NAME@",
+      "step": 1,
+      "unique_id": "@IEEE@_idle_valve_position_zigbee2mqtt",
+      "unit_of_measurement": "%",
+      "value_template": "{% if \"idle_valve_position\" in value_json %}{{ value_json[\"idle_valve_position\"] }}{% endif %}"
+    },
+    "number/@IEEE@/local_temperature_calibration/config": {
+      "availability": [
+        {
+          "topic": "zigbee2mqtt/bridge/state",
+          "value_template": "{{ value_json.state }}"
+        },
+        {
+          "topic": "zigbee2mqtt/@FRIENDLY_NAME@/availability",
+          "value_template": "{{ value_json.state }}"
+        }
+      ],
+      "availability_mode": "all",
+      "command_topic": "zigbee2mqtt/@FRIENDLY_NAME@/set/local_temperature_calibration",
+      "default_entity_id": "number.@OBJECT_ID@_local_temperature_calibration",
+      "device": {
+        "identifiers": [
+          "zigbee2mqtt_@IEEE@"
+        ],
+        "manufacturer": "SONOFF",
+        "model": "Zigbee thermostatic radiator valve",
+        "model_id": "TRV-ZBT",
+        "name": "@FRIENDLY_NAME@",
+        "sw_version": "Zigbee2MQTT 2.14.3",
+        "via_device": "zigbee2mqtt_bridge_@COORDINATOR_IEEE@"
+      },
+      "device_class": "temperature_delta",
+      "entity_category": "config",
+      "max": 10,
+      "min": -10,
+      "object_id": "@OBJECT_ID@_local_temperature_calibration",
+      "origin": {
+        "name": "Zigbee2MQTT",
+        "sw": "2.14.3",
+        "url": "https://www.zigbee2mqtt.io"
+      },
+      "state_topic": "zigbee2mqtt/@FRIENDLY_NAME@",
+      "step": 0.2,
+      "unique_id": "@IEEE@_local_temperature_calibration_zigbee2mqtt",
+      "unit_of_measurement": "°C",
+      "value_template": "{% if \"local_temperature_calibration\" in value_json %}{{ value_json[\"local_temperature_calibration\"] }}{% endif %}"
+    },
+    "number/@IEEE@/remote_setpoint_temperature/config": {
+      "availability": [
+        {
+          "topic": "zigbee2mqtt/bridge/state",
+          "value_template": "{{ value_json.state }}"
+        },
+        {
+          "topic": "zigbee2mqtt/@FRIENDLY_NAME@/availability",
+          "value_template": "{{ value_json.state }}"
+        }
+      ],
+      "availability_mode": "all",
+      "command_topic": "zigbee2mqtt/@FRIENDLY_NAME@/set/remote_setpoint_temperature",
+      "default_entity_id": "number.@OBJECT_ID@_remote_setpoint_temperature",
+      "device": {
+        "identifiers": [
+          "zigbee2mqtt_@IEEE@"
+        ],
+        "manufacturer": "SONOFF",
+        "model": "Zigbee thermostatic radiator valve",
+        "model_id": "TRV-ZBT",
+        "name": "@FRIENDLY_NAME@",
+        "sw_version": "Zigbee2MQTT 2.14.3",
+        "via_device": "zigbee2mqtt_bridge_@COORDINATOR_IEEE@"
+      },
+      "entity_category": "config",
+      "max": 30,
+      "min": 5,
+      "name": "Thermostat Linkage Target Temperature",
+      "object_id": "@OBJECT_ID@_remote_setpoint_temperature",
+      "origin": {
+        "name": "Zigbee2MQTT",
+        "sw": "2.14.3",
+        "url": "https://www.zigbee2mqtt.io"
+      },
+      "state_topic": "zigbee2mqtt/@FRIENDLY_NAME@",
+      "step": 0.5,
+      "unique_id": "@IEEE@_remote_setpoint_temperature_zigbee2mqtt",
+      "unit_of_measurement": "°C",
+      "value_template": "{% if \"remote_setpoint_temperature\" in value_json %}{{ value_json[\"remote_setpoint_temperature\"] }}{% endif %}"
+    },
+    "number/@IEEE@/temperature_accuracy/config": {
+      "availability": [
+        {
+          "topic": "zigbee2mqtt/bridge/state",
+          "value_template": "{{ value_json.state }}"
+        },
+        {
+          "topic": "zigbee2mqtt/@FRIENDLY_NAME@/availability",
+          "value_template": "{{ value_json.state }}"
+        }
+      ],
+      "availability_mode": "all",
+      "command_topic": "zigbee2mqtt/@FRIENDLY_NAME@/set/temperature_accuracy",
+      "default_entity_id": "number.@OBJECT_ID@_temperature_accuracy",
+      "device": {
+        "identifiers": [
+          "zigbee2mqtt_@IEEE@"
+        ],
+        "manufacturer": "SONOFF",
+        "model": "Zigbee thermostatic radiator valve",
+        "model_id": "TRV-ZBT",
+        "name": "@FRIENDLY_NAME@",
+        "sw_version": "Zigbee2MQTT 2.14.3",
+        "via_device": "zigbee2mqtt_bridge_@COORDINATOR_IEEE@"
+      },
+      "entity_category": "config",
+      "max": -0.2,
+      "min": -1,
+      "name": "Temperature accuracy",
+      "object_id": "@OBJECT_ID@_temperature_accuracy",
+      "origin": {
+        "name": "Zigbee2MQTT",
+        "sw": "2.14.3",
+        "url": "https://www.zigbee2mqtt.io"
+      },
+      "state_topic": "zigbee2mqtt/@FRIENDLY_NAME@",
+      "step": 0.2,
+      "unique_id": "@IEEE@_temperature_accuracy_zigbee2mqtt",
+      "unit_of_measurement": "°C",
+      "value_template": "{% if \"temperature_accuracy\" in value_json %}{{ value_json[\"temperature_accuracy\"] }}{% endif %}"
+    },
+    "number/@IEEE@/temporary_mode_duration/config": {
+      "availability": [
+        {
+          "topic": "zigbee2mqtt/bridge/state",
+          "value_template": "{{ value_json.state }}"
+        },
+        {
+          "topic": "zigbee2mqtt/@FRIENDLY_NAME@/availability",
+          "value_template": "{{ value_json.state }}"
+        }
+      ],
+      "availability_mode": "all",
+      "command_topic": "zigbee2mqtt/@FRIENDLY_NAME@/set/temporary_mode_duration",
+      "default_entity_id": "number.@OBJECT_ID@_temporary_mode_duration",
+      "device": {
+        "identifiers": [
+          "zigbee2mqtt_@IEEE@"
+        ],
+        "manufacturer": "SONOFF",
+        "model": "Zigbee thermostatic radiator valve",
+        "model_id": "TRV-ZBT",
+        "name": "@FRIENDLY_NAME@",
+        "sw_version": "Zigbee2MQTT 2.14.3",
+        "via_device": "zigbee2mqtt_bridge_@COORDINATOR_IEEE@"
+      },
+      "max": 1440,
+      "min": 1,
+      "name": "Temporary mode duration",
+      "object_id": "@OBJECT_ID@_temporary_mode_duration",
+      "origin": {
+        "name": "Zigbee2MQTT",
+        "sw": "2.14.3",
+        "url": "https://www.zigbee2mqtt.io"
+      },
+      "state_topic": "zigbee2mqtt/@FRIENDLY_NAME@",
+      "step": 1,
+      "unique_id": "@IEEE@_temporary_mode_duration_zigbee2mqtt",
+      "unit_of_measurement": "minutes",
+      "value_template": "{% if \"temporary_mode_duration\" in value_json %}{{ value_json[\"temporary_mode_duration\"] }}{% endif %}"
+    },
+    "number/@IEEE@/temporary_mode_target_temperature/config": {
+      "availability": [
+        {
+          "topic": "zigbee2mqtt/bridge/state",
+          "value_template": "{{ value_json.state }}"
+        },
+        {
+          "topic": "zigbee2mqtt/@FRIENDLY_NAME@/availability",
+          "value_template": "{{ value_json.state }}"
+        }
+      ],
+      "availability_mode": "all",
+      "command_topic": "zigbee2mqtt/@FRIENDLY_NAME@/set/temporary_mode_target_temperature",
+      "default_entity_id": "number.@OBJECT_ID@_temporary_mode_target_temperature",
+      "device": {
+        "identifiers": [
+          "zigbee2mqtt_@IEEE@"
+        ],
+        "manufacturer": "SONOFF",
+        "model": "Zigbee thermostatic radiator valve",
+        "model_id": "TRV-ZBT",
+        "name": "@FRIENDLY_NAME@",
+        "sw_version": "Zigbee2MQTT 2.14.3",
+        "via_device": "zigbee2mqtt_bridge_@COORDINATOR_IEEE@"
+      },
+      "max": 30,
+      "min": 5,
+      "name": "Temporary mode target temperature",
+      "object_id": "@OBJECT_ID@_temporary_mode_target_temperature",
+      "origin": {
+        "name": "Zigbee2MQTT",
+        "sw": "2.14.3",
+        "url": "https://www.zigbee2mqtt.io"
+      },
+      "state_topic": "zigbee2mqtt/@FRIENDLY_NAME@",
+      "step": 0.5,
+      "unique_id": "@IEEE@_temporary_mode_target_temperature_zigbee2mqtt",
+      "unit_of_measurement": "°C",
+      "value_template": "{% if \"temporary_mode_target_temperature\" in value_json %}{{ value_json[\"temporary_mode_target_temperature\"] }}{% endif %}"
+    },
+    "select/@IEEE@/bluetooth_pairing/config": {
+      "availability": [
+        {
+          "topic": "zigbee2mqtt/bridge/state",
+          "value_template": "{{ value_json.state }}"
+        },
+        {
+          "topic": "zigbee2mqtt/@FRIENDLY_NAME@/availability",
+          "value_template": "{{ value_json.state }}"
+        }
+      ],
+      "availability_mode": "all",
+      "command_topic": "zigbee2mqtt/@FRIENDLY_NAME@/set/bluetooth_pairing",
+      "default_entity_id": "select.@OBJECT_ID@_bluetooth_pairing",
+      "device": {
+        "identifiers": [
+          "zigbee2mqtt_@IEEE@"
+        ],
+        "manufacturer": "SONOFF",
+        "model": "Zigbee thermostatic radiator valve",
+        "model_id": "TRV-ZBT",
+        "name": "@FRIENDLY_NAME@",
+        "sw_version": "Zigbee2MQTT 2.14.3",
+        "via_device": "zigbee2mqtt_bridge_@COORDINATOR_IEEE@"
+      },
+      "name": "Bluetooth pairing",
+      "object_id": "@OBJECT_ID@_bluetooth_pairing",
+      "options": [
+        "start",
+        "stop"
+      ],
+      "origin": {
+        "name": "Zigbee2MQTT",
+        "sw": "2.14.3",
+        "url": "https://www.zigbee2mqtt.io"
+      },
+      "unique_id": "@IEEE@_bluetooth_pairing_zigbee2mqtt"
+    },
+    "select/@IEEE@/low_battery_valve_state/config": {
+      "availability": [
+        {
+          "topic": "zigbee2mqtt/bridge/state",
+          "value_template": "{{ value_json.state }}"
+        },
+        {
+          "topic": "zigbee2mqtt/@FRIENDLY_NAME@/availability",
+          "value_template": "{{ value_json.state }}"
+        }
+      ],
+      "availability_mode": "all",
+      "command_topic": "zigbee2mqtt/@FRIENDLY_NAME@/set/low_battery_valve_state",
+      "default_entity_id": "select.@OBJECT_ID@_low_battery_valve_state",
+      "device": {
+        "identifiers": [
+          "zigbee2mqtt_@IEEE@"
+        ],
+        "manufacturer": "SONOFF",
+        "model": "Zigbee thermostatic radiator valve",
+        "model_id": "TRV-ZBT",
+        "name": "@FRIENDLY_NAME@",
+        "sw_version": "Zigbee2MQTT 2.14.3",
+        "via_device": "zigbee2mqtt_bridge_@COORDINATOR_IEEE@"
+      },
+      "entity_category": "config",
+      "name": "Low battery valve state",
+      "object_id": "@OBJECT_ID@_low_battery_valve_state",
+      "options": [
+        "close",
+        "open_30"
+      ],
+      "origin": {
+        "name": "Zigbee2MQTT",
+        "sw": "2.14.3",
+        "url": "https://www.zigbee2mqtt.io"
+      },
+      "state_topic": "zigbee2mqtt/@FRIENDLY_NAME@",
+      "unique_id": "@IEEE@_low_battery_valve_state_zigbee2mqtt",
+      "value_template": "{% if \"low_battery_valve_state\" in value_json %}{{ value_json[\"low_battery_valve_state\"] }}{% endif %}"
+    },
+    "select/@IEEE@/schedule_active_group/config": {
+      "availability": [
+        {
+          "topic": "zigbee2mqtt/bridge/state",
+          "value_template": "{{ value_json.state }}"
+        },
+        {
+          "topic": "zigbee2mqtt/@FRIENDLY_NAME@/availability",
+          "value_template": "{{ value_json.state }}"
+        }
+      ],
+      "availability_mode": "all",
+      "command_topic": "zigbee2mqtt/@FRIENDLY_NAME@/set/schedule_active_group",
+      "default_entity_id": "select.@OBJECT_ID@_schedule_active_group",
+      "device": {
+        "identifiers": [
+          "zigbee2mqtt_@IEEE@"
+        ],
+        "manufacturer": "SONOFF",
+        "model": "Zigbee thermostatic radiator valve",
+        "model_id": "TRV-ZBT",
+        "name": "@FRIENDLY_NAME@",
+        "sw_version": "Zigbee2MQTT 2.14.3",
+        "via_device": "zigbee2mqtt_bridge_@COORDINATOR_IEEE@"
+      },
+      "entity_category": "config",
+      "name": "Schedule active group",
+      "object_id": "@OBJECT_ID@_schedule_active_group",
+      "options": [
+        "1",
+        "2",
+        "3"
+      ],
+      "origin": {
+        "name": "Zigbee2MQTT",
+        "sw": "2.14.3",
+        "url": "https://www.zigbee2mqtt.io"
+      },
+      "state_topic": "zigbee2mqtt/@FRIENDLY_NAME@",
+      "unique_id": "@IEEE@_schedule_active_group_zigbee2mqtt",
+      "value_template": "{% if \"schedule_active_group\" in value_json %}{{ value_json[\"schedule_active_group\"] }}{% endif %}"
+    },
+    "select/@IEEE@/schedule_group_to_edit/config": {
+      "availability": [
+        {
+          "topic": "zigbee2mqtt/bridge/state",
+          "value_template": "{{ value_json.state }}"
+        },
+        {
+          "topic": "zigbee2mqtt/@FRIENDLY_NAME@/availability",
+          "value_template": "{{ value_json.state }}"
+        }
+      ],
+      "availability_mode": "all",
+      "command_topic": "zigbee2mqtt/@FRIENDLY_NAME@/set/schedule_group_to_edit",
+      "default_entity_id": "select.@OBJECT_ID@_schedule_group_to_edit",
+      "device": {
+        "identifiers": [
+          "zigbee2mqtt_@IEEE@"
+        ],
+        "manufacturer": "SONOFF",
+        "model": "Zigbee thermostatic radiator valve",
+        "model_id": "TRV-ZBT",
+        "name": "@FRIENDLY_NAME@",
+        "sw_version": "Zigbee2MQTT 2.14.3",
+        "via_device": "zigbee2mqtt_bridge_@COORDINATOR_IEEE@"
+      },
+      "entity_category": "config",
+      "name": "Schedule group to edit",
+      "object_id": "@OBJECT_ID@_schedule_group_to_edit",
+      "options": [
+        "1",
+        "2",
+        "3"
+      ],
+      "origin": {
+        "name": "Zigbee2MQTT",
+        "sw": "2.14.3",
+        "url": "https://www.zigbee2mqtt.io"
+      },
+      "state_topic": "zigbee2mqtt/@FRIENDLY_NAME@",
+      "unique_id": "@IEEE@_schedule_group_to_edit_zigbee2mqtt",
+      "value_template": "{% if \"schedule_group_to_edit\" in value_json %}{{ value_json[\"schedule_group_to_edit\"] }}{% endif %}"
+    },
+    "select/@IEEE@/screen_direction/config": {
+      "availability": [
+        {
+          "topic": "zigbee2mqtt/bridge/state",
+          "value_template": "{{ value_json.state }}"
+        },
+        {
+          "topic": "zigbee2mqtt/@FRIENDLY_NAME@/availability",
+          "value_template": "{{ value_json.state }}"
+        }
+      ],
+      "availability_mode": "all",
+      "command_topic": "zigbee2mqtt/@FRIENDLY_NAME@/set/screen_direction",
+      "default_entity_id": "select.@OBJECT_ID@_screen_direction",
+      "device": {
+        "identifiers": [
+          "zigbee2mqtt_@IEEE@"
+        ],
+        "manufacturer": "SONOFF",
+        "model": "Zigbee thermostatic radiator valve",
+        "model_id": "TRV-ZBT",
+        "name": "@FRIENDLY_NAME@",
+        "sw_version": "Zigbee2MQTT 2.14.3",
+        "via_device": "zigbee2mqtt_bridge_@COORDINATOR_IEEE@"
+      },
+      "entity_category": "config",
+      "name": "Screen direction",
+      "object_id": "@OBJECT_ID@_screen_direction",
+      "options": [
+        "0",
+        "90",
+        "180",
+        "270"
+      ],
+      "origin": {
+        "name": "Zigbee2MQTT",
+        "sw": "2.14.3",
+        "url": "https://www.zigbee2mqtt.io"
+      },
+      "state_topic": "zigbee2mqtt/@FRIENDLY_NAME@",
+      "unique_id": "@IEEE@_screen_direction_zigbee2mqtt",
+      "value_template": "{% if \"screen_direction\" in value_json %}{{ value_json[\"screen_direction\"] }}{% endif %}"
+    },
+    "select/@IEEE@/temperature_sensor_select/config": {
+      "availability": [
+        {
+          "topic": "zigbee2mqtt/bridge/state",
+          "value_template": "{{ value_json.state }}"
+        },
+        {
+          "topic": "zigbee2mqtt/@FRIENDLY_NAME@/availability",
+          "value_template": "{{ value_json.state }}"
+        }
+      ],
+      "availability_mode": "all",
+      "command_topic": "zigbee2mqtt/@FRIENDLY_NAME@/set/temperature_sensor_select",
+      "default_entity_id": "select.@OBJECT_ID@_temperature_sensor_select",
+      "device": {
+        "identifiers": [
+          "zigbee2mqtt_@IEEE@"
+        ],
+        "manufacturer": "SONOFF",
+        "model": "Zigbee thermostatic radiator valve",
+        "model_id": "TRV-ZBT",
+        "name": "@FRIENDLY_NAME@",
+        "sw_version": "Zigbee2MQTT 2.14.3",
+        "via_device": "zigbee2mqtt_bridge_@COORDINATOR_IEEE@"
+      },
+      "entity_category": "config",
+      "icon": "mdi:home-thermometer",
+      "name": "Temperature sensor",
+      "object_id": "@OBJECT_ID@_temperature_sensor_select",
+      "options": [
+        "local_temperature",
+        "remote_temperature",
+        "remote_source_offline"
+      ],
+      "origin": {
+        "name": "Zigbee2MQTT",
+        "sw": "2.14.3",
+        "url": "https://www.zigbee2mqtt.io"
+      },
+      "state_topic": "zigbee2mqtt/@FRIENDLY_NAME@",
+      "unique_id": "@IEEE@_temperature_sensor_select_zigbee2mqtt",
+      "value_template": "{% if \"temperature_sensor_select\" in value_json %}{{ value_json[\"temperature_sensor_select\"] }}{% endif %}"
+    },
+    "select/@IEEE@/temporary_mode_mode/config": {
+      "availability": [
+        {
+          "topic": "zigbee2mqtt/bridge/state",
+          "value_template": "{{ value_json.state }}"
+        },
+        {
+          "topic": "zigbee2mqtt/@FRIENDLY_NAME@/availability",
+          "value_template": "{{ value_json.state }}"
+        }
+      ],
+      "availability_mode": "all",
+      "command_topic": "zigbee2mqtt/@FRIENDLY_NAME@/set/temporary_mode_mode",
+      "default_entity_id": "select.@OBJECT_ID@_temporary_mode_mode",
+      "device": {
+        "identifiers": [
+          "zigbee2mqtt_@IEEE@"
+        ],
+        "manufacturer": "SONOFF",
+        "model": "Zigbee thermostatic radiator valve",
+        "model_id": "TRV-ZBT",
+        "name": "@FRIENDLY_NAME@",
+        "sw_version": "Zigbee2MQTT 2.14.3",
+        "via_device": "zigbee2mqtt_bridge_@COORDINATOR_IEEE@"
+      },
+      "name": "Temporary mode mode",
+      "object_id": "@OBJECT_ID@_temporary_mode_mode",
+      "options": [
+        "disabled",
+        "timer",
+        "boost"
+      ],
+      "origin": {
+        "name": "Zigbee2MQTT",
+        "sw": "2.14.3",
+        "url": "https://www.zigbee2mqtt.io"
+      },
+      "state_topic": "zigbee2mqtt/@FRIENDLY_NAME@",
+      "unique_id": "@IEEE@_temporary_mode_mode_zigbee2mqtt",
+      "value_template": "{% if \"temporary_mode_mode\" in value_json %}{{ value_json[\"temporary_mode_mode\"] }}{% endif %}"
+    },
+    "sensor/@IEEE@/battery/config": {
+      "availability": [
+        {
+          "topic": "zigbee2mqtt/bridge/state",
+          "value_template": "{{ value_json.state }}"
+        },
+        {
+          "topic": "zigbee2mqtt/@FRIENDLY_NAME@/availability",
+          "value_template": "{{ value_json.state }}"
+        }
+      ],
+      "availability_mode": "all",
+      "default_entity_id": "sensor.@OBJECT_ID@_battery",
+      "device": {
+        "identifiers": [
+          "zigbee2mqtt_@IEEE@"
+        ],
+        "manufacturer": "SONOFF",
+        "model": "Zigbee thermostatic radiator valve",
+        "model_id": "TRV-ZBT",
+        "name": "@FRIENDLY_NAME@",
+        "sw_version": "Zigbee2MQTT 2.14.3",
+        "via_device": "zigbee2mqtt_bridge_@COORDINATOR_IEEE@"
+      },
+      "device_class": "battery",
+      "enabled_by_default": true,
+      "entity_category": "diagnostic",
+      "object_id": "@OBJECT_ID@_battery",
+      "origin": {
+        "name": "Zigbee2MQTT",
+        "sw": "2.14.3",
+        "url": "https://www.zigbee2mqtt.io"
+      },
+      "state_class": "measurement",
+      "state_topic": "zigbee2mqtt/@FRIENDLY_NAME@",
+      "unique_id": "@IEEE@_battery_zigbee2mqtt",
+      "unit_of_measurement": "%",
+      "value_template": "{% if \"battery\" in value_json %}{{ value_json[\"battery\"] }}{% endif %}"
+    },
+    "sensor/@IEEE@/bluetooth_pairing_status/config": {
+      "availability": [
+        {
+          "topic": "zigbee2mqtt/bridge/state",
+          "value_template": "{{ value_json.state }}"
+        },
+        {
+          "topic": "zigbee2mqtt/@FRIENDLY_NAME@/availability",
+          "value_template": "{{ value_json.state }}"
+        }
+      ],
+      "availability_mode": "all",
+      "default_entity_id": "sensor.@OBJECT_ID@_bluetooth_pairing_status",
+      "device": {
+        "identifiers": [
+          "zigbee2mqtt_@IEEE@"
+        ],
+        "manufacturer": "SONOFF",
+        "model": "Zigbee thermostatic radiator valve",
+        "model_id": "TRV-ZBT",
+        "name": "@FRIENDLY_NAME@",
+        "sw_version": "Zigbee2MQTT 2.14.3",
+        "via_device": "zigbee2mqtt_bridge_@COORDINATOR_IEEE@"
+      },
+      "name": "Bluetooth pairing status",
+      "object_id": "@OBJECT_ID@_bluetooth_pairing_status",
+      "origin": {
+        "name": "Zigbee2MQTT",
+        "sw": "2.14.3",
+        "url": "https://www.zigbee2mqtt.io"
+      },
+      "state_topic": "zigbee2mqtt/@FRIENDLY_NAME@",
+      "unique_id": "@IEEE@_bluetooth_pairing_status_zigbee2mqtt",
+      "value_template": "{% if \"bluetooth_pairing_status\" in value_json %}{{ value_json[\"bluetooth_pairing_status\"] }}{% endif %}"
+    },
+    "sensor/@IEEE@/closing_steps/config": {
+      "availability": [
+        {
+          "topic": "zigbee2mqtt/bridge/state",
+          "value_template": "{{ value_json.state }}"
+        },
+        {
+          "topic": "zigbee2mqtt/@FRIENDLY_NAME@/availability",
+          "value_template": "{{ value_json.state }}"
+        }
+      ],
+      "availability_mode": "all",
+      "default_entity_id": "sensor.@OBJECT_ID@_closing_steps",
+      "device": {
+        "identifiers": [
+          "zigbee2mqtt_@IEEE@"
+        ],
+        "manufacturer": "SONOFF",
+        "model": "Zigbee thermostatic radiator valve",
+        "model_id": "TRV-ZBT",
+        "name": "@FRIENDLY_NAME@",
+        "sw_version": "Zigbee2MQTT 2.14.3",
+        "via_device": "zigbee2mqtt_bridge_@COORDINATOR_IEEE@"
+      },
+      "enabled_by_default": true,
+      "entity_category": "diagnostic",
+      "name": "Closing steps",
+      "object_id": "@OBJECT_ID@_closing_steps",
+      "origin": {
+        "name": "Zigbee2MQTT",
+        "sw": "2.14.3",
+        "url": "https://www.zigbee2mqtt.io"
+      },
+      "state_topic": "zigbee2mqtt/@FRIENDLY_NAME@",
+      "unique_id": "@IEEE@_closing_steps_zigbee2mqtt",
+      "value_template": "{% if \"closing_steps\" in value_json %}{{ value_json[\"closing_steps\"] }}{% endif %}"
+    },
+    "sensor/@IEEE@/fault_status/config": {
+      "availability": [
+        {
+          "topic": "zigbee2mqtt/bridge/state",
+          "value_template": "{{ value_json.state }}"
+        },
+        {
+          "topic": "zigbee2mqtt/@FRIENDLY_NAME@/availability",
+          "value_template": "{{ value_json.state }}"
+        }
+      ],
+      "availability_mode": "all",
+      "default_entity_id": "sensor.@OBJECT_ID@_fault_status",
+      "device": {
+        "identifiers": [
+          "zigbee2mqtt_@IEEE@"
+        ],
+        "manufacturer": "SONOFF",
+        "model": "Zigbee thermostatic radiator valve",
+        "model_id": "TRV-ZBT",
+        "name": "@FRIENDLY_NAME@",
+        "sw_version": "Zigbee2MQTT 2.14.3",
+        "via_device": "zigbee2mqtt_bridge_@COORDINATOR_IEEE@"
+      },
+      "entity_category": "diagnostic",
+      "name": "Fault status",
+      "object_id": "@OBJECT_ID@_fault_status",
+      "origin": {
+        "name": "Zigbee2MQTT",
+        "sw": "2.14.3",
+        "url": "https://www.zigbee2mqtt.io"
+      },
+      "state_topic": "zigbee2mqtt/@FRIENDLY_NAME@",
+      "unique_id": "@IEEE@_fault_status_zigbee2mqtt",
+      "value_template": "{% if \"fault_status\" in value_json %}{{ value_json[\"fault_status\"] | default('',True) | string | truncate(254, True, '', 0) }}{% endif %}"
+    },
+    "sensor/@IEEE@/heat_percentage_hour/config": {
+      "availability": [
+        {
+          "topic": "zigbee2mqtt/bridge/state",
+          "value_template": "{{ value_json.state }}"
+        },
+        {
+          "topic": "zigbee2mqtt/@FRIENDLY_NAME@/availability",
+          "value_template": "{{ value_json.state }}"
+        }
+      ],
+      "availability_mode": "all",
+      "default_entity_id": "sensor.@OBJECT_ID@_heat_percentage_hour",
+      "device": {
+        "identifiers": [
+          "zigbee2mqtt_@IEEE@"
+        ],
+        "manufacturer": "SONOFF",
+        "model": "Zigbee thermostatic radiator valve",
+        "model_id": "TRV-ZBT",
+        "name": "@FRIENDLY_NAME@",
+        "sw_version": "Zigbee2MQTT 2.14.3",
+        "via_device": "zigbee2mqtt_bridge_@COORDINATOR_IEEE@"
+      },
+      "enabled_by_default": true,
+      "entity_category": "diagnostic",
+      "name": "Heat percentage hour",
+      "object_id": "@OBJECT_ID@_heat_percentage_hour",
+      "origin": {
+        "name": "Zigbee2MQTT",
+        "sw": "2.14.3",
+        "url": "https://www.zigbee2mqtt.io"
+      },
+      "state_topic": "zigbee2mqtt/@FRIENDLY_NAME@",
+      "unique_id": "@IEEE@_heat_percentage_hour_zigbee2mqtt",
+      "unit_of_measurement": "%",
+      "value_template": "{% if \"heat_percentage_hour\" in value_json %}{{ value_json[\"heat_percentage_hour\"] }}{% endif %}"
+    },
+    "sensor/@IEEE@/idle_steps/config": {
+      "availability": [
+        {
+          "topic": "zigbee2mqtt/bridge/state",
+          "value_template": "{{ value_json.state }}"
+        },
+        {
+          "topic": "zigbee2mqtt/@FRIENDLY_NAME@/availability",
+          "value_template": "{{ value_json.state }}"
+        }
+      ],
+      "availability_mode": "all",
+      "default_entity_id": "sensor.@OBJECT_ID@_idle_steps",
+      "device": {
+        "identifiers": [
+          "zigbee2mqtt_@IEEE@"
+        ],
+        "manufacturer": "SONOFF",
+        "model": "Zigbee thermostatic radiator valve",
+        "model_id": "TRV-ZBT",
+        "name": "@FRIENDLY_NAME@",
+        "sw_version": "Zigbee2MQTT 2.14.3",
+        "via_device": "zigbee2mqtt_bridge_@COORDINATOR_IEEE@"
+      },
+      "enabled_by_default": true,
+      "entity_category": "diagnostic",
+      "name": "Idle steps",
+      "object_id": "@OBJECT_ID@_idle_steps",
+      "origin": {
+        "name": "Zigbee2MQTT",
+        "sw": "2.14.3",
+        "url": "https://www.zigbee2mqtt.io"
+      },
+      "state_topic": "zigbee2mqtt/@FRIENDLY_NAME@",
+      "unique_id": "@IEEE@_idle_steps_zigbee2mqtt",
+      "value_template": "{% if \"idle_steps\" in value_json %}{{ value_json[\"idle_steps\"] }}{% endif %}"
+    },
+    "sensor/@IEEE@/last_seen/config": {
+      "availability": [
+        {
+          "topic": "zigbee2mqtt/bridge/state",
+          "value_template": "{{ value_json.state }}"
+        },
+        {
+          "topic": "zigbee2mqtt/@FRIENDLY_NAME@/availability",
+          "value_template": "{{ value_json.state }}"
+        }
+      ],
+      "availability_mode": "all",
+      "default_entity_id": "sensor.@OBJECT_ID@_last_seen",
+      "device": {
+        "identifiers": [
+          "zigbee2mqtt_@IEEE@"
+        ],
+        "manufacturer": "SONOFF",
+        "model": "Zigbee thermostatic radiator valve",
+        "model_id": "TRV-ZBT",
+        "name": "@FRIENDLY_NAME@",
+        "sw_version": "Zigbee2MQTT 2.14.3",
+        "via_device": "zigbee2mqtt_bridge_@COORDINATOR_IEEE@"
+      },
+      "device_class": "timestamp",
+      "enabled_by_default": false,
+      "entity_category": "diagnostic",
+      "icon": "mdi:clock",
+      "name": "Last seen",
+      "object_id": "@OBJECT_ID@_last_seen",
+      "origin": {
+        "name": "Zigbee2MQTT",
+        "sw": "2.14.3",
+        "url": "https://www.zigbee2mqtt.io"
+      },
+      "state_topic": "zigbee2mqtt/@FRIENDLY_NAME@",
+      "unique_id": "@IEEE@_last_seen_zigbee2mqtt",
+      "value_template": "{% if \"last_seen\" in value_json %}{{ value_json[\"last_seen\"] }}{% endif %}"
+    },
+    "sensor/@IEEE@/linkquality/config": {
+      "availability": [
+        {
+          "topic": "zigbee2mqtt/bridge/state",
+          "value_template": "{{ value_json.state }}"
+        },
+        {
+          "topic": "zigbee2mqtt/@FRIENDLY_NAME@/availability",
+          "value_template": "{{ value_json.state }}"
+        }
+      ],
+      "availability_mode": "all",
+      "default_entity_id": "sensor.@OBJECT_ID@_linkquality",
+      "device": {
+        "identifiers": [
+          "zigbee2mqtt_@IEEE@"
+        ],
+        "manufacturer": "SONOFF",
+        "model": "Zigbee thermostatic radiator valve",
+        "model_id": "TRV-ZBT",
+        "name": "@FRIENDLY_NAME@",
+        "sw_version": "Zigbee2MQTT 2.14.3",
+        "via_device": "zigbee2mqtt_bridge_@COORDINATOR_IEEE@"
+      },
+      "enabled_by_default": false,
+      "entity_category": "diagnostic",
+      "icon": "mdi:signal",
+      "name": "Linkquality",
+      "object_id": "@OBJECT_ID@_linkquality",
+      "origin": {
+        "name": "Zigbee2MQTT",
+        "sw": "2.14.3",
+        "url": "https://www.zigbee2mqtt.io"
+      },
+      "state_class": "measurement",
+      "state_topic": "zigbee2mqtt/@FRIENDLY_NAME@",
+      "unique_id": "@IEEE@_linkquality_zigbee2mqtt",
+      "unit_of_measurement": "lqi",
+      "value_template": "{% if \"linkquality\" in value_json %}{{ value_json[\"linkquality\"] }}{% endif %}"
+    },
+    "sensor/@IEEE@/local_temperature/config": {
+      "availability": [
+        {
+          "topic": "zigbee2mqtt/bridge/state",
+          "value_template": "{{ value_json.state }}"
+        },
+        {
+          "topic": "zigbee2mqtt/@FRIENDLY_NAME@/availability",
+          "value_template": "{{ value_json.state }}"
+        }
+      ],
+      "availability_mode": "all",
+      "default_entity_id": "sensor.@OBJECT_ID@_local_temperature",
+      "device": {
+        "identifiers": [
+          "zigbee2mqtt_@IEEE@"
+        ],
+        "manufacturer": "SONOFF",
+        "model": "Zigbee thermostatic radiator valve",
+        "model_id": "TRV-ZBT",
+        "name": "@FRIENDLY_NAME@",
+        "sw_version": "Zigbee2MQTT 2.14.3",
+        "via_device": "zigbee2mqtt_bridge_@COORDINATOR_IEEE@"
+      },
+      "device_class": "temperature",
+      "object_id": "@OBJECT_ID@_local_temperature",
+      "origin": {
+        "name": "Zigbee2MQTT",
+        "sw": "2.14.3",
+        "url": "https://www.zigbee2mqtt.io"
+      },
+      "state_class": "measurement",
+      "state_topic": "zigbee2mqtt/@FRIENDLY_NAME@",
+      "unique_id": "@IEEE@_local_temperature_zigbee2mqtt",
+      "unit_of_measurement": "°C",
+      "value_template": "{% if \"local_temperature\" in value_json %}{{ value_json[\"local_temperature\"] }}{% endif %}"
+    },
+    "sensor/@IEEE@/motor_travel_calibration_status/config": {
+      "availability": [
+        {
+          "topic": "zigbee2mqtt/bridge/state",
+          "value_template": "{{ value_json.state }}"
+        },
+        {
+          "topic": "zigbee2mqtt/@FRIENDLY_NAME@/availability",
+          "value_template": "{{ value_json.state }}"
+        }
+      ],
+      "availability_mode": "all",
+      "default_entity_id": "sensor.@OBJECT_ID@_motor_travel_calibration_status",
+      "device": {
+        "identifiers": [
+          "zigbee2mqtt_@IEEE@"
+        ],
+        "manufacturer": "SONOFF",
+        "model": "Zigbee thermostatic radiator valve",
+        "model_id": "TRV-ZBT",
+        "name": "@FRIENDLY_NAME@",
+        "sw_version": "Zigbee2MQTT 2.14.3",
+        "via_device": "zigbee2mqtt_bridge_@COORDINATOR_IEEE@"
+      },
+      "entity_category": "diagnostic",
+      "name": "Motor travel calibration status",
+      "object_id": "@OBJECT_ID@_motor_travel_calibration_status",
+      "origin": {
+        "name": "Zigbee2MQTT",
+        "sw": "2.14.3",
+        "url": "https://www.zigbee2mqtt.io"
+      },
+      "state_topic": "zigbee2mqtt/@FRIENDLY_NAME@",
+      "unique_id": "@IEEE@_motor_travel_calibration_status_zigbee2mqtt",
+      "value_template": "{% if \"motor_travel_calibration_status\" in value_json %}{{ value_json[\"motor_travel_calibration_status\"] | default('',True) | string | truncate(254, True, '', 0) }}{% endif %}"
+    },
+    "sensor/@IEEE@/temperature_control_history/config": {
+      "availability": [
+        {
+          "topic": "zigbee2mqtt/bridge/state",
+          "value_template": "{{ value_json.state }}"
+        },
+        {
+          "topic": "zigbee2mqtt/@FRIENDLY_NAME@/availability",
+          "value_template": "{{ value_json.state }}"
+        }
+      ],
+      "availability_mode": "all",
+      "default_entity_id": "sensor.@OBJECT_ID@_temperature_control_history",
+      "device": {
+        "identifiers": [
+          "zigbee2mqtt_@IEEE@"
+        ],
+        "manufacturer": "SONOFF",
+        "model": "Zigbee thermostatic radiator valve",
+        "model_id": "TRV-ZBT",
+        "name": "@FRIENDLY_NAME@",
+        "sw_version": "Zigbee2MQTT 2.14.3",
+        "via_device": "zigbee2mqtt_bridge_@COORDINATOR_IEEE@"
+      },
+      "entity_category": "diagnostic",
+      "name": "Temperature control history",
+      "object_id": "@OBJECT_ID@_temperature_control_history",
+      "origin": {
+        "name": "Zigbee2MQTT",
+        "sw": "2.14.3",
+        "url": "https://www.zigbee2mqtt.io"
+      },
+      "state_topic": "zigbee2mqtt/@FRIENDLY_NAME@",
+      "unique_id": "@IEEE@_temperature_control_history_zigbee2mqtt",
+      "value_template": "{% if \"temperature_control_history\" in value_json %}{{ value_json[\"temperature_control_history\"] | default('',True) | string | truncate(254, True, '', 0) }}{% endif %}"
+    },
+    "sensor/@IEEE@/valve_closing_limit_voltage/config": {
+      "availability": [
+        {
+          "topic": "zigbee2mqtt/bridge/state",
+          "value_template": "{{ value_json.state }}"
+        },
+        {
+          "topic": "zigbee2mqtt/@FRIENDLY_NAME@/availability",
+          "value_template": "{{ value_json.state }}"
+        }
+      ],
+      "availability_mode": "all",
+      "default_entity_id": "sensor.@OBJECT_ID@_valve_closing_limit_voltage",
+      "device": {
+        "identifiers": [
+          "zigbee2mqtt_@IEEE@"
+        ],
+        "manufacturer": "SONOFF",
+        "model": "Zigbee thermostatic radiator valve",
+        "model_id": "TRV-ZBT",
+        "name": "@FRIENDLY_NAME@",
+        "sw_version": "Zigbee2MQTT 2.14.3",
+        "via_device": "zigbee2mqtt_bridge_@COORDINATOR_IEEE@"
+      },
+      "enabled_by_default": true,
+      "entity_category": "diagnostic",
+      "name": "Valve closing limit voltage",
+      "object_id": "@OBJECT_ID@_valve_closing_limit_voltage",
+      "origin": {
+        "name": "Zigbee2MQTT",
+        "sw": "2.14.3",
+        "url": "https://www.zigbee2mqtt.io"
+      },
+      "state_topic": "zigbee2mqtt/@FRIENDLY_NAME@",
+      "unique_id": "@IEEE@_valve_closing_limit_voltage_zigbee2mqtt",
+      "unit_of_measurement": "mV",
+      "value_template": "{% if \"valve_closing_limit_voltage\" in value_json %}{{ value_json[\"valve_closing_limit_voltage\"] }}{% endif %}"
+    },
+    "sensor/@IEEE@/valve_motor_running_voltage/config": {
+      "availability": [
+        {
+          "topic": "zigbee2mqtt/bridge/state",
+          "value_template": "{{ value_json.state }}"
+        },
+        {
+          "topic": "zigbee2mqtt/@FRIENDLY_NAME@/availability",
+          "value_template": "{{ value_json.state }}"
+        }
+      ],
+      "availability_mode": "all",
+      "default_entity_id": "sensor.@OBJECT_ID@_valve_motor_running_voltage",
+      "device": {
+        "identifiers": [
+          "zigbee2mqtt_@IEEE@"
+        ],
+        "manufacturer": "SONOFF",
+        "model": "Zigbee thermostatic radiator valve",
+        "model_id": "TRV-ZBT",
+        "name": "@FRIENDLY_NAME@",
+        "sw_version": "Zigbee2MQTT 2.14.3",
+        "via_device": "zigbee2mqtt_bridge_@COORDINATOR_IEEE@"
+      },
+      "enabled_by_default": true,
+      "entity_category": "diagnostic",
+      "name": "Valve motor running voltage",
+      "object_id": "@OBJECT_ID@_valve_motor_running_voltage",
+      "origin": {
+        "name": "Zigbee2MQTT",
+        "sw": "2.14.3",
+        "url": "https://www.zigbee2mqtt.io"
+      },
+      "state_topic": "zigbee2mqtt/@FRIENDLY_NAME@",
+      "unique_id": "@IEEE@_valve_motor_running_voltage_zigbee2mqtt",
+      "unit_of_measurement": "mV",
+      "value_template": "{% if \"valve_motor_running_voltage\" in value_json %}{{ value_json[\"valve_motor_running_voltage\"] }}{% endif %}"
+    },
+    "sensor/@IEEE@/valve_opening_limit_voltage/config": {
+      "availability": [
+        {
+          "topic": "zigbee2mqtt/bridge/state",
+          "value_template": "{{ value_json.state }}"
+        },
+        {
+          "topic": "zigbee2mqtt/@FRIENDLY_NAME@/availability",
+          "value_template": "{{ value_json.state }}"
+        }
+      ],
+      "availability_mode": "all",
+      "default_entity_id": "sensor.@OBJECT_ID@_valve_opening_limit_voltage",
+      "device": {
+        "identifiers": [
+          "zigbee2mqtt_@IEEE@"
+        ],
+        "manufacturer": "SONOFF",
+        "model": "Zigbee thermostatic radiator valve",
+        "model_id": "TRV-ZBT",
+        "name": "@FRIENDLY_NAME@",
+        "sw_version": "Zigbee2MQTT 2.14.3",
+        "via_device": "zigbee2mqtt_bridge_@COORDINATOR_IEEE@"
+      },
+      "enabled_by_default": true,
+      "entity_category": "diagnostic",
+      "name": "Valve opening limit voltage",
+      "object_id": "@OBJECT_ID@_valve_opening_limit_voltage",
+      "origin": {
+        "name": "Zigbee2MQTT",
+        "sw": "2.14.3",
+        "url": "https://www.zigbee2mqtt.io"
+      },
+      "state_topic": "zigbee2mqtt/@FRIENDLY_NAME@",
+      "unique_id": "@IEEE@_valve_opening_limit_voltage_zigbee2mqtt",
+      "unit_of_measurement": "mV",
+      "value_template": "{% if \"valve_opening_limit_voltage\" in value_json %}{{ value_json[\"valve_opening_limit_voltage\"] }}{% endif %}"
+    },
+    "switch/@IEEE@/switch_child_lock/config": {
+      "availability": [
+        {
+          "topic": "zigbee2mqtt/bridge/state",
+          "value_template": "{{ value_json.state }}"
+        },
+        {
+          "topic": "zigbee2mqtt/@FRIENDLY_NAME@/availability",
+          "value_template": "{{ value_json.state }}"
+        }
+      ],
+      "availability_mode": "all",
+      "command_topic": "zigbee2mqtt/@FRIENDLY_NAME@/set/child_lock",
+      "default_entity_id": "switch.@OBJECT_ID@_child_lock",
+      "device": {
+        "identifiers": [
+          "zigbee2mqtt_@IEEE@"
+        ],
+        "manufacturer": "SONOFF",
+        "model": "Zigbee thermostatic radiator valve",
+        "model_id": "TRV-ZBT",
+        "name": "@FRIENDLY_NAME@",
+        "sw_version": "Zigbee2MQTT 2.14.3",
+        "via_device": "zigbee2mqtt_bridge_@COORDINATOR_IEEE@"
+      },
+      "entity_category": "config",
+      "icon": "mdi:account-lock",
+      "name": "Child lock",
+      "object_id": "@OBJECT_ID@_child_lock",
+      "origin": {
+        "name": "Zigbee2MQTT",
+        "sw": "2.14.3",
+        "url": "https://www.zigbee2mqtt.io"
+      },
+      "payload_off": "UNLOCK",
+      "payload_on": "LOCK",
+      "state_topic": "zigbee2mqtt/@FRIENDLY_NAME@",
+      "unique_id": "@IEEE@_switch_child_lock_zigbee2mqtt",
+      "value_template": "{% if \"child_lock\" in value_json %}{{ value_json[\"child_lock\"] }}{% endif %}"
+    },
+    "switch/@IEEE@/switch_open_window/config": {
+      "availability": [
+        {
+          "topic": "zigbee2mqtt/bridge/state",
+          "value_template": "{{ value_json.state }}"
+        },
+        {
+          "topic": "zigbee2mqtt/@FRIENDLY_NAME@/availability",
+          "value_template": "{{ value_json.state }}"
+        }
+      ],
+      "availability_mode": "all",
+      "command_topic": "zigbee2mqtt/@FRIENDLY_NAME@/set/open_window",
+      "default_entity_id": "switch.@OBJECT_ID@_open_window",
+      "device": {
+        "identifiers": [
+          "zigbee2mqtt_@IEEE@"
+        ],
+        "manufacturer": "SONOFF",
+        "model": "Zigbee thermostatic radiator valve",
+        "model_id": "TRV-ZBT",
+        "name": "@FRIENDLY_NAME@",
+        "sw_version": "Zigbee2MQTT 2.14.3",
+        "via_device": "zigbee2mqtt_bridge_@COORDINATOR_IEEE@"
+      },
+      "entity_category": "config",
+      "name": "Open window",
+      "object_id": "@OBJECT_ID@_open_window",
+      "origin": {
+        "name": "Zigbee2MQTT",
+        "sw": "2.14.3",
+        "url": "https://www.zigbee2mqtt.io"
+      },
+      "payload_off": "OFF",
+      "payload_on": "ON",
+      "state_topic": "zigbee2mqtt/@FRIENDLY_NAME@",
+      "unique_id": "@IEEE@_switch_open_window_zigbee2mqtt",
+      "value_template": "{% if \"open_window\" in value_json %}{{ value_json[\"open_window\"] }}{% endif %}"
+    },
+    "switch/@IEEE@/switch_remote_temperature_linkage/config": {
+      "availability": [
+        {
+          "topic": "zigbee2mqtt/bridge/state",
+          "value_template": "{{ value_json.state }}"
+        },
+        {
+          "topic": "zigbee2mqtt/@FRIENDLY_NAME@/availability",
+          "value_template": "{{ value_json.state }}"
+        }
+      ],
+      "availability_mode": "all",
+      "command_topic": "zigbee2mqtt/@FRIENDLY_NAME@/set/remote_temperature_linkage",
+      "default_entity_id": "switch.@OBJECT_ID@_remote_temperature_linkage",
+      "device": {
+        "identifiers": [
+          "zigbee2mqtt_@IEEE@"
+        ],
+        "manufacturer": "SONOFF",
+        "model": "Zigbee thermostatic radiator valve",
+        "model_id": "TRV-ZBT",
+        "name": "@FRIENDLY_NAME@",
+        "sw_version": "Zigbee2MQTT 2.14.3",
+        "via_device": "zigbee2mqtt_bridge_@COORDINATOR_IEEE@"
+      },
+      "entity_category": "config",
+      "name": "Thermostat Linkage",
+      "object_id": "@OBJECT_ID@_remote_temperature_linkage",
+      "origin": {
+        "name": "Zigbee2MQTT",
+        "sw": "2.14.3",
+        "url": "https://www.zigbee2mqtt.io"
+      },
+      "payload_off": "OFF",
+      "payload_on": "ON",
+      "state_topic": "zigbee2mqtt/@FRIENDLY_NAME@",
+      "unique_id": "@IEEE@_switch_remote_temperature_linkage_zigbee2mqtt",
+      "value_template": "{% if \"remote_temperature_linkage\" in value_json %}{{ value_json[\"remote_temperature_linkage\"] }}{% endif %}"
+    },
+    "switch/@IEEE@/switch_smart_temperature_control/config": {
+      "availability": [
+        {
+          "topic": "zigbee2mqtt/bridge/state",
+          "value_template": "{{ value_json.state }}"
+        },
+        {
+          "topic": "zigbee2mqtt/@FRIENDLY_NAME@/availability",
+          "value_template": "{{ value_json.state }}"
+        }
+      ],
+      "availability_mode": "all",
+      "command_topic": "zigbee2mqtt/@FRIENDLY_NAME@/set/smart_temperature_control",
+      "default_entity_id": "switch.@OBJECT_ID@_smart_temperature_control",
+      "device": {
+        "identifiers": [
+          "zigbee2mqtt_@IEEE@"
+        ],
+        "manufacturer": "SONOFF",
+        "model": "Zigbee thermostatic radiator valve",
+        "model_id": "TRV-ZBT",
+        "name": "@FRIENDLY_NAME@",
+        "sw_version": "Zigbee2MQTT 2.14.3",
+        "via_device": "zigbee2mqtt_bridge_@COORDINATOR_IEEE@"
+      },
+      "entity_category": "config",
+      "name": "Smart temperature control",
+      "object_id": "@OBJECT_ID@_smart_temperature_control",
+      "origin": {
+        "name": "Zigbee2MQTT",
+        "sw": "2.14.3",
+        "url": "https://www.zigbee2mqtt.io"
+      },
+      "payload_off": "OFF",
+      "payload_on": "ON",
+      "state_topic": "zigbee2mqtt/@FRIENDLY_NAME@",
+      "unique_id": "@IEEE@_switch_smart_temperature_control_zigbee2mqtt",
+      "value_template": "{% if \"smart_temperature_control\" in value_json %}{{ value_json[\"smart_temperature_control\"] }}{% endif %}"
+    },
+    "text/@IEEE@/weekly_schedule_friday/config": {
+      "availability": [
+        {
+          "topic": "zigbee2mqtt/bridge/state",
+          "value_template": "{{ value_json.state }}"
+        },
+        {
+          "topic": "zigbee2mqtt/@FRIENDLY_NAME@/availability",
+          "value_template": "{{ value_json.state }}"
+        }
+      ],
+      "availability_mode": "all",
+      "command_topic": "zigbee2mqtt/@FRIENDLY_NAME@/set/weekly_schedule_friday",
+      "default_entity_id": "text.@OBJECT_ID@_weekly_schedule_friday",
+      "device": {
+        "identifiers": [
+          "zigbee2mqtt_@IEEE@"
+        ],
+        "manufacturer": "SONOFF",
+        "model": "Zigbee thermostatic radiator valve",
+        "model_id": "TRV-ZBT",
+        "name": "@FRIENDLY_NAME@",
+        "sw_version": "Zigbee2MQTT 2.14.3",
+        "via_device": "zigbee2mqtt_bridge_@COORDINATOR_IEEE@"
+      },
+      "entity_category": "config",
+      "name": "Weekly schedule friday",
+      "object_id": "@OBJECT_ID@_weekly_schedule_friday",
+      "origin": {
+        "name": "Zigbee2MQTT",
+        "sw": "2.14.3",
+        "url": "https://www.zigbee2mqtt.io"
+      },
+      "state_topic": "zigbee2mqtt/@FRIENDLY_NAME@",
+      "unique_id": "@IEEE@_weekly_schedule_friday_zigbee2mqtt",
+      "value_template": "{% if \"weekly_schedule_friday\" in value_json %}{{ value_json[\"weekly_schedule_friday\"] }}{% endif %}"
+    },
+    "text/@IEEE@/weekly_schedule_monday/config": {
+      "availability": [
+        {
+          "topic": "zigbee2mqtt/bridge/state",
+          "value_template": "{{ value_json.state }}"
+        },
+        {
+          "topic": "zigbee2mqtt/@FRIENDLY_NAME@/availability",
+          "value_template": "{{ value_json.state }}"
+        }
+      ],
+      "availability_mode": "all",
+      "command_topic": "zigbee2mqtt/@FRIENDLY_NAME@/set/weekly_schedule_monday",
+      "default_entity_id": "text.@OBJECT_ID@_weekly_schedule_monday",
+      "device": {
+        "identifiers": [
+          "zigbee2mqtt_@IEEE@"
+        ],
+        "manufacturer": "SONOFF",
+        "model": "Zigbee thermostatic radiator valve",
+        "model_id": "TRV-ZBT",
+        "name": "@FRIENDLY_NAME@",
+        "sw_version": "Zigbee2MQTT 2.14.3",
+        "via_device": "zigbee2mqtt_bridge_@COORDINATOR_IEEE@"
+      },
+      "entity_category": "config",
+      "name": "Weekly schedule monday",
+      "object_id": "@OBJECT_ID@_weekly_schedule_monday",
+      "origin": {
+        "name": "Zigbee2MQTT",
+        "sw": "2.14.3",
+        "url": "https://www.zigbee2mqtt.io"
+      },
+      "state_topic": "zigbee2mqtt/@FRIENDLY_NAME@",
+      "unique_id": "@IEEE@_weekly_schedule_monday_zigbee2mqtt",
+      "value_template": "{% if \"weekly_schedule_monday\" in value_json %}{{ value_json[\"weekly_schedule_monday\"] }}{% endif %}"
+    },
+    "text/@IEEE@/weekly_schedule_saturday/config": {
+      "availability": [
+        {
+          "topic": "zigbee2mqtt/bridge/state",
+          "value_template": "{{ value_json.state }}"
+        },
+        {
+          "topic": "zigbee2mqtt/@FRIENDLY_NAME@/availability",
+          "value_template": "{{ value_json.state }}"
+        }
+      ],
+      "availability_mode": "all",
+      "command_topic": "zigbee2mqtt/@FRIENDLY_NAME@/set/weekly_schedule_saturday",
+      "default_entity_id": "text.@OBJECT_ID@_weekly_schedule_saturday",
+      "device": {
+        "identifiers": [
+          "zigbee2mqtt_@IEEE@"
+        ],
+        "manufacturer": "SONOFF",
+        "model": "Zigbee thermostatic radiator valve",
+        "model_id": "TRV-ZBT",
+        "name": "@FRIENDLY_NAME@",
+        "sw_version": "Zigbee2MQTT 2.14.3",
+        "via_device": "zigbee2mqtt_bridge_@COORDINATOR_IEEE@"
+      },
+      "entity_category": "config",
+      "name": "Weekly schedule saturday",
+      "object_id": "@OBJECT_ID@_weekly_schedule_saturday",
+      "origin": {
+        "name": "Zigbee2MQTT",
+        "sw": "2.14.3",
+        "url": "https://www.zigbee2mqtt.io"
+      },
+      "state_topic": "zigbee2mqtt/@FRIENDLY_NAME@",
+      "unique_id": "@IEEE@_weekly_schedule_saturday_zigbee2mqtt",
+      "value_template": "{% if \"weekly_schedule_saturday\" in value_json %}{{ value_json[\"weekly_schedule_saturday\"] }}{% endif %}"
+    },
+    "text/@IEEE@/weekly_schedule_sunday/config": {
+      "availability": [
+        {
+          "topic": "zigbee2mqtt/bridge/state",
+          "value_template": "{{ value_json.state }}"
+        },
+        {
+          "topic": "zigbee2mqtt/@FRIENDLY_NAME@/availability",
+          "value_template": "{{ value_json.state }}"
+        }
+      ],
+      "availability_mode": "all",
+      "command_topic": "zigbee2mqtt/@FRIENDLY_NAME@/set/weekly_schedule_sunday",
+      "default_entity_id": "text.@OBJECT_ID@_weekly_schedule_sunday",
+      "device": {
+        "identifiers": [
+          "zigbee2mqtt_@IEEE@"
+        ],
+        "manufacturer": "SONOFF",
+        "model": "Zigbee thermostatic radiator valve",
+        "model_id": "TRV-ZBT",
+        "name": "@FRIENDLY_NAME@",
+        "sw_version": "Zigbee2MQTT 2.14.3",
+        "via_device": "zigbee2mqtt_bridge_@COORDINATOR_IEEE@"
+      },
+      "entity_category": "config",
+      "name": "Weekly schedule sunday",
+      "object_id": "@OBJECT_ID@_weekly_schedule_sunday",
+      "origin": {
+        "name": "Zigbee2MQTT",
+        "sw": "2.14.3",
+        "url": "https://www.zigbee2mqtt.io"
+      },
+      "state_topic": "zigbee2mqtt/@FRIENDLY_NAME@",
+      "unique_id": "@IEEE@_weekly_schedule_sunday_zigbee2mqtt",
+      "value_template": "{% if \"weekly_schedule_sunday\" in value_json %}{{ value_json[\"weekly_schedule_sunday\"] }}{% endif %}"
+    },
+    "text/@IEEE@/weekly_schedule_thursday/config": {
+      "availability": [
+        {
+          "topic": "zigbee2mqtt/bridge/state",
+          "value_template": "{{ value_json.state }}"
+        },
+        {
+          "topic": "zigbee2mqtt/@FRIENDLY_NAME@/availability",
+          "value_template": "{{ value_json.state }}"
+        }
+      ],
+      "availability_mode": "all",
+      "command_topic": "zigbee2mqtt/@FRIENDLY_NAME@/set/weekly_schedule_thursday",
+      "default_entity_id": "text.@OBJECT_ID@_weekly_schedule_thursday",
+      "device": {
+        "identifiers": [
+          "zigbee2mqtt_@IEEE@"
+        ],
+        "manufacturer": "SONOFF",
+        "model": "Zigbee thermostatic radiator valve",
+        "model_id": "TRV-ZBT",
+        "name": "@FRIENDLY_NAME@",
+        "sw_version": "Zigbee2MQTT 2.14.3",
+        "via_device": "zigbee2mqtt_bridge_@COORDINATOR_IEEE@"
+      },
+      "entity_category": "config",
+      "name": "Weekly schedule thursday",
+      "object_id": "@OBJECT_ID@_weekly_schedule_thursday",
+      "origin": {
+        "name": "Zigbee2MQTT",
+        "sw": "2.14.3",
+        "url": "https://www.zigbee2mqtt.io"
+      },
+      "state_topic": "zigbee2mqtt/@FRIENDLY_NAME@",
+      "unique_id": "@IEEE@_weekly_schedule_thursday_zigbee2mqtt",
+      "value_template": "{% if \"weekly_schedule_thursday\" in value_json %}{{ value_json[\"weekly_schedule_thursday\"] }}{% endif %}"
+    },
+    "text/@IEEE@/weekly_schedule_tuesday/config": {
+      "availability": [
+        {
+          "topic": "zigbee2mqtt/bridge/state",
+          "value_template": "{{ value_json.state }}"
+        },
+        {
+          "topic": "zigbee2mqtt/@FRIENDLY_NAME@/availability",
+          "value_template": "{{ value_json.state }}"
+        }
+      ],
+      "availability_mode": "all",
+      "command_topic": "zigbee2mqtt/@FRIENDLY_NAME@/set/weekly_schedule_tuesday",
+      "default_entity_id": "text.@OBJECT_ID@_weekly_schedule_tuesday",
+      "device": {
+        "identifiers": [
+          "zigbee2mqtt_@IEEE@"
+        ],
+        "manufacturer": "SONOFF",
+        "model": "Zigbee thermostatic radiator valve",
+        "model_id": "TRV-ZBT",
+        "name": "@FRIENDLY_NAME@",
+        "sw_version": "Zigbee2MQTT 2.14.3",
+        "via_device": "zigbee2mqtt_bridge_@COORDINATOR_IEEE@"
+      },
+      "entity_category": "config",
+      "name": "Weekly schedule tuesday",
+      "object_id": "@OBJECT_ID@_weekly_schedule_tuesday",
+      "origin": {
+        "name": "Zigbee2MQTT",
+        "sw": "2.14.3",
+        "url": "https://www.zigbee2mqtt.io"
+      },
+      "state_topic": "zigbee2mqtt/@FRIENDLY_NAME@",
+      "unique_id": "@IEEE@_weekly_schedule_tuesday_zigbee2mqtt",
+      "value_template": "{% if \"weekly_schedule_tuesday\" in value_json %}{{ value_json[\"weekly_schedule_tuesday\"] }}{% endif %}"
+    },
+    "text/@IEEE@/weekly_schedule_wednesday/config": {
+      "availability": [
+        {
+          "topic": "zigbee2mqtt/bridge/state",
+          "value_template": "{{ value_json.state }}"
+        },
+        {
+          "topic": "zigbee2mqtt/@FRIENDLY_NAME@/availability",
+          "value_template": "{{ value_json.state }}"
+        }
+      ],
+      "availability_mode": "all",
+      "command_topic": "zigbee2mqtt/@FRIENDLY_NAME@/set/weekly_schedule_wednesday",
+      "default_entity_id": "text.@OBJECT_ID@_weekly_schedule_wednesday",
+      "device": {
+        "identifiers": [
+          "zigbee2mqtt_@IEEE@"
+        ],
+        "manufacturer": "SONOFF",
+        "model": "Zigbee thermostatic radiator valve",
+        "model_id": "TRV-ZBT",
+        "name": "@FRIENDLY_NAME@",
+        "sw_version": "Zigbee2MQTT 2.14.3",
+        "via_device": "zigbee2mqtt_bridge_@COORDINATOR_IEEE@"
+      },
+      "entity_category": "config",
+      "name": "Weekly schedule wednesday",
+      "object_id": "@OBJECT_ID@_weekly_schedule_wednesday",
+      "origin": {
+        "name": "Zigbee2MQTT",
+        "sw": "2.14.3",
+        "url": "https://www.zigbee2mqtt.io"
+      },
+      "state_topic": "zigbee2mqtt/@FRIENDLY_NAME@",
+      "unique_id": "@IEEE@_weekly_schedule_wednesday_zigbee2mqtt",
+      "value_template": "{% if \"weekly_schedule_wednesday\" in value_json %}{{ value_json[\"weekly_schedule_wednesday\"] }}{% endif %}"
+    },
+    "update/@IEEE@/update/config": {
+      "availability": [
+        {
+          "topic": "zigbee2mqtt/bridge/state",
+          "value_template": "{{ value_json.state }}"
+        },
+        {
+          "topic": "zigbee2mqtt/@FRIENDLY_NAME@/availability",
+          "value_template": "{{ value_json.state }}"
+        }
+      ],
+      "availability_mode": "all",
+      "command_topic": "zigbee2mqtt/bridge/request/device/ota_update/update",
+      "default_entity_id": "update.@OBJECT_ID@",
+      "device": {
+        "identifiers": [
+          "zigbee2mqtt_@IEEE@"
+        ],
+        "manufacturer": "SONOFF",
+        "model": "Zigbee thermostatic radiator valve",
+        "model_id": "TRV-ZBT",
+        "name": "@FRIENDLY_NAME@",
+        "sw_version": "Zigbee2MQTT 2.14.3",
+        "via_device": "zigbee2mqtt_bridge_@COORDINATOR_IEEE@"
+      },
+      "device_class": "firmware",
+      "entity_category": "config",
+      "entity_picture": "https://github.com/Koenkk/zigbee2mqtt/raw/master/images/logo.png",
+      "name": null,
+      "object_id": "@OBJECT_ID@",
+      "origin": {
+        "name": "Zigbee2MQTT",
+        "sw": "2.14.3",
+        "url": "https://www.zigbee2mqtt.io"
+      },
+      "payload_install": "{\"id\": \"@IEEE@\"}",
+      "state_topic": "zigbee2mqtt/@FRIENDLY_NAME@",
+      "unique_id": "@IEEE@_update_zigbee2mqtt",
+      "value_template": "{% if \"update\" in value_json %}{\"latest_version\":\"{{ value_json['update']['latest_version'] }}\",\"installed_version\":\"{{ value_json['update']['installed_version'] }}\",\"update_percentage\":{{ value_json['update'].get('progress', 'null') }},\"in_progress\":{{ (value_json['update'].get('state') == 'updating')|lower }}}{% endif %}"
+    }
+  },
+  "model": "TRV-ZBT",
+  "source": "generated: cave_sim.zigbee.models (zigbee-herdsman-converters v26.125.0) through cave_sim.zigbee.discovery (Zigbee2MQTT 2.14.3 lib/extension/homeassistant.ts)",
+  "state": {
+    "battery": 100,
+    "child_lock": "UNLOCK",
+    "closing_steps": 1210,
+    "external_temperature_input": 0,
+    "fault_status": "",
+    "frost_protection_temperature": 7,
+    "heat_percentage_hour": 0,
+    "heating_valve_position": 100,
+    "idle_steps": 1270,
+    "idle_valve_position": 0,
+    "local_temperature_calibration": 0,
+    "low_battery_valve_state": "close",
+    "open_window": "ON",
+    "open_window_detected": false,
+    "remote_temperature_linkage": "OFF",
+    "schedule_active_group": "1",
+    "screen_direction": "0",
+    "smart_temperature_control": "ON",
+    "system_mode": "heat",
+    "temperature_accuracy": -1,
+    "temperature_sensor_select": "local_temperature",
+    "temporary_mode_mode": "disabled",
+    "valve_closing_limit_voltage": 2200,
+    "valve_motor_running_voltage": 2000,
+    "valve_opening_limit_voltage": 2200
+  }
+}
