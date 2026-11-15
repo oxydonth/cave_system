@@ -1,0 +1,29 @@
+version: 1
+presence:
+  - person.demo
+away_delay: "00:00:10"
+timing:
+  confirm_timeout: 5
+rooms:
+  - id: living_room
+    name: Wohnzimmer
+    trvs:
+      - entity: climate.wohnzimmer_heizung
+        external_temperature: number.wohnzimmer_heizung_external_temperature_input
+    temperature_sensor: sensor.wohnzimmer_temperature
+    humidity_sensor: sensor.wohnzimmer_humidity
+    windows:
+      - binary_sensor.wohnzimmer_fenster_contact
+    schedule: schedule.living_room_heating
+  - id: bedroom
+    name: Schlafzimmer
+    trvs:
+      - entity: climate.schlafzimmer_heizung
+    temperature_sensor: sensor.schlafzimmer_temperature
+    windows:
+      - binary_sensor.schlafzimmer_fenster_contact
+    schedule: schedule.bedroom_heating
+  - id: bathroom
+    name: Bad
+    trvs:
+      - entity: climate.bad_heizung
