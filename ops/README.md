@@ -3,6 +3,8 @@
 The command-line tool that operates the stack (concept section 4.4). Python, **standard library
 only**, and it must run on Python 3.11 or newer, because it runs on the server's own Python. The
 entry point is `./cave` in the repository root; it stops with a clear message on an older Python.
+Run as root (`update`, `backup`, `restore`), it writes no bytecode, so that no root-owned
+`__pycache__` appears in the service user's checkout.
 
 Ruff and mypy check `ops/` and `cave` against Python 3.11 (`ops/ruff.toml`, `make typecheck`), and
 the tests in `tests/ops/` run on 3.11 (`make test-py311`) and on 3.14 with the rest of the suite.
@@ -105,8 +107,10 @@ home's state.
 ## Update, backup and restore
 
 `update`, `status`, `backup` and `restore` share helpers that only they use, in
-`commands/_server.py` (which user may run them, Git as the owner of the checkout, copying files
-with their owners, checked archive extraction), `commands/_update_state.py` (the update record
+`commands/_server.py` (which user may run them, Git as the owner of the checkout,
+`check_out_exactly` after an interrupted checkout, copying files with their owners, and
+`extract`, which checks an archive as a whole and never writes outside its target; use it for
+every archive that root unpacks), `commands/_update_state.py` (the update record
 and the snapshots), `commands/_archives.py` (backup archives, SQLite's online backup) and
 `commands/_releases.py` (release tags; also run by the pipeline's release job). Their working
 files live in `CAVE_DATA/.cave/ops/`, which neither a snapshot nor a backup contains. Every other

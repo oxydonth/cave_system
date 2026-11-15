@@ -2,7 +2,8 @@
 [Unit]
 Description=cave_system: archive the state and .env (cave backup)
 Documentation=https://github.com/oxydonth/cave_system/blob/main/docs/operations.md
-After=docker.service
+# Archive names carry the time; a Raspberry Pi has no clock before its first sync.
+After=docker.service time-sync.target
 # Nothing to do before `./cave init` has run.
 ConditionPathExists=/opt/cave/.env
 
@@ -11,5 +12,8 @@ Type=oneshot
 # Root: only root can read every file the containers own in the state directory.
 User=root
 WorkingDirectory=/opt/cave
+# Root must not leave bytecode in the checkout: __pycache__ owned by root there would stop
+# the service user's Git from removing a module directory in a later release.
+Environment=PYTHONDONTWRITEBYTECODE=1
 ExecStart=/opt/cave/cave backup
 TimeoutStartSec=2h

@@ -77,9 +77,12 @@ class FakeStack:
 
     ``running`` is the release whose containers run, or ``None``. Make things fail with
     ``unhealthy`` (releases that start but never become healthy), ``fail`` (operation to exit
-    status: ``down``, ``up``, ``pull``, ``check_config``, ``validate``), ``fail_up`` (releases
-    whose ``up`` fails), and run code at an operation with ``before``/``after`` (for example a
-    ``SimulatedKill``). ``ops`` lists ``(operation, release)`` in order.
+    status: ``down``, ``up``, ``pull``, ``check_config``, ``validate``, and ``config`` for the
+    check of a release's Compose files), ``fail_times`` (operation to a number of failures
+    before it works), ``fail_up`` (releases whose ``up`` fails), ``starting`` (releases that
+    report "starting" for a number of polls), and run code at an operation with
+    ``before``/``after`` (for example a ``SimulatedKill``). ``ops`` lists
+    ``(operation, release)`` in order.
     """
 
     data: Path
@@ -88,6 +91,12 @@ class FakeStack:
     unhealthy: set[str] = field(default_factory=set)
     fail: dict[str, int] = field(default_factory=dict)
     fail_up: set[str] = field(default_factory=set)
+    fail_times: dict[str, int] = field(default_factory=dict)
+    """Operation -> how many of its next calls fail (then it works again)."""
+    starting: dict[str, int] = field(default_factory=dict)
+    """Release -> for how many ``ps`` polls after its start it reports "starting", as Home
+    Assistant does during its start period."""
+    _polls_left: int = 0
     before: dict[str, Callable[[str | None], None]] = field(default_factory=dict)
     after: dict[str, Callable[[str | None], None]] = field(default_factory=dict)
     validator_errors: str = (
@@ -95,9 +104,12 @@ class FakeStack:
         "Room 'Bad room': the field 'thermostats' must list at least one thermostat.\n"
     )
     ops: list[tuple[str, str | None]] = field(default_factory=list)
+    configured: list[str] = field(default_factory=list)
+    """The ``COMPOSE_FILE`` of every ``config`` check of a release."""
 
     def start(self, release: str) -> None:
         self.running = release
+        self._polls_left = self.starting.get(release, 0)
         self.ha.down = False
         ha = self.data / "homeassistant"
         (ha / f"started-{release}").write_text("started\n")
@@ -117,16 +129,25 @@ class FakeStack:
             assert cwd is not None
             release_file = cwd / "RELEASE"
         else:
-            release_file = Path(env["COMPOSE_FILE"]).parent / "RELEASE"
+            release_file = Path(env["COMPOSE_FILE"].split(os.pathsep)[0]).parent / "RELEASE"
         release = release_file.read_text().strip() if release_file.is_file() else None
         command = rest[0]
 
+        if command == "config" and project != "cave":
+            # The update's check of the release's Compose files (not recorded in ``ops``).
+            self.configured.append(env["COMPOSE_FILE"])
+            if self.fail.get("config"):
+                return Result(args, self.fail["config"], "", "service zigbee2mqtt: invalid\n")
+            return Result(args, 0, "")
         if command == "config":
             return Result(args, 0, "\n".join(SERVICES) + "\n")
         if command == "ps":
             if self.running is None:
                 return Result(args, 0, "")
             health = "unhealthy" if self.running in self.unhealthy else "healthy"
+            if self._polls_left > 0:
+                self._polls_left -= 1
+                health = "starting"
             lines = [
                 json.dumps({"Service": s, "State": "running", "Health": health}) for s in SERVICES
             ]
@@ -151,6 +172,9 @@ class FakeStack:
             self.before[op](release)
         self.ops.append((op, release))
         status = self.fail.get(op, 0)
+        if self.fail_times.get(op, 0) > 0:
+            self.fail_times[op] -= 1
+            status = 1
         if op == "up" and release in self.fail_up:
             status = 1
         if status:

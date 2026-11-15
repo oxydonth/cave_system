@@ -60,6 +60,8 @@ def test_services_run_real_commands_as_root_once_initialised(repo_root, name, co
     assert service["Service"]["User"] == "root"
     assert service["Service"]["WorkingDirectory"] == CHECKOUT
     assert service["Unit"]["ConditionPathExists"] == f"{CHECKOUT}/.env"
+    # Root writes no bytecode into the service user's checkout.
+    assert service["Service"]["Environment"] == "PYTHONDONTWRITEBYTECODE=1"
 
 
 def test_the_update_service_recovers_however_it_ends(repo_root):

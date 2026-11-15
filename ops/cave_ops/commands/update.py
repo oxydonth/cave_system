@@ -609,6 +609,14 @@ class _Update:
             f"An update from {switch.from_label} to {switch.to_release}, started "
             f"{switch.started}, was interrupted ({switch.phase}). Finishing it first."
         )
+        last = self.record.last_result or {}
+        if last.get("outcome") == "broken" and last.get("release") == switch.to_release:
+            # Not an interruption: the way back of an earlier run could not finish.
+            return (
+                self.restart_previous("an earlier attempt could not start the previous release")
+                if switch.phase == state.BEFORE_SWITCH
+                else self.roll_back("an earlier attempt could not finish the way back")
+            )
         if switch.phase == state.BEFORE_SWITCH:
             return self.restart_previous(
                 "it was interrupted (killed or a power cut) before the snapshot was complete"

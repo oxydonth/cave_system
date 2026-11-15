@@ -10,6 +10,9 @@ ConditionPathExists=/opt/cave/.env
 Type=oneshot
 User=root
 WorkingDirectory=/opt/cave
+# Root must not leave bytecode in the checkout: __pycache__ owned by root there would stop
+# the service user's Git from removing a module directory in a later release.
+Environment=PYTHONDONTWRITEBYTECODE=1
 # Does nothing unless an update was interrupted; then it starts the previous release again or
 # rolls the switch back. It waits for a backup that holds the lock.
 ExecStart=/opt/cave/cave update --recover
