@@ -31,23 +31,32 @@ Check the last column before you order.
 | **Sonoff TRV Gen2** (TRV-ZBT) | Radiator thermostat, the main pick. Regulates on the room sensor, stores three weekly plans on the device (the system does not use them). Sonoff states up to six months on two AA cells. | €31–35 | The valve: see "Will it fit your valve?" below. Buy one or two first. |
 | **Sonoff TRVZB** | Radiator thermostat, the fallback. Three years old, larger and louder than the Gen2, but well understood. Regulates on the room sensor. | €25–29 | The same. |
 | **Bosch Heizkörper-Thermostat II [+M]** (BTH-RA) | Radiator thermostat for a quiet room, typically a bedroom. Regulates on the room sensor. | about €63 | It ships in Matter mode and must be switched to Zigbee on the device; you pair it with its install code. You do not need the Bosch controller. |
-| **FRITZ!Smart Thermo 302** (or the older 301) | Radiator thermostat that talks to your FRITZ!Box over DECT, with no Zigbee involved. For a room Zigbee does not reach, or if you would rather not run Zigbee. Regulates on its own sensor only. | €45–55 | Your FRITZ!Box must have a DECT base station (see its specification). A new setpoint reaches the valve after about three minutes, up to fifteen on the 301. Prefer the 302. |
+| **FRITZ!Smart Thermo 302** (or the older 301) | Radiator thermostat that talks to your FRITZ!Box over DECT, with no Zigbee involved. For a room Zigbee does not reach, or if you would rather not run Zigbee. Regulates on its own sensor only. | €45–55 | Your FRITZ!Box must have a DECT base station (AVM's product page says every FRITZ!Box except the 7312 and 7412) and FRITZ!OS 6.83 or later. A new setpoint reaches the valve after about three minutes, up to fifteen on the 301. Prefer the 302. |
 | **Sonoff SNZB-02P** | Room temperature and humidity. | €10–12 | Nothing special. |
 | **Sonoff SNZB-04P** | Window and door contact. | €10–12 | Nothing special. |
-| **SMLIGHT SLZB-06MG24** | Zigbee coordinator, connected by Ethernet (PoE capable). | €40–45 | You need an Ethernet socket or a PoE switch at the place where you mount it (see below). |
+| **SMLIGHT SLZB-06MG24** | Zigbee coordinator, connected by Ethernet (PoE capable). | €40–45 | You need an Ethernet socket, or a PoE switch (power and network through one cable), at the place where you mount it. |
 
 Why the Gen2 is the main pick: heise chose it as its pick for Home Assistant (4.5 of 5 points on 1 November 2026). It has PID regulation, an input for the external room temperature, and on-device weekly plans. It needs Zigbee2MQTT 2.12.1 or newer, which the version this project pins satisfies. The Bosch costs twice as much and is worth it where motor noise matters. The FRITZ!Smart Thermo 302 was rated "gut (1.9)" and price tip by Stiftung Warentest in 2023, under its earlier name FRITZ!DECT 302.
 
 ## Will it fit your valve?
 
-German radiator valves almost always have an M30 × 1.5 thread, and all the thermostats above screw straight onto it. How to check:
+German radiator valves almost always have an M30 × 1.5 thread, and every thermostat above screws straight onto it, with one exception (see step 3). How to check:
 
 1. Take off the old thermostat head.
-2. Look at the valve body. A thread of 30 mm across the crests with about 6 to 7 grooves in 10 mm is M30 × 1.5: it fits directly.
-3. A smooth ring with notches and no thread is a Danfoss clamp valve. Look for the marking RA, RAV or RAVL just below the head, and measure the ring: about 23 mm is RA, 25.5 to 26 mm is RAVL, 34 mm is RAV. These need an adapter.
-4. Other threads (M28, M30 × 1.0, M32, M40) and Vaillant valves are not covered by the thermostats' adapters. Look up your valve before buying.
+2. Look at the valve body. A thread of 30 mm across the crests with 6 to 7 grooves in 10 mm is M30 × 1.5: it fits directly.
+3. A smooth ring with notches and no thread is a Danfoss clamp valve (RA, RAV or RAVL). Measure the outside of the ring: about 23 mm is RA, 25.5 to 26 mm is RAVL, 34 mm is RAV. These need an adapter. A valve marked Danfoss RTD has the M30 × 1.5 thread but still needs an adapter.
+4. Any other connection (M28, M30 × 1.0, Vaillant and others): look up your valve and the adapter before buying.
 
-The concept says the adapters for Danfoss RA, RAV and RAVL come in the box. A third-party article we checked says that is common but not universal, and that some models list fewer adapters: confirm the exact types on the shop page of the model you choose, and count one adapter per valve of that type.
+Which adapters come in the box differs by model:
+
+| Model | Adapters in the box |
+|---|---|
+| Sonoff TRV Gen2 | CAL, GIA, M28, RA, RAV, RAVL |
+| Sonoff TRVZB | Sonoff's compatibility guide names the same adapters (RA, RAV, RAVL, CAL, GIA, M28); it does not say which are in the box, so check the shop page |
+| Bosch Thermostat II [+M] | RA and RAVL only |
+| FRITZ!Smart Thermo 302 | RA only |
+
+If you have RAV valves, a Bosch does not fit out of the box. If you have RAV or RAVL valves, a FRITZ!Smart Thermo 302 does not fit out of the box. Buy the adapter separately, one per valve, and check that it is made for that thermostat. Sonoff Gen2 owners with M28 valves are covered by the included M28 adapter.
 
 ## The server
 
@@ -71,7 +80,7 @@ Either way the server runs Debian 13 (on the Pi, Raspberry Pi OS Lite), with Doc
 
 ## Where the coordinator goes
 
-The SLZB-06MG24 is a network coordinator: it reaches the server over Ethernet, not USB, so it does not have to sit next to the server or the router. Put it centrally in the flat, near the middle of the rooms with thermostats, away from the router and server, and give it an Ethernet cable or PoE. Zigbee2MQTT reaches it as `tcp://<address>:6638`; the address goes into the `.env` file.
+The coordinator is the radio that links the server to the Zigbee devices. The SLZB-06MG24 is a network coordinator: it reaches the server over Ethernet, not USB, so it does not have to sit next to the server or the router. Put it centrally in the flat, near the middle of the rooms with thermostats, away from the router and server, and give it an Ethernet cable or PoE. Zigbee2MQTT reaches it as `tcp://<address>:6638`; the address goes into the `.env` file. In the FRITZ!Box, give the coordinator and the server fixed addresses (in the FRITZ!Box under Home Network > Network, open the device and look for the option to always give it the same IPv4 address); if the coordinator's address changes, Zigbee stops.
 
 Battery-powered Zigbee devices do not relay for each other. If a room is out of reach after pairing:
 
@@ -93,7 +102,7 @@ Three rooms (living room, bedroom, bathroom) and four radiators (two in the livi
 | **Thermostats, sensors, coordinator** | | | **about €270** |
 | Mini PC, only if you have no server | 1 | about €200 | +€200 |
 
-At the lower end of the ranges the first block is about €235. In this flat, buy first: the coordinator, two Gen2 thermostats, one room sensor and one window contact for the living room. Buy the other two thermostats and the rest of the sensors after the trial. If the bedroom is quiet-critical, swap its Gen2 for a Bosch (+€28 or so per radiator). If the bathroom is out of Zigbee reach, a FRITZ!Smart Thermo 302 (€45–55) replaces its Gen2 and needs no room sensor.
+At the lower end of the ranges the first block is about €235. In this flat, buy first: the coordinator, two Gen2 thermostats, one room sensor and one window contact for the living room. Buy the other two thermostats and the rest of the sensors after the trial. If the bedroom is quiet-critical, swap its Gen2 for a Bosch (+€28 or so per radiator). If the bathroom is out of Zigbee reach, a FRITZ!Smart Thermo 302 (€45–55) replaces its Gen2. It cannot use a Zigbee room sensor, and a Zigbee sensor would not reach that room anyway, so the bathroom loses its humidity reading and the prompt to air the room.
 
 ## Considered and not recommended
 
@@ -113,7 +122,7 @@ You generally may replace the thermostat heads without asking the landlord, beca
 
 ## Sources
 
-Facts and prices above are from concept section 3 and its sources, checked on 15 November 2026, except where this guide says otherwise. The valve-recognition steps are from [smarthome-start.de, Heizkörperventil bestimmen](https://smarthome-start.de/2026/09/15/heizkoerperventil-bestimmen-adapter/).
+Facts and prices above are from concept section 3 and its sources, checked on 15 November 2026, except where this guide says otherwise. The valve-recognition steps are from [smarthome-start.de, Heizkörperventil bestimmen](https://smarthome-start.de/2026/09/15/heizkoerperventil-bestimmen-adapter/). The adapter table is from the vendor pages listed under "Adapters".
 
 Thermostats and tests
 - [heise: the ten best radiator thermostats, 7 Nov 2026](https://www.heise.de/bestenlisten/testsieger/top-10-das-beste-heizkoerperthermostat-im-test-testsieger-heizt-ohne-cloud/1e43f3r)
@@ -127,6 +136,12 @@ Thermostats and tests
 - [FRITZ!DECT 301/302 command delay, simon42 community](https://community.simon42.com/t/dect-301-bzw-302-die-verzoegerungszeit-umgehen/38542)
 - [Stiftung Warentest: smart radiator thermostats](https://www.test.de/Heizkoerperthermostat-Test-5115581-0/) and [ADAC summary](https://www.adac.de/rund-ums-haus/energie/versorgung/smarte-heizkoerperthermostate/)
 - [Aqara W600: valve opening and heating state not reported, Zigbee2MQTT issue 33428](https://github.com/Koenkk/zigbee2mqtt/issues/33428) and [external sensor does not control the valve, Aqara forum](https://forum.aqara.com/t/w600-external-sensor-does-not-control-valve-firmware-issue/341137)
+
+Adapters
+- [Sonoff TRV Gen2 at Expert4House](https://www.expert4house.com/en/smart-thermostats/thermostatic-valves/sonoff-trv-gen2-trv-zbt-smart-zigbee-thermostatic-radiator-valve): six adapters, RA, RAV, RAVL, GIA, CAL and M28 (the same list appears on heise Preisvergleich under "Besonderheiten")
+- [Sonoff TRV compatibility guide, December 2024](https://sonoff.tech/wp-content/uploads/2024/12/SONOFF_TRV-Compatibility-Guide-20241202.pdf)
+- [Bosch Heizkörper-Thermostat II, Lieferumfang](https://www.bosch-smarthome.com/de/de/produkte/heizung/heizkoerper-thermostat/): "1 Adapter Danfoss RA, 1 Adapter Danfoss RAVL"
+- [FRITZ!Smart Thermo 302, package contents and requirements](https://fritz.com/en/products/fritz-smart-thermo-302): "Adapter for Danfoss RA radiator valve"; "FRITZ!Box with DECT base station (except FRITZ!Box 7312/7412) and FRITZ!OS 6.83 or later"
 
 Sensors and coordinators
 - [Sonoff SNZB-02P](https://www.berrybase.de/en/sonoff-snzb-02p-temperature-humidity-sensor-temperatur-luftfeuchte-sensor-zigbee-rund) and [SNZB-04P](https://www.berrybase.de/en/sonoff-snzb-04p-door-window-sensor-tuer-und-fensterkontakt-zigbee) at BerryBase
