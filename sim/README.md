@@ -53,6 +53,10 @@ Zigbee2MQTT would, so Home Assistant's MQTT integration needs nothing special.
 outdoor_temperature: 5.0          # optional, °C
 fritzbox:
   report_delay: 0                 # seconds until a new setpoint is reported; 0 = at once
+  window_target: unchanged        # what <tsoll> shows during window open mode: unchanged or off
+  locked_command: refuse          # sethkrtsoll while locked: refuse (HTTP 400) or ignore (200, no effect)
+zigbee2mqtt:                      # optional
+  passive_timeout: 1500           # minutes until a silent battery device shows as unavailable
 rooms:
   - id: living_room               # used by the control API
     name: Wohnzimmer
@@ -130,7 +134,7 @@ Zigbee2MQTT's settings as the stand-in assumes them: base topic `zigbee2mqtt`, d
 
 | Path | Parameters | Does |
 |---|---|---|
-| `/login_sid.lua` (GET or POST) | `version=2`; `username` and `response`; `sid`; `logout` or `security:command/logout` | Session login with the PBKDF2 challenge-response (MD5 without `version=2`), session check, logout. Sessions last 20 minutes and are extended by use. |
+| `/login_sid.lua` (GET or POST) | `version=2`; `username` and `response`; `sid`; `logout` or `security:command/logout` | Session login with the PBKDF2 challenge-response (offered with or without `version=2`; there is no MD5 login), session check, logout. Sessions last 20 minutes and are extended by use. |
 | `/webservices/homeautoswitch.lua` (GET or POST) | `sid`, `switchcmd`, `ain`, `param`, `endtimestamp` | `getdevicelistinfos`, `getdeviceinfos`, `gettemplatelistinfos`, `gettriggerlistinfos`, `getswitchlist`, `getswitchpresent`, `getswitchname`, `gettemperature`, `gethkrtsoll`, `gethkrkomfort`, `gethkrabsenk`, `sethkrtsoll`, `sethkrboost`, `sethkrwindowopen`. Without a valid session: 403. Unknown command, AIN or value: 400. |
 
 ### Control API (port 8481)
@@ -140,11 +144,14 @@ Requests and responses are JSON. Unknown room or device: 404; invalid request: 4
 
 | Method and path | Body | Does |
 |---|---|---|
-| `GET /api/health` | | `{"status":"ok"}` |
+| `GET /api/health` | | `{"status":"ok"}` once the devices are published and while the broker connection stands; otherwise 503 with `{"status":"unavailable","reason":...}`. The container's health check uses it. |
 | `GET /api/state` | | Time, outdoor temperature, FRITZ!Box settings, rooms, every device's state |
-| `GET /api/devices/{id}` | | One device: its state as Zigbee2MQTT caches it (or the FRITZ! values), online, valve opening and the temperatures behind it |
+| `GET /api/devices/{id}` | | One device: `state` (the device's own registers, or the FRITZ! values), `zigbee2mqtt_state` (what Zigbee2MQTT has cached and publishes), `answering`, `available`, valve opening and the temperatures behind it; Sonoff `external_received`, Bosch `remote_received` |
 | `POST /api/devices/{id}/window` | `{"open": true}` | Open or close the window a contact sensor sits on |
-| `POST /api/devices/{id}/availability` | `{"online": false}` | Take a device off the network or bring it back |
+| `POST /api/devices/{id}/silent` | `{"silent": true}` | A Zigbee device stops answering (dead battery, out of range): it stays available until `passive_timeout` after its last message, commands to it fail without a trace, and what changes on it meanwhile is reported when it answers again (`"silent": false`) |
+| `POST /api/devices/{id}/availability` | `{"online": false}` | A shortcut: the device stops answering and shows as unavailable at once; `true` brings it back. FRITZ!: `present` 0 or 1 |
+| `POST /api/devices/{id}/mode` | `{"mode": "off"}` | Change a Zigbee thermostat's mode on the device: `system_mode` (`off`, `auto`, `heat`) for TRV-ZBT and TRVZB, `operating_mode` (`schedule`, `manual`, `pause`) for BTH-RA |
+| `POST /api/devices/{id}/window-detection` | `{"minutes": 15}` | A FRITZ! thermostat's own window detection starts its window open mode |
 | `POST /api/devices/{id}/dial` | `{"target": 22.5}`; FRITZ! also `"off"`, `"on"` | Turn a thermostat's dial |
 | `POST /api/devices/{id}/battery` | `{"level": 15, "low": true}` | Battery level, and the low flag where the model has one |
 | `POST /api/devices/{id}/fritz-lock` | `{"lock": true, "device_lock": false}` | A FRITZ! thermostat's key lock via UI/API and on the device |
@@ -152,7 +159,8 @@ Requests and responses are JSON. Unknown room or device: 404; invalid request: 4
 | `POST /api/rooms/{id}/temperature` | `{"temperature": 21.0}` | Set a room's temperature |
 | `POST /api/rooms/{id}/humidity` | `{"humidity": 70}` | Set a room's humidity |
 | `POST /api/outdoor` | `{"temperature": -5}` | Set the outdoor temperature |
-| `POST /api/fritzbox` | `{"report_delay": 180, "summer": true, "holiday": false, "txbusy_while_pending": false}` | Change the FRITZ!Box's behaviour; omitted fields stay |
+| `POST /api/fritzbox` | `{"report_delay": 180, "summer": true, "holiday": false, "txbusy_while_pending": false, "window_target": "off", "locked_command": "ignore"}` | Change the FRITZ!Box's behaviour; omitted fields stay |
+| `POST /api/zigbee2mqtt` | `{"passive_timeout": 5}` | Zigbee2MQTT's `availability.passive.timeout`, in minutes, counted from each device's last message |
 
 ## `cave_sim.testing`: a simulated home inside Home Assistant's tests
 
@@ -199,9 +207,12 @@ Zigbee2MQTT does 30 s after Home Assistant's birth message.
 
 Control functions of `SimulatedHome` (the control API calls the same ones):
 `set_window(device_id, is_open)`, `set_room_temperature(room_id, t)`, `set_room_humidity(room_id, h)`,
-`set_outdoor_temperature(t)`, `set_online(device_id, online)`, `turn_dial(device_id, target | "off" | "on")`,
-`set_battery(device_id, level, low=None)`, `configure_fritzbox(report_delay=, summer=, holiday=, txbusy_while_pending=)`,
-`set_fritz_lock(device_id, lock=, device_lock=)`, `set_returns_on_feed(device_id, returns)`;
+`set_outdoor_temperature(t)`, `set_silent(device_id, silent)`, `set_online(device_id, online)`,
+`configure_zigbee2mqtt(passive_timeout_minutes=)`, `turn_dial(device_id, target | "off" | "on")`,
+`set_device_mode(device_id, mode)`, `set_battery(device_id, level, low=None)`,
+`configure_fritzbox(report_delay=, summer=, holiday=, txbusy_while_pending=, window_target=, locked_command=)`,
+`detect_open_window(device_id, minutes)`, `set_fritz_lock(device_id, lock=, device_lock=)`,
+`set_returns_on_feed(device_id, returns)`;
 state: `device_state(device_id)`, `state()`, and the objects in `home.rooms`, `home.devices`,
 `home.zigbee.devices`, `home.fritzbox`.
 
@@ -234,7 +245,9 @@ cd sim && uv run python -m cave_sim.zigbee.record --host 127.0.0.1 --username "$
 Touch the device (or publish `{"state": ""}` to its `/get` topic) so that it reports within the
 time. The recording replaces `fixtures/<model>.json`, with a `source` starting `recorded:`; the
 simulator then publishes exactly the recorded messages, and the generator leaves the file alone.
-The behaviour classes still decide how the device reacts to commands.
+The model still decides how the device reacts to commands, so the two must agree: `--check`
+(which a test runs) compares every recorded fixture with its model (entities, modes, ranges, steps,
+options, payloads, command topics) and names what to change in `models.py`.
 
 ## Sources
 
@@ -255,13 +268,21 @@ General (Zigbee2MQTT):
 - Only the parts of Zigbee2MQTT that face Home Assistant exist: no Zigbee network, pairing, groups,
   scenes, OTA, `bridge/devices` or the web UI. `bridge/info` carries only what the bridge entities
   read; the bridge's `log_level` select, network map and coordinator version entities are left out.
-- A device going offline is shown at once; real Zigbee2MQTT declares a battery device unavailable
-  only after 25 hours of silence. While offline a device ignores commands, as Zigbee2MQTT's write
-  fails, and reports nothing; it keeps regulating with its last settings.
+- Availability follows Zigbee2MQTT's passive check (`availability.ts`): a silent device stays
+  available until `passive_timeout` (default 1500 minutes) after its last message. A device that
+  answers counts as heard all the time, since real devices check in regularly; the moment it falls
+  silent is its last message. Commands to a silent device fail without anything being published;
+  the device keeps regulating with its own settings, and its own registers (`state`) stay separate
+  from Zigbee2MQTT's cache (`zigbee2mqtt_state`), so a dial turned meanwhile is reported on return.
+  `availability` (`online: false`) is a shortcut that shows a device unavailable at once.
 - After a write the device's own report follows only where the stored value differs from the sent
-  one (a setpoint rounded to 0.5 K); a real device reports after every write. Values out of a
-  property's range are refused for every settable property; on real devices this depends on the
-  firmware.
+  one (a setpoint rounded to 0.5 K). A real device reports when the attribute changed by at least
+  its reportable change (0.1 °C for the setpoint), which makes no difference to Home Assistant.
+- A setpoint outside the device's range is refused, as the ZCL attribute's limits make the device
+  answer `INVALID_VALUE`. Other numeric values outside their range are published optimistically,
+  because Zigbee2MQTT's `numeric` converter does no range check, and ignored by the device, as
+  zigbee-herdsman-converters PR 8873 observed for the TRVZB's external temperature (assumed for
+  the others).
 - Attribute reporting follows each model's configured minimum, maximum and reportable change, checked
   on every 60 s step of the room model and after a change made through the control API. Battery
   levels change only through the control API.
@@ -282,7 +303,9 @@ TRV-ZBT and TRVZB:
   the last value is less than two hours old; then the device reports `remote_source_offline` and
   regulates on its own sensor; the next value brings it back (switchable with
   `POST /api/devices/{id}/sonoff`, since our own hardware has not confirmed it). While the external
-  value is in use it is reported as `local_temperature`.
+  value is in use it is reported as `local_temperature`. The two hours and the return are observed
+  for the TRVZB only (zigbee-herdsman-converters PR 8873); applying them to the TRV-ZBT is an
+  assumption.
 - Frost protection opens the valve below `frost_protection_temperature` while the mode is `off`.
 
 BTH-RA:
@@ -304,9 +327,17 @@ FRITZ!Smart Thermo 302 and the FRITZ!Box:
 - One delay (`report_delay`) governs both when the box reports a new setpoint and when the valve
   applies it; whether a real box reports before the valve has it is open (concept section 12). A
   dial turn is known to the box at once.
-- While summer mode, holiday mode or the key lock via UI/API is active, the box reports `lock` set
-  and answers `sethkrtsoll` with HTTP 400; Home Assistant refuses such commands itself before
-  sending them. What a real box answers is not documented.
+- While summer mode, holiday mode or the key lock via UI/API is active, the box reports `lock` set.
+  Home Assistant refuses commands itself, by the values it last polled, with a
+  `HomeAssistantError`. In the up to 30 s between the lock being set and the next poll the command
+  reaches the box. What a real box then answers is not documented, so `locked_command` chooses:
+  `refuse` (HTTP 400, which reaches the caller of the service as `requests.HTTPError`, not as a
+  `HomeAssistantError`) or `ignore` (HTTP 200 and no effect, so only the missing confirmation shows
+  it). Both are tested.
+- The thermostat's own window detection can be triggered (`window-detection`); it closes the valve
+  and reports `windowopenactiv`. Whether a real box shows the target unchanged or as OFF (253)
+  meanwhile is open (concept section 12): `window_target` chooses; with `off` Home Assistant
+  shows the thermostat as off.
 - `BlockTime` is always 0 (a real box blocks logins after failures; pyfritzhome would sleep).
   `txbusy` is 0 unless `txbusy_while_pending` is set, because pyfritzhome waits with real sleeps
   while it is 1. The timetable is neutral: no next change (`endperiod` 0, `tchange` 255).

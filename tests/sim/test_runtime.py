@@ -20,7 +20,7 @@ def test_the_runtime_path_imports_neither_home_assistant_nor_pytest() -> None:
         "('homeassistant', 'pytest', 'pytest_homeassistant_custom_component', '_pytest'))\n"
         "print(','.join(bad))\n"
     )
-    result = subprocess.run(  # noqa: S603  (fixed arguments)
+    result = subprocess.run(
         [sys.executable, "-I", "-c", f"import sys; sys.path.insert(0, {str(SIM_DIR)!r})\n{code}"],
         capture_output=True,
         text=True,

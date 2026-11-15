@@ -8,7 +8,7 @@ import pytest
 from cave_sim.clock import ManualClock
 from cave_sim.home import parse_home
 from cave_sim.mqtt import InMemoryBroker
-from cave_sim.runtime import SimulatedHome
+from cave_sim.runtime import ControlError, SimulatedHome
 from cave_sim.zigbee.devices import BoschTrv, SonoffTrv
 
 HOME = parse_home(
@@ -269,3 +269,122 @@ def test_an_open_valve_warms_the_room_and_an_open_window_cools_it(rig: Rig) -> N
     rig.home.set_window("window", True)
     rig.clock.advance(1800)
     assert rig.home.rooms["room"].temperature < warmed - 3
+
+
+def _availability(rig: Rig, name: str) -> str:
+    return str(json.loads(rig.broker.retained[f"zigbee2mqtt/{name}/availability"].payload)["state"])
+
+
+def test_availability_is_published_as_zigbee2mqtt_serialises_it(rig: Rig) -> None:
+    assert rig.broker.retained["zigbee2mqtt/Sonoff/availability"].payload == b'{"state":"online"}'
+
+
+def test_a_silent_thermostat_stays_available_and_ignores_commands(rig: Rig) -> None:
+    rig.clock.advance(60)
+    rig.home.set_silent("sonoff", True)
+    before = rig.states("Sonoff")
+    rig.set("Sonoff", "25", "occupied_heating_setpoint")
+    rig.ha.publish("zigbee2mqtt/Sonoff/get", json.dumps({"child_lock": ""}))
+    rig.clock.advance(3600)
+    assert rig.states("Sonoff") == before  # nothing at all is published for it
+    assert _availability(rig, "Sonoff") == "online"
+    assert rig.home.zigbee.devices["Sonoff"].state["occupied_heating_setpoint"] == 20.0
+
+
+def test_a_silent_device_turns_unavailable_after_the_passive_timeout(rig: Rig) -> None:
+    rig.clock.advance(600)
+    rig.home.set_silent("sensor", True)
+    last = rig.last("Sensor")["last_seen"]
+    rig.clock.advance(1500 * 60 - 1)
+    assert _availability(rig, "Sensor") == "online"
+    rig.clock.advance(2)
+    assert _availability(rig, "Sensor") == "offline"
+    assert rig.last("Sensor")["last_seen"] == last
+
+
+def test_an_answering_device_never_times_out(rig: Rig) -> None:
+    rig.clock.advance(30 * 3600)
+    names = ("Sonoff", "Gen Two", "Bosch", "Sensor", "Window")
+    assert {_availability(rig, name) for name in names} == {"online"}
+
+
+def test_a_silent_room_sensor_goes_stale_while_available(rig: Rig) -> None:
+    rig.home.set_silent("sensor", True)
+    rig.home.set_room_temperature("room", 25.0)
+    rig.clock.advance(4 * 3600)
+    assert rig.last("Sensor")["temperature"] == 19.0
+    assert _availability(rig, "Sensor") == "online"
+
+
+def test_a_window_contact_that_goes_silent_while_open(rig: Rig) -> None:
+    rig.home.set_window("window", True)
+    rig.home.set_silent("window", True)
+    rig.home.set_window("window", False)
+    rig.clock.advance(24 * 3600)
+    assert rig.last("Window")["contact"] is False  # Home Assistant still sees it open
+    assert _availability(rig, "Window") == "online"
+    rig.clock.advance(3600 + 60)
+    assert _availability(rig, "Window") == "offline"
+    rig.home.set_silent("window", False)
+    assert rig.last("Window")["contact"] is True
+    assert _availability(rig, "Window") == "online"
+
+
+def test_a_dial_turned_while_silent_is_reported_on_return(rig: Rig) -> None:
+    rig.home.set_silent("bosch", True)
+    rig.home.turn_dial("bosch", 23.5)
+    assert rig.last("Bosch")["occupied_heating_setpoint"] == 20.0
+    rig.home.set_silent("bosch", False)
+    state = rig.last("Bosch")
+    assert state["occupied_heating_setpoint"] == 23.5
+    assert state["setpoint_change_source"] == "manual"
+
+
+def test_a_device_made_unavailable_at_once_and_back(rig: Rig) -> None:
+    rig.home.set_online("gen_two", False)
+    assert _availability(rig, "Gen Two") == "offline"
+    rig.home.turn_dial("gen_two", 24)
+    rig.home.set_online("gen_two", True)
+    assert _availability(rig, "Gen Two") == "online"
+    assert rig.last("Gen Two")["occupied_heating_setpoint"] == 24
+
+
+def test_the_passive_timeout_is_configurable(rig: Rig) -> None:
+    rig.home.configure_zigbee2mqtt(passive_timeout_minutes=5)
+    rig.home.set_silent("sonoff", True)
+    rig.clock.advance(5 * 60 + 1)
+    assert _availability(rig, "Sonoff") == "offline"
+    home = parse_home({"zigbee2mqtt": {"passive_timeout": 2}, "rooms": []})
+    assert home.zigbee2mqtt.passive_timeout_minutes == 2
+
+
+@pytest.mark.parametrize(
+    ("device_id", "name", "mode", "prop"),
+    [
+        ("sonoff", "Sonoff", "off", "system_mode"),
+        ("gen_two", "Gen Two", "auto", "system_mode"),
+        ("bosch", "Bosch", "pause", "operating_mode"),
+    ],
+)
+def test_a_mode_changed_on_the_device_is_reported(
+    rig: Rig, device_id: str, name: str, mode: str, prop: str
+) -> None:
+    rig.home.set_device_mode(device_id, mode)
+    assert rig.last(name)[prop] == mode
+
+
+def test_an_unknown_device_mode_is_refused(rig: Rig) -> None:
+    with pytest.raises(ControlError, match="system_mode"):
+        rig.home.set_device_mode("sonoff", "pause")
+    with pytest.raises(ControlError, match="thermostat"):
+        rig.home.set_device_mode("sensor", "off")
+
+
+def test_an_external_temperature_out_of_range_is_published_but_ignored(rig: Rig) -> None:
+    rig.set("Sonoff", "remote_temperature", "temperature_sensor_select")
+    rig.set("Sonoff", "120", "external_temperature_input")
+    sonoff = rig.home.zigbee.devices["Sonoff"]
+    assert isinstance(sonoff, SonoffTrv)
+    assert sonoff.cache["external_temperature_input"] == 120  # Zigbee2MQTT's optimistic state
+    assert sonoff.state["external_temperature_input"] == 0  # the device ignored it
+    assert sonoff.external_received is None

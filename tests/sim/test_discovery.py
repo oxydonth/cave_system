@@ -191,3 +191,23 @@ def test_the_recorder_turns_a_device_s_messages_into_a_fixture() -> None:
     assert recorded.discovery == generated.discovery
     assert recorded.state["system_mode"] == "heat"
     assert recorded.state["last_seen"] == "2026-01-01T00:00:00.000Z"
+
+
+def test_a_recording_that_disagrees_with_its_model_is_reported() -> None:
+    generated = fixtures.load("TRV-ZBT")
+    discovery = json.loads(json.dumps(generated.discovery))
+    climate = "climate/@IEEE@/climate/config"
+    select = "select/@IEEE@/temperature_sensor_select/config"
+    discovery[climate]["min_temp"] = "4"
+    discovery[select]["options"] = ["internal", "external"]
+    del discovery["switch/@IEEE@/switch_open_window/config"]
+    recorded = fixtures.Fixture("TRV-ZBT", "recorded: a test", discovery, generated.state)
+
+    problems = fixtures.differences(recorded, generated)
+
+    assert len(problems) == 3
+    assert any("min_temp is '4' on the real device but '5'" in p for p in problems)
+    assert any("options" in p and "temperature_sensor_select" in p for p in problems)
+    assert any("switch_open_window" in p and "remove it" in p for p in problems)
+    assert all("models.py, model TRV-ZBT" in p for p in problems)
+    assert fixtures.differences(generated, generated) == []

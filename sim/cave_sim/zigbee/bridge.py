@@ -7,7 +7,12 @@ What it publishes, and when, follows Zigbee2MQTT 2.14.3:
 * ``<base>/bridge/info``, retained (a subset of the real message, see ``sim/README.md``).
 * Discovery messages, retained, below the discovery prefix (``lib/extension/homeassistant.ts``).
 * ``<base>/<name>/availability`` ``{"state":"online"|"offline"}``, retained
-  (``lib/extension/availability.ts``).
+  (``lib/extension/availability.ts``). All our devices run on batteries, which Zigbee2MQTT treats
+  as "passive": a device is available while it was last heard less than
+  ``availability.passive.timeout`` ago (1500 minutes by default, and in this project's
+  configuration); every message from it makes it available again. A device that answers counts as
+  heard all the time, as real devices check in regularly; a silent one turns unavailable the
+  timeout after its last message. The timeout runs on the simulator's clock.
 * ``<base>/<name>``: the device's whole cached state with ``last_seen`` and ``linkquality``, not
   retained, on every change (``lib/controller.ts`` ``publishEntityState`` with ``cache_state``).
 * 30 seconds after Home Assistant announces itself on ``<discovery>/status`` with ``online``, the
@@ -55,6 +60,10 @@ class Zigbee2Mqtt:
         self.log_level = "info"
         self.permit_join = False
         self._republish = Timer(clock, self.republish_states)
+        self.passive_timeout = self.settings.passive_timeout
+        self._last_heard: dict[str, float] = {}
+        self._available: dict[str, bool] = {}
+        self._availability_timers: dict[str, Timer] = {}
         base = re.escape(self.settings.base_topic)
         self._set_get = re.compile(rf"^{base}/(?!bridge)(.+?)/(get|set)(?:/(.+))?$")
 
@@ -78,7 +87,9 @@ class Zigbee2Mqtt:
                 self._publish_discovery(topic, payload)
         for device in self.devices.values():
             device.prime()
-            self.publish_availability(device)
+            self._last_heard[device.friendly_name] = self.clock.now()
+            self._arm(device)
+            self.publish_availability(device, True)
             self.publish_entity_state(device)
 
     def _publish_discovery(self, topic: str, payload: dict[str, Any]) -> None:
@@ -108,14 +119,13 @@ class Zigbee2Mqtt:
     def publish_entity_state(
         self, device: ZigbeeDevice, changes: dict[str, Any] | None = None
     ) -> None:
-        """Merge ``changes`` into the cache and publish the device's whole state."""
+        """Merge ``changes`` into Zigbee2MQTT's cache and publish the device's whole state."""
         if changes:
-            device.state.update(changes)
-        if not device.online:
-            return
-        message = dict(device.state)
+            device.cache.update(changes)
+        message = dict(device.cache)
         if self.settings.last_seen != "disable":
-            message["last_seen"] = format_last_seen(device.last_seen, self.settings.last_seen)
+            last_seen = self._last_heard.get(device.friendly_name, self.clock.now())
+            message["last_seen"] = format_last_seen(last_seen, self.settings.last_seen)
         message["linkquality"] = device.linkquality
         if device.model.ota and (message.get("update") or {}).get("latest_version") is None:
             # adjustMessageBeforePublish in homeassistant.ts
@@ -128,15 +138,59 @@ class Zigbee2Mqtt:
             f"{self.settings.base_topic}/{device.friendly_name}", serialize(message)
         )
 
-    def publish_availability(self, device: ZigbeeDevice) -> None:
-        """``<base>/<name>/availability``, retained."""
-        state = "online" if device.online else "offline"
+    def publish_availability(self, device: ZigbeeDevice, available: bool) -> None:
+        """``<base>/<name>/availability``, retained, when it changed (``publishAvailability``)."""
+        name = device.friendly_name
+        if self._available.get(name) == available:
+            return
+        self._available[name] = available
         self.transport.publish(
-            f"{self.settings.base_topic}/{device.friendly_name}/availability",
-            json.dumps({"state": state}),
+            f"{self.settings.base_topic}/{name}/availability",
+            serialize({"state": "online" if available else "offline"}),
             qos=1,
             retain=True,
         )
+
+    def available(self, device: ZigbeeDevice) -> bool:
+        """Whether Zigbee2MQTT shows the device as available."""
+        return self._available.get(device.friendly_name, True)
+
+    def device_heard(self, device: ZigbeeDevice, *, publish: bool = True) -> None:
+        """A message from the device arrived (``onLastSeenChanged``)."""
+        self._last_heard[device.friendly_name] = self.clock.now()
+        self._arm(device)
+        if publish:
+            self.publish_availability(device, True)
+
+    def make_unavailable(self, device: ZigbeeDevice) -> None:
+        """Show the device as unavailable at once, as if its timeout had passed."""
+        self.publish_availability(device, False)
+
+    def set_passive_timeout(self, seconds: float) -> None:
+        """Change ``availability.passive.timeout``; it applies from each device's last message."""
+        self.passive_timeout = seconds
+        for device in self.devices.values():
+            self._check_availability(device)
+
+    def _arm(self, device: ZigbeeDevice) -> None:
+        """``resetTimer`` for a passive device: check again one second after the timeout."""
+        name = device.friendly_name
+        timer = self._availability_timers.get(name)
+        if timer is None:
+            timer = Timer(self.clock, lambda: self._check_availability(device))
+            self._availability_timers[name] = timer
+        remaining = self._last_heard[name] + self.passive_timeout - self.clock.now()
+        timer.start(max(remaining, 0.0) + 1.0)
+
+    def _check_availability(self, device: ZigbeeDevice) -> None:
+        name = device.friendly_name
+        if device.answering:
+            # A device that answers is heard regularly (check-ins, reports), so it never times out.
+            self._last_heard[name] = max(self._last_heard[name], self.clock.now() - 1.0)
+        if self.clock.now() - self._last_heard[name] >= self.passive_timeout:
+            self.publish_availability(device, False)
+        else:
+            self._arm(device)
 
     def republish_states(self) -> None:
         """What Zigbee2MQTT does 30 s after Home Assistant came online."""

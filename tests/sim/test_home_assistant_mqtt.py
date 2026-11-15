@@ -373,3 +373,68 @@ async def test_the_example_in_the_readme(
     await async_advance(hass, freezer, 3600)
     assert sim.home.rooms["living_room"].temperature < 15
     assert float(hass.states.get("sensor.wohnzimmer_temperature").state) < 15
+
+
+async def test_a_silent_thermostat_stays_available_and_its_command_goes_unanswered(
+    hass: HomeAssistant, simulated_home: Any, freezer: Any
+) -> None:
+    """What happens at home when a thermostat's battery dies: no error, no answer, no change."""
+    sim = await simulated_home(ONE_OF_EACH, setup_fritzbox=False)
+    sim.home.configure_zigbee2mqtt(passive_timeout_minutes=10)
+    sim.home.set_silent("test_trvzb", True)
+
+    await hass.services.async_call(
+        "climate",
+        "set_temperature",
+        {"entity_id": "climate.test_trvzb", "temperature": 23.0},
+        blocking=True,
+    )
+    await hass.async_block_till_done()
+    state = hass.states.get("climate.test_trvzb")
+    assert state.state == "heat"
+    assert state.attributes["temperature"] == 20.0
+
+    await async_advance(hass, freezer, 9 * 60)
+    assert hass.states.get("climate.test_trvzb").state == "heat"
+    await async_advance(hass, freezer, 2 * 60)
+    assert hass.states.get("climate.test_trvzb").state == STATE_UNAVAILABLE
+
+
+async def test_a_thermostat_returns_with_a_target_changed_while_it_was_away(
+    hass: HomeAssistant, simulated_home: Any
+) -> None:
+    sim = await simulated_home(ONE_OF_EACH, setup_fritzbox=False)
+    sim.home.set_online("test_bosch", False)
+    await hass.async_block_till_done()
+    assert hass.states.get("climate.test_bosch").state == STATE_UNAVAILABLE
+
+    sim.home.turn_dial("test_bosch", 24.0)
+    sim.home.set_online("test_bosch", True)
+    await hass.async_block_till_done()
+    state = hass.states.get("climate.test_bosch")
+    assert state.state == "heat"
+    assert state.attributes["temperature"] == 24.0
+
+
+@pytest.mark.parametrize(
+    ("device_id", "entity_id", "mode", "expected"),
+    [
+        ("test_trvzb", "climate.test_trvzb", "off", "off"),
+        ("test_trv_zbt", "climate.test_trv_zbt", "auto", "auto"),
+        ("test_bosch", "climate.test_bosch", "pause", "off"),
+        ("test_bosch", "climate.test_bosch", "schedule", "auto"),
+    ],
+)
+async def test_a_mode_changed_on_the_device_reaches_home_assistant(
+    hass: HomeAssistant,
+    simulated_home: Any,
+    device_id: str,
+    entity_id: str,
+    mode: str,
+    expected: str,
+) -> None:
+    sim = await simulated_home(ONE_OF_EACH, setup_fritzbox=False)
+    assert hass.states.get(entity_id).state == "heat"
+    sim.home.set_device_mode(device_id, mode)
+    await hass.async_block_till_done()
+    assert hass.states.get(entity_id).state == expected

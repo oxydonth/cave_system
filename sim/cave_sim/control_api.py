@@ -92,7 +92,10 @@ def create_app(home: SimulatedHome) -> web.Application:
 
     @routes.get("/api/health")
     async def health(_request: web.Request) -> web.Response:
-        return _json({"status": "ok"})
+        healthy, reason = home.healthy()
+        if healthy:
+            return _json({"status": "ok"})
+        return _json({"status": "unavailable", "reason": reason}, 503)
 
     @routes.get("/api/state")
     async def state(_request: web.Request) -> web.Response:
@@ -113,6 +116,35 @@ def create_app(home: SimulatedHome) -> web.Application:
         device_id = request.match_info["device_id"]
         home.set_online(device_id, _flag(await _body(request), "online"))
         return device_response(device_id)
+
+    @routes.post("/api/devices/{device_id}/silent")
+    async def silent(request: web.Request) -> web.Response:
+        device_id = request.match_info["device_id"]
+        home.set_silent(device_id, _flag(await _body(request), "silent"))
+        return device_response(device_id)
+
+    @routes.post("/api/devices/{device_id}/mode")
+    async def mode(request: web.Request) -> web.Response:
+        device_id = request.match_info["device_id"]
+        home.set_device_mode(device_id, _field(await _body(request), "mode", str))
+        return device_response(device_id)
+
+    @routes.post("/api/devices/{device_id}/window-detection")
+    async def window_detection(request: web.Request) -> web.Response:
+        device_id = request.match_info["device_id"]
+        home.detect_open_window(device_id, _number(await _body(request), "minutes"))
+        return device_response(device_id)
+
+    @routes.post("/api/zigbee2mqtt")
+    async def zigbee2mqtt(request: web.Request) -> web.Response:
+        data = await _body(request)
+        unknown = set(data) - {"passive_timeout"}
+        if unknown:
+            raise BadRequest(f"unknown fields {sorted(unknown)}")
+        home.configure_zigbee2mqtt(
+            passive_timeout_minutes=_optional_number(data, "passive_timeout")
+        )
+        return _json(home.state()["zigbee2mqtt"])
 
     @routes.post("/api/devices/{device_id}/dial")
     async def dial(request: web.Request) -> web.Response:
@@ -175,7 +207,14 @@ def create_app(home: SimulatedHome) -> web.Application:
     @routes.post("/api/fritzbox")
     async def fritzbox(request: web.Request) -> web.Response:
         data = await _body(request)
-        unknown = set(data) - {"report_delay", "summer", "holiday", "txbusy_while_pending"}
+        unknown = set(data) - {
+            "report_delay",
+            "summer",
+            "holiday",
+            "txbusy_while_pending",
+            "window_target",
+            "locked_command",
+        }
         if unknown:
             raise BadRequest(f"unknown fields {sorted(unknown)}")
         home.configure_fritzbox(
@@ -183,6 +222,8 @@ def create_app(home: SimulatedHome) -> web.Application:
             summer=_optional_flag(data, "summer"),
             holiday=_optional_flag(data, "holiday"),
             txbusy_while_pending=_optional_flag(data, "txbusy_while_pending"),
+            window_target=_field(data, "window_target", str, required=False),
+            locked_command=_field(data, "locked_command", str, required=False),
         )
         return _json(home.state()["fritzbox"])
 

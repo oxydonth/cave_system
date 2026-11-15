@@ -172,22 +172,69 @@ def generate(model: ZigbeeModel, settings: Settings | None = None) -> Fixture:
     )
 
 
+# What decides how Home Assistant drives a device. A recording that differs here from the model
+# would show Home Assistant one device while the simulator's command handling follows another.
+COMPARED_FIELDS: Final = (
+    "modes",
+    "min_temp",
+    "max_temp",
+    "temp_step",
+    "options",
+    "min",
+    "max",
+    "step",
+    "payload_on",
+    "payload_off",
+    "payload_press",
+    "command_topic",
+    "mode_command_topic",
+    "temperature_command_topic",
+)
+
+
+def differences(recorded: Fixture, generated: Fixture) -> list[str]:
+    """What a recorded fixture says differently from its model, as instructions to fix the model."""
+    found: list[str] = []
+    where = f"cave_sim/zigbee/models.py, model {generated.model}"
+    for topic in sorted(set(generated.discovery) - set(recorded.discovery)):
+        found.append(f"{topic}: the real device has no such entity; remove it from {where}")
+    for topic in sorted(set(recorded.discovery) - set(generated.discovery)):
+        found.append(f"{topic}: the real device has this entity; add it to {where}")
+    for topic in sorted(set(recorded.discovery) & set(generated.discovery)):
+        real, model = recorded.discovery[topic], generated.discovery[topic]
+        for field in COMPARED_FIELDS:
+            if real.get(field) != model.get(field):
+                found.append(
+                    f"{topic}: {field} is {real.get(field)!r} on the real device but "
+                    f"{model.get(field)!r} in {where}"
+                )
+    return found
+
+
 def main(argv: list[str]) -> int:
-    """Write (default) or check (``--check``) the generated fixtures of every model."""
+    """Write (default) or check (``--check``) the fixtures of every model.
+
+    Generated fixtures are rewritten from the models. Recorded ones are never overwritten; with
+    ``--check`` they are compared with their model, and every difference that matters for
+    commands is reported.
+    """
     check = "--check" in argv
-    stale: list[str] = []
+    problems: list[str] = []
     for model in MODELS.values():
         path = path_for(model.model)
+        generated = generate(model)
         if path.exists() and not load(model.model).source.startswith("generated"):
-            continue  # a recording; never overwritten
-        content = generate(model).to_json()
+            if check:
+                problems.extend(differences(load(model.model), generated))
+            continue
+        content = generated.to_json()
         if check:
             if not path.exists() or path.read_text(encoding="utf-8") != content:
-                stale.append(model.model)
+                problems.append(f"{path.name}: stale; run python -m cave_sim.zigbee.fixtures")
         else:
             path.write_text(content, encoding="utf-8")
-    if stale:
-        sys.stderr.write(f"stale fixtures: {', '.join(stale)}\n")
+    if problems:
+        sys.stderr.write("\n".join(problems) + "\n")
         return 1
     return 0
 

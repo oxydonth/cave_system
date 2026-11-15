@@ -3,8 +3,12 @@
 ::
 
     outdoor_temperature: 5.0          # optional, °C
+    zigbee2mqtt:                      # optional
+      passive_timeout: 1500           # minutes until a silent battery device is unavailable
     fritzbox:                         # optional
       report_delay: 0                 # seconds before a new setpoint is reported; 0 = at once
+      window_target: unchanged        # what tsoll shows during window detection: unchanged or off
+      locked_command: refuse          # sethkrtsoll while locked: refuse (HTTP 400) or ignore
     rooms:
       - id: living_room               # used by the control API
         name: Wohnzimmer
@@ -37,6 +41,10 @@ from cave_sim.zigbee.models import MODELS
 FRITZ_THERMO_302: Final = "FRITZ!Smart Thermo 302"
 
 type Family = Literal["zigbee", "fritz"]
+type WindowTarget = Literal["unchanged", "off"]
+type LockedCommand = Literal["refuse", "ignore"]
+WINDOW_TARGETS: Final = ("unchanged", "off")
+LOCKED_COMMANDS: Final = ("refuse", "ignore")
 
 
 class HomeError(ValueError):
@@ -102,6 +110,15 @@ class FritzBoxSpec:
     """Behaviour of the fake FRITZ!Box."""
 
     report_delay: float = 0.0
+    window_target: WindowTarget = "unchanged"
+    locked_command: LockedCommand = "refuse"
+
+
+@dataclass(frozen=True)
+class Zigbee2MqttSpec:
+    """Zigbee2MQTT settings of the stand-in."""
+
+    passive_timeout_minutes: float = 1500.0
 
 
 @dataclass(frozen=True)
@@ -111,6 +128,7 @@ class HomeSpec:
     rooms: tuple[RoomSpec, ...]
     outdoor_temperature: float = 5.0
     fritzbox: FritzBoxSpec = field(default_factory=FritzBoxSpec)
+    zigbee2mqtt: Zigbee2MqttSpec = field(default_factory=Zigbee2MqttSpec)
 
     def devices(self) -> list[tuple[RoomSpec, DeviceSpec]]:
         """Every device with its room."""
@@ -205,7 +223,7 @@ def _parse_room(raw: Any, where: str) -> RoomSpec:
 def parse_home(raw: Any) -> HomeSpec:
     """Validate and convert a parsed ``home.yaml``."""
     data = _mapping(raw, "home")
-    unknown = set(data) - {"outdoor_temperature", "fritzbox", "rooms"}
+    unknown = set(data) - {"outdoor_temperature", "fritzbox", "zigbee2mqtt", "rooms"}
     if unknown:
         raise HomeError(f"home: unknown keys {sorted(unknown)}")
     rooms_raw = data.get("rooms", [])
@@ -213,15 +231,31 @@ def parse_home(raw: Any) -> HomeSpec:
         raise HomeError("home.rooms: expected a list")
     rooms = tuple(_parse_room(room, f"rooms[{index}]") for index, room in enumerate(rooms_raw))
     fritz_raw = _mapping(data.get("fritzbox", {}), "fritzbox")
-    unknown = set(fritz_raw) - {"report_delay"}
+    unknown = set(fritz_raw) - {"report_delay", "window_target", "locked_command"}
     if unknown:
         raise HomeError(f"fritzbox: unknown keys {sorted(unknown)}")
+    window_target = fritz_raw.get("window_target", "unchanged")
+    if window_target not in WINDOW_TARGETS:
+        raise HomeError(f"fritzbox.window_target: one of {WINDOW_TARGETS}")
+    locked_command = fritz_raw.get("locked_command", "refuse")
+    if locked_command not in LOCKED_COMMANDS:
+        raise HomeError(f"fritzbox.locked_command: one of {LOCKED_COMMANDS}")
+    z2m_raw = _mapping(data.get("zigbee2mqtt", {}), "zigbee2mqtt")
+    unknown = set(z2m_raw) - {"passive_timeout"}
+    if unknown:
+        raise HomeError(f"zigbee2mqtt: unknown keys {sorted(unknown)}")
+    passive_timeout = _number(z2m_raw.get("passive_timeout", 1500), "zigbee2mqtt.passive_timeout")
+    if passive_timeout <= 0:
+        raise HomeError("zigbee2mqtt.passive_timeout: must be positive")
     home = HomeSpec(
         rooms=rooms,
         outdoor_temperature=_number(data.get("outdoor_temperature", 5.0), "outdoor_temperature"),
         fritzbox=FritzBoxSpec(
-            report_delay=_number(fritz_raw.get("report_delay", 0.0), "fritzbox.report_delay")
+            report_delay=_number(fritz_raw.get("report_delay", 0.0), "fritzbox.report_delay"),
+            window_target=window_target,
+            locked_command=locked_command,
         ),
+        zigbee2mqtt=Zigbee2MqttSpec(passive_timeout_minutes=passive_timeout),
     )
     _check_unique(home)
     return home

@@ -3,7 +3,7 @@
 What it implements, and where it comes from:
 
 * The session login of ``login_sid.lua`` with the PBKDF2 challenge-response of FRITZ!OS 7.24 and
-  later, and the MD5 fallback (FRITZ! "HTTP_Session-ID_EN.pdf", 2021, as linked from
+  later (FRITZ! "HTTP_Session-ID_EN.pdf", 2021, as linked from
   fritz.com/en/pages/interfaces). A session is valid for 20 minutes and is extended by every use.
 * The commands of ``webservices/homeautoswitch.lua`` that ``pyfritzhome`` 0.6.21 and Home
   Assistant 2026.10.4's ``fritzbox`` integration send, with the XML of ``getdevicelistinfos`` for a
@@ -14,7 +14,10 @@ The box knows the thermostats; each thermostat regulates its radiator on its own
 setpoint is reported either at once or after ``report_delay`` seconds, because which of the two a
 real box does is not confirmed (concept section 12). While the box's summer or holiday mode or the
 key lock "via UI/API" is active, the box reports ``lock`` as set (the AHA document: the lock "wird
-automatisch bei summeractive==1 oder holidayactive==1 aktiviert") and refuses ``sethkrtsoll``.
+automatisch bei summeractive==1 oder holidayactive==1 aktiviert"). What a real box then answers to
+``sethkrtsoll`` is not documented: the fake refuses it with HTTP 400 or accepts it without effect,
+as configured. The thermostat's own window detection can be triggered; whether a real box shows the
+target unchanged or as OFF meanwhile is open (concept section 12), so that is configurable too.
 """
 
 import hashlib
@@ -64,13 +67,6 @@ def pbkdf2_response(challenge: str, password: str) -> str:
     return f"{salt2}${hash2.hex()}"
 
 
-def md5_response(challenge: str, password: str) -> str:
-    """The legacy response: MD5 of UTF-16LE ``<challenge>-<password>``, non-Latin-1 as ``.``."""
-    text = "".join(ch if ord(ch) <= 255 else "." for ch in f"{challenge}-{password}")
-    digest = hashlib.md5(text.encode("utf-16-le"), usedforsecurity=False).hexdigest()
-    return f"{challenge}-{digest}"
-
-
 def temperature_to_hkr(value: float) -> int:
     """A temperature in °C as the AHA half-degree value, clamped to 16..56."""
     return min(max(round(value * 2), HKR_MIN), HKR_MAX)
@@ -92,7 +88,7 @@ class FritzThermostat:
     battery_low: bool = False
     lock: bool = False
     device_lock: bool = False
-    window_open_end: int = 0
+    window_open_end: int = 0  # window open mode, from sethkrwindowopen or the own detection
     boost_end: int = 0
     opening: float = 0.0
     radiator: RadiatorBias = field(default_factory=lambda: RadiatorBias(0.0))
@@ -150,6 +146,12 @@ class FakeFritzBox:
         self.username = username
         self.password = password
         self.report_delay = report_delay
+        # Unconfirmed on hardware (concept section 12), so switchable: what <tsoll> shows while the
+        # thermostat's window open mode is active ("unchanged", or "off" = 253), and how the box
+        # answers sethkrtsoll for a locked thermostat ("refuse" with HTTP 400, or "ignore": HTTP 200
+        # and no effect).
+        self.window_target = "unchanged"
+        self.locked_command = "refuse"
         self.summer_active = False
         self.holiday_active = False
         # Assumption: the box marks a thermostat busy while a setpoint waits for the device. Off by
@@ -198,6 +200,12 @@ class FakeFritzBox:
         timer.start(self.report_delay)
         thermostat.pending.append(timer)
 
+    def detect_open_window(self, thermostat: FritzThermostat, minutes: float) -> None:
+        """The thermostat's own detection (a temperature drop) starts the window open mode."""
+        now = self.clock.now()
+        thermostat.window_open_end = int(now + minutes * 60)
+        thermostat.regulate(now)
+
     def dial(self, thermostat: FritzThermostat, value: int) -> None:
         """A change on the device itself; the box learns it with the device's next report."""
         thermostat.device_tsoll = value
@@ -221,37 +229,33 @@ class FakeFritzBox:
         session.last_used = now
         return session
 
-    def _check_response(self, response: str, version2: bool) -> bool:
-        if version2 and self._challenge.startswith("2$"):
-            expected = pbkdf2_response(self._challenge, self.password)
-        else:
-            challenge = self._challenge.split("$")[-1]
-            expected = md5_response(challenge, self.password)
-        return hmac.compare_digest(response, expected)
+    def _check_response(self, response: str) -> bool:
+        return hmac.compare_digest(response, pbkdf2_response(self._challenge, self.password))
 
     def login(self, params: dict[str, str]) -> Response:
         """``login_sid.lua``: log in, check a session, or log out."""
         self.requests.append(("login_sid.lua", dict(params)))
-        version2 = params.get("version") == "2"
         sid = params.get("sid")
         if "logout" in params or "security:command/logout" in params:
             self.sessions.pop(sid or "", None)
-            return self._session_info(INVALID_SID, version2)
+            return self._session_info(INVALID_SID)
         if "response" in params:
             user = params.get("username", "")
-            ok = user == self.username and self._check_response(params["response"], version2)
+            ok = user == self.username and self._check_response(params["response"])
             self._challenge = self._new_challenge()
             if not ok:
                 _LOGGER.warning("Login failed for user %r", user)
-                return self._session_info(INVALID_SID, version2)
+                return self._session_info(INVALID_SID)
             new_sid = secrets.token_hex(8)
             self.sessions[new_sid] = Session(user, self.clock.now())
-            return self._session_info(new_sid, version2)
+            return self._session_info(new_sid)
         session = self._valid_session(sid)
-        return self._session_info(sid if session and sid else INVALID_SID, version2)
+        return self._session_info(sid if session and sid else INVALID_SID)
 
-    def _session_info(self, sid: str, version2: bool) -> Response:
-        challenge = self._challenge if version2 else self._challenge.split("$")[-1]
+    def _session_info(self, sid: str) -> Response:
+        # Only the PBKDF2 challenge of FRITZ!OS 7.24 and later is offered, also without
+        # ``version=2``: the work package asks for it alone, and pyfritzhome always sends version=2.
+        challenge = self._challenge
         rights = (
             "<Rights><Name>HomeAuto</Name><Access>2</Access></Rights>"
             if sid != INVALID_SID
@@ -320,8 +324,11 @@ class FakeFritzBox:
         if not (HKR_MIN <= value <= HKR_MAX or value in (HKR_OFF, HKR_ON)):
             return Response(400, "400 Bad Request")
         if self.locked(thermostat):
-            # Assumption: the box answers a locked thermostat like an invalid request.
-            _LOGGER.info("sethkrtsoll refused for %s: locked", thermostat.ain)
+            # Unconfirmed: either the box answers like an invalid request, or it accepts the
+            # command and nothing happens.
+            _LOGGER.info("sethkrtsoll for %s while locked: %s", thermostat.ain, self.locked_command)
+            if self.locked_command == "ignore":
+                return Response(200, "\n")
             return Response(400, "400 Bad Request")
         self.set_target(thermostat, value)
         return Response(200, "\n")
@@ -364,11 +371,12 @@ class FakeFritzBox:
 
         temperature = thermostat.measured()
         window_active = thermostat.window_open_end > now
+        window_off = window_active and self.window_target == "off"
         boost_active = thermostat.boost_end > now
         hkr = (
             "<hkr>"
             f"<tist>{value(round(temperature * 2))}</tist>"
-            f"<tsoll>{value(thermostat.tsoll)}</tsoll>"
+            f"<tsoll>{value(HKR_OFF if window_off else thermostat.tsoll)}</tsoll>"
             f"<absenk>{thermostat.absenk}</absenk>"
             f"<komfort>{thermostat.komfort}</komfort>"
             f"<lock>{int(self.locked(thermostat))}</lock>"

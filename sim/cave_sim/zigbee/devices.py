@@ -1,7 +1,10 @@
 """How each simulated Zigbee device behaves.
 
-A device keeps the state Zigbee2MQTT caches for it and reports changes the way its attribute
-reporting is configured (:mod:`cave_sim.zigbee.models`). Commands arrive as Zigbee2MQTT ``/set``
+A device keeps its own registers (``state``), separate from what Zigbee2MQTT has cached for it
+(``cache``), and reports changes the way its attribute reporting is configured
+(:mod:`cave_sim.zigbee.models`). A device that has gone silent keeps working and keeps changing its
+registers (a dial turned by hand, a window opened), but nothing it says arrives; when it answers
+again it reports what changed. Commands arrive as Zigbee2MQTT ``/set``
 messages and are handled the way Zigbee2MQTT 2.14.3 ``lib/extension/publish.ts`` handles them: each
 key goes to its converter; a key without one is logged and skipped; a converter that fails (for
 example because the device refuses the value or does not answer) is logged and leaves the state
@@ -72,10 +75,12 @@ class ZigbeeDevice:
         self.fixture = fixture
         self.room = room
         self.clock = network.clock
+        # The device's own registers, and what Zigbee2MQTT has cached for it.
         self.state: dict[str, Any] = fixture.initial_state()
-        self.online = True
+        self.cache: dict[str, Any] = dict(self.state)
+        self.answering = True
         self.linkquality = 120
-        self.last_seen: float = self.clock.now()
+        self._unsent: set[str] = set()
         self._reported: dict[str, tuple[float, Any]] = {}
         self._deferred: dict[str, Timer] = {}
 
@@ -110,17 +115,26 @@ class ZigbeeDevice:
     def prime(self) -> None:
         """Before the first publication: measure, and count everything as reported now."""
         self.state.update(self.measure())
+        self.cache = dict(self.state)
         now = self.clock.now()
         self._reported = {key: (now, value) for key, value in self.state.items()}
 
     def report(self, changes: dict[str, Any]) -> None:
-        """The device sends a message: Zigbee2MQTT merges it into its cache and publishes."""
-        if not self.online or not changes:
+        """The device sends a message; Zigbee2MQTT merges it into its cache and publishes it.
+
+        A silent device changes its registers all the same, and reports the changes when it
+        answers again.
+        """
+        if not changes:
             return
+        self.state.update(changes)
         now = self.clock.now()
-        self.last_seen = now
         for key, value in changes.items():
             self._reported[key] = (now, value)
+        if not self.answering:
+            self._unsent.update(changes)
+            return
+        self.network.device_heard(self)
         self.network.publish_entity_state(self, changes)
 
     def report_if_due(self, prop: str, value: Any) -> None:
@@ -160,8 +174,12 @@ class ZigbeeDevice:
             if not self.model.settable(key):
                 _LOGGER.error("No converter available for '%s' on '%s'", key, self.friendly_name)
                 continue
-            if not self.online:
-                _LOGGER.error("Publish 'set' '%s' to '%s' failed: timeout", key, self.friendly_name)
+            if not self.answering:
+                # Zigbee2MQTT's write times out; it logs, publishes nothing and leaves the
+                # availability alone (publish.ts).
+                _LOGGER.error(
+                    "Publish 'set' '%s' to '%s' failed: 'Timeout'", key, self.friendly_name
+                )
                 continue
             try:
                 optimistic.update(self.write(key, value))
@@ -174,7 +192,10 @@ class ZigbeeDevice:
         self.after_command()
 
     def handle_get(self, message: dict[str, Any]) -> None:
-        """A ``/get`` message: the device answers with the current values."""
+        """A ``/get`` message: the device answers with the current values, if it answers."""
+        if not self.answering:
+            _LOGGER.error("Publish 'get' to '%s' failed: 'Timeout'", self.friendly_name)
+            return
         answer = {}
         for key in message:
             expose = self.model.find(key)
@@ -186,15 +207,21 @@ class ZigbeeDevice:
         self.report(answer)
 
     def write(self, key: str, value: Any) -> dict[str, Any]:
-        """Check and write one property; return the state Zigbee2MQTT publishes optimistically."""
+        """Check and write one property; return the state Zigbee2MQTT publishes optimistically.
+
+        What the device stores goes into its registers here. Zigbee2MQTT's ``numeric`` converter
+        does no range check (modernExtend.ts ``numeric``); a value outside the range is published
+        optimistically and ignored by the device, as zigbee-herdsman-converters PR 8873 observed
+        for the TRVZB's external temperature (assumed for every numeric property).
+        """
         expose = self.model.find(key)
+        stored = True
         if isinstance(expose, Numeric):
             if isinstance(value, bool) or not isinstance(value, int | float):
                 raise CommandRejected(f"Value '{value}' is not a number")
-            if expose.value_min is not None and value < expose.value_min:
-                raise CommandRejected(f"Value '{value}' is below {expose.value_min}")
-            if expose.value_max is not None and value > expose.value_max:
-                raise CommandRejected(f"Value '{value}' is above {expose.value_max}")
+            stored = (expose.value_min is None or value >= expose.value_min) and (
+                expose.value_max is None or value <= expose.value_max
+            )
         elif isinstance(expose, Binary):
             allowed = (expose.value_on, expose.value_off)
             match = next((v for v in allowed if _matches(v, value)), None)
@@ -210,6 +237,8 @@ class ZigbeeDevice:
             raise CommandRejected(f"Value '{value}' is not a string")
         if expose is None or isinstance(expose, Climate) or not expose.access & STATE:
             return {}  # a set-only property, such as a button: the device acts, nothing is stored
+        if stored:
+            self.state[key] = value
         return {key: value}
 
     def after_command(self) -> None:
@@ -217,14 +246,19 @@ class ZigbeeDevice:
 
     # --- control ----------------------------------------------------------------------------
 
-    def set_online(self, online: bool) -> None:
-        """Take the device off the network or bring it back with a fresh report."""
-        if online == self.online:
+    def set_answering(self, answering: bool) -> None:
+        """Let the device fall silent, or answer again and report what changed meanwhile."""
+        if answering == self.answering:
             return
-        self.online = online
-        self.network.publish_availability(self)
-        if online:
-            self.report(self.measure() or {"linkquality": self.linkquality})
+        if not answering:
+            # Until now it was heard regularly (check-ins); the timeout counts from here.
+            self.network.device_heard(self, publish=False)
+        self.answering = answering
+        if answering:
+            changes = {key: self.state[key] for key in sorted(self._unsent)}
+            self._unsent.clear()
+            changes.update(self.measure())
+            self.report(changes or {"linkquality": self.linkquality})
 
     def set_battery(self, level: int, low: bool | None = None) -> None:
         """Report a battery level and, for models that have it, the low-battery flag."""
@@ -242,8 +276,10 @@ class ZigbeeDevice:
             "name": self.friendly_name,
             "ieee": self.spec.ieee_address,
             "room": self.room.room_id,
-            "online": self.online,
+            "answering": self.answering,
+            "available": self.network.available(self),
             "state": dict(self.state),
+            "zigbee2mqtt_state": dict(self.cache),
         }
 
 
@@ -321,13 +357,24 @@ class Thermostat(ZigbeeDevice):
         if not value_min <= device_value <= value_max:
             raise CommandRejected("Status 'INVALID_VALUE'")  # the device's answer to the write
         self._written_setpoint = device_value
+        self.state[key] = device_value
         return {key: value}
 
     def after_command(self) -> None:
         """The device reports the setpoint it stored where it differs from the value sent."""
         written, self._written_setpoint = self._written_setpoint, None
-        if written is not None and self.state.get("occupied_heating_setpoint") != written:
+        if written is not None and self.cache.get("occupied_heating_setpoint") != written:
             self.report({"occupied_heating_setpoint": written})
+
+    MODE_PROPERTY = "system_mode"
+
+    def set_mode(self, mode: str) -> None:
+        """Change the mode on the device itself (its buttons or app), which it then reports."""
+        expose = self.model.find(self.MODE_PROPERTY)
+        if not isinstance(expose, Enum) or mode not in expose.values:
+            values = expose.values if isinstance(expose, Enum) else ()
+            raise ValueError(f"{self.MODE_PROPERTY} must be one of {list(values)}, got {mode!r}")
+        self.report({self.MODE_PROPERTY: mode})
 
     def dial(self, target: float) -> None:
         """Turn the dial on the device to ``target``: rounded to its step, within its range."""
@@ -357,6 +404,10 @@ class SonoffTrv(Thermostat):
         self._feed_resumed = False
         self._fallback = Timer(self.clock, self._external_timed_out)
 
+    def accepted_value(self, key: str, value: Any) -> bool:
+        """Whether the device stored ``value`` (it ignores values outside the range)."""
+        return bool(self.state.get(key) == value)
+
     def _uses_external(self) -> bool:
         return (
             self.state.get("temperature_sensor_select") == "remote_temperature"
@@ -382,7 +433,7 @@ class SonoffTrv(Thermostat):
         """Track the external input and the sensor selection."""
         result = super().write(key, value)
         now = self.clock.now()
-        if key == "external_temperature_input":
+        if key == "external_temperature_input" and self.accepted_value(key, value):
             self.external_received = now
             self._feed_resumed = (
                 self.state.get("temperature_sensor_select") == "remote_source_offline"
@@ -417,6 +468,9 @@ class SonoffTrv(Thermostat):
 
 class BoschTrv(Thermostat):
     """Bosch BTH-RA: remote temperature valid for 30 minutes, operating modes, window and boost."""
+
+    # The climate entity's mode comes from operating_mode (overrideHaDiscoveryPayload in bosch.ts).
+    MODE_PROPERTY = "operating_mode"
 
     def __init__(self, *args: Any, **kwargs: Any) -> None:
         super().__init__(*args, **kwargs)
@@ -453,7 +507,7 @@ class BoschTrv(Thermostat):
         ):
             raise CommandRejected("Valve adaptation process not possible right now!")
         result = super().write(key, value)
-        if key == "remote_temperature":
+        if key == "remote_temperature" and self.state.get(key) == value:
             self.remote_received = self.clock.now()
         elif key == "boost_heating" and result.get(key) == "ON":
             self._boost_end.start(BOSCH_BOOST_DURATION)
@@ -484,6 +538,12 @@ class BoschTrv(Thermostat):
         """A dial change is reported with the source ``manual``."""
         super().dial(target)
         self.report({"setpoint_change_source": "manual"})
+
+    def snapshot(self) -> dict[str, Any]:
+        """Add when the remote temperature last arrived."""
+        data = super().snapshot()
+        data["remote_received"] = self.remote_received
+        return data
 
 
 class TemperatureHumiditySensor(ZigbeeDevice):

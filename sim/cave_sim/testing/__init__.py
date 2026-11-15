@@ -63,6 +63,20 @@ FRITZ_USERNAME: Final = "cave-test"
 FRITZ_PASSWORD: Final = "not-a-real-password"  # noqa: S105
 
 
+_VERSION_NOTE = (
+    "cave_sim.testing was written for Home Assistant 2026.10.4 and relies on {}; "
+    "update cave_sim.testing for this Home Assistant version"
+)
+
+
+def _internal(obj: Any, name: str) -> Any:
+    """An internal attribute of Home Assistant that this module relies on, or a clear error."""
+    try:
+        return getattr(obj, name)
+    except AttributeError:
+        raise RuntimeError(_VERSION_NOTE.format(name)) from None
+
+
 class HassClock:
     """Home Assistant's clock: ``dt_util.utcnow()`` and the event loop's timers.
 
@@ -222,7 +236,7 @@ class SimulatedHomeHandle:
         client = getattr(mqtt_client, "_mock_wraps", None) or mqtt_client
         for _ in range(10):
             before = self.broker.subscriptions(HOME_ASSISTANT_CLIENT)
-            await client._subscribe_debouncer.async_execute()
+            await _internal(client, "_subscribe_debouncer").async_execute()
             await self.hass.async_block_till_done()
             if self.broker.subscriptions(HOME_ASSISTANT_CLIENT) == before:
                 return
@@ -236,8 +250,11 @@ class SimulatedHomeHandle:
         """
         self.home.stop()
         self.clock.cancel_all()
-        on_socket_close = getattr(self.mqtt_client_mock, "on_socket_close", None)
-        if callable(on_socket_close) and self.hass.data.get("mqtt") is not None:
+        if self.hass.data.get("mqtt") is not None:
+            on_socket_close = self.mqtt_client_mock.on_socket_close
+            if isinstance(on_socket_close, Mock):
+                # Home Assistant did not install its handler, so this is not the client we know.
+                raise RuntimeError(_VERSION_NOTE.format("the MQTT client's on_socket_close"))
             on_socket_close(self.mqtt_client_mock, None, Mock(fileno=Mock(return_value=-1)))
         if self._runner is not None:
             await self._runner.cleanup()

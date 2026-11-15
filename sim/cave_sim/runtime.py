@@ -5,12 +5,14 @@
 the simulators are steered.
 """
 
+import dataclasses
+from collections.abc import Callable
 from pathlib import Path
-from typing import Any, Final, Literal
+from typing import Any, Final, Literal, get_args
 
 from cave_sim.clock import Clock, PeriodicTask
 from cave_sim.fritz.box import HKR_OFF, HKR_ON, FakeFritzBox, FritzThermostat, temperature_to_hkr
-from cave_sim.home import HomeSpec
+from cave_sim.home import HomeSpec, LockedCommand, WindowTarget
 from cave_sim.mqtt import MqttTransport
 from cave_sim.room import Room
 from cave_sim.zigbee import fixtures
@@ -52,15 +54,23 @@ class SimulatedHome:
         settings: Settings | None = None,
         fixture_dir: Path = fixtures.FIXTURE_DIR,
         step_seconds: float = STEP_SECONDS,
+        connected: Callable[[], bool] = lambda: True,
     ) -> None:
         self.spec = spec
         self.clock = clock
         self.outdoor_temperature = spec.outdoor_temperature
         self.step_seconds = step_seconds
+        self.started = False
+        self._connected = connected
+        settings = dataclasses.replace(
+            settings or Settings(), passive_timeout=spec.zigbee2mqtt.passive_timeout_minutes * 60
+        )
         self.zigbee = Zigbee2Mqtt(transport, clock, settings)
         self.fritzbox = FakeFritzBox(
             clock, fritz_username, fritz_password, report_delay=spec.fritzbox.report_delay
         )
+        self.fritzbox.window_target = spec.fritzbox.window_target
+        self.fritzbox.locked_command = spec.fritzbox.locked_command
         self.rooms: dict[str, Room] = {}
         self.devices: dict[str, Device] = {}
         loaded: dict[str, fixtures.Fixture] = {}
@@ -95,6 +105,15 @@ class SimulatedHome:
         self.fritzbox.tick()
         self.zigbee.start()
         self._ticker.start()
+        self.started = True
+
+    def healthy(self) -> tuple[bool, str]:
+        """Whether the simulator has published its devices and is connected to the broker."""
+        if not self.started:
+            return False, "not started: waiting for the MQTT broker"
+        if not self._connected():
+            return False, "disconnected from the MQTT broker"
+        return True, "ok"
 
     def stop(self) -> None:
         """Stop the room model."""
@@ -160,12 +179,53 @@ class SimulatedHome:
         self.outdoor_temperature = temperature
 
     def set_online(self, device_id: str, online: bool) -> None:
-        """Take a device offline or bring it back."""
+        """Make a device unavailable at once (and silent), or bring it back.
+
+        For a Zigbee device this is a shortcut past Zigbee2MQTT's availability timeout; use
+        :meth:`set_silent` for a device that stops answering while it still shows as available.
+        """
         device = self.device(device_id)
         if isinstance(device, FritzThermostat):
             device.present = online
-        else:
-            device.set_online(online)
+            return
+        device.set_answering(online)
+        if not online:
+            self.zigbee.make_unavailable(device)
+
+    def set_silent(self, device_id: str, silent: bool) -> None:
+        """Let a Zigbee device stop answering (dead battery, out of range), or answer again.
+
+        A silent device stays available in Zigbee2MQTT until its passive timeout has passed since
+        its last message; commands to it fail without a trace; it keeps working, and what changes
+        on it meanwhile (a dial, a window) is reported when it answers again.
+        """
+        self._typed(device_id, ZigbeeDevice, "a Zigbee device").set_answering(not silent)
+
+    def configure_zigbee2mqtt(self, *, passive_timeout_minutes: float | None = None) -> None:
+        """Change Zigbee2MQTT's ``availability.passive.timeout``, counted from each last message."""
+        if passive_timeout_minutes is not None:
+            if passive_timeout_minutes <= 0:
+                raise ControlError("passive_timeout must be positive")
+            self.zigbee.set_passive_timeout(passive_timeout_minutes * 60)
+
+    def set_device_mode(self, device_id: str, mode: str) -> None:
+        """Change a Zigbee thermostat's mode on the device itself.
+
+        TRV-ZBT and TRVZB: ``system_mode`` (off, auto, heat). BTH-RA: ``operating_mode`` (schedule,
+        manual, pause), from which Home Assistant's climate mode is derived.
+        """
+        thermostat = self._typed(device_id, Thermostat, "a Zigbee thermostat")
+        try:
+            thermostat.set_mode(mode)
+        except ValueError as error:
+            raise ControlError(str(error)) from None
+
+    def detect_open_window(self, device_id: str, minutes: float) -> None:
+        """Let a FRITZ! thermostat's own detection start its window open mode for ``minutes``."""
+        if minutes <= 0:
+            raise ControlError("minutes must be positive")
+        thermostat = self._typed(device_id, FritzThermostat, "a FRITZ! thermostat")
+        self.fritzbox.detect_open_window(thermostat, minutes)
 
     def turn_dial(self, device_id: str, target: float | Literal["on", "off"]) -> None:
         """Turn a thermostat's dial: to a temperature, or for FRITZ! all the way to off or on."""
@@ -202,9 +262,19 @@ class SimulatedHome:
         summer: bool | None = None,
         holiday: bool | None = None,
         txbusy_while_pending: bool | None = None,
+        window_target: WindowTarget | None = None,
+        locked_command: LockedCommand | None = None,
     ) -> None:
         """Change the fake FRITZ!Box's behaviour; ``None`` leaves a setting as it is."""
         box = self.fritzbox
+        if window_target is not None:
+            if window_target not in get_args(WindowTarget.__value__):
+                raise ControlError("window_target must be 'unchanged' or 'off'")
+            box.window_target = window_target
+        if locked_command is not None:
+            if locked_command not in get_args(LockedCommand.__value__):
+                raise ControlError("locked_command must be 'refuse' or 'ignore'")
+            box.locked_command = locked_command
         if report_delay is not None:
             if report_delay < 0:
                 raise ControlError("report_delay must not be negative")
@@ -250,7 +320,8 @@ class SimulatedHome:
             "name": thermostat.spec.name,
             "ain": thermostat.ain,
             "room": thermostat.room.room_id,
-            "online": thermostat.present,
+            "answering": thermostat.present,
+            "available": thermostat.present,
             "state": {
                 "target_temperature": temperature(thermostat.device_tsoll),
                 "reported_target_temperature": temperature(thermostat.tsoll),
@@ -261,6 +332,7 @@ class SimulatedHome:
                 "battery_low": thermostat.battery_low,
                 "lock": self.fritzbox.locked(thermostat),
                 "device_lock": thermostat.device_lock,
+                "window_open_until": thermostat.window_open_end or None,
             },
             "valve_opening": round(thermostat.opening, 3),
         }
@@ -275,7 +347,10 @@ class SimulatedHome:
                 "summer": self.fritzbox.summer_active,
                 "holiday": self.fritzbox.holiday_active,
                 "txbusy_while_pending": self.fritzbox.txbusy_while_pending,
+                "window_target": self.fritzbox.window_target,
+                "locked_command": self.fritzbox.locked_command,
             },
+            "zigbee2mqtt": {"passive_timeout_minutes": self.zigbee.passive_timeout / 60},
             "rooms": {
                 room.room_id: {
                     "name": room.name,

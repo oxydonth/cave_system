@@ -104,7 +104,7 @@ class DeviceInfo:
 
 @dataclass(frozen=True)
 class Settings:
-    """The Zigbee2MQTT settings that change discovery messages."""
+    """The Zigbee2MQTT settings the stand-in follows."""
 
     base_topic: str = "zigbee2mqtt"
     discovery_topic: str = "homeassistant"
@@ -112,6 +112,9 @@ class Settings:
     availability_enabled: bool = True
     frontend_url: str = ""
     coordinator_ieee: str = "0x00124b0000000001"
+    # availability.passive.timeout, in seconds: 1500 minutes, the default of Zigbee2MQTT 2.14.3
+    # (lib/util/settings.schema.json) and the value in zigbee2mqtt/configuration.template.yaml.
+    passive_timeout: float = 1500 * 60.0
 
 
 def js_number(value: float) -> float:

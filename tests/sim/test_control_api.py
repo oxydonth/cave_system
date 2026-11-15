@@ -82,11 +82,11 @@ async def test_set_room_and_outdoor_temperature_and_humidity(api: Api) -> None:
 
 async def test_take_a_device_offline_and_back(api: Api) -> None:
     _, device = await api.post("/api/devices/schlafzimmer_heizung/availability", {"online": False})
-    assert device["online"] is False
+    assert device["available"] is False
     retained = api.broker.retained["zigbee2mqtt/Schlafzimmer Heizung/availability"]
     assert json.loads(retained.payload) == {"state": "offline"}
     _, device = await api.post("/api/devices/bad_heizung/availability", {"online": False})
-    assert device["online"] is False
+    assert device["available"] is False
 
 
 async def test_turn_a_dial(api: Api) -> None:
@@ -154,3 +154,67 @@ async def test_invalid_requests(api: Api, path: str, body: Any, status: int) -> 
 async def test_a_body_that_is_not_json(api: Api) -> None:
     async with api.session.post(api.url + "/api/outdoor", data="warm") as response:
         assert response.status == 400
+
+
+async def test_a_device_falls_silent_and_answers_again(api: Api) -> None:
+    status, device = await api.post("/api/devices/wohnzimmer/silent", {"silent": True})
+    assert status == 200
+    assert (device["answering"], device["available"]) == (False, True)
+    _, device = await api.post("/api/devices/wohnzimmer/silent", {"silent": False})
+    assert device["answering"] is True
+    status, _ = await api.post("/api/devices/bad_heizung/silent", {"silent": True})
+    assert status == 400
+
+
+async def test_the_passive_timeout(api: Api) -> None:
+    status, settings = await api.post("/api/zigbee2mqtt", {"passive_timeout": 5})
+    assert (status, settings) == (200, {"passive_timeout_minutes": 5})
+    assert (await api.post("/api/zigbee2mqtt", {"passive_timeout": 0}))[0] == 400
+
+
+async def test_change_the_mode_on_the_device(api: Api) -> None:
+    _, device = await api.post("/api/devices/schlafzimmer_heizung/mode", {"mode": "pause"})
+    assert device["state"]["operating_mode"] == "pause"
+    _, device = await api.post("/api/devices/wohnzimmer_heizung_tuer/mode", {"mode": "off"})
+    assert device["state"]["system_mode"] == "off"
+    status, error = await api.post("/api/devices/wohnzimmer_heizung_tuer/mode", {"mode": "pause"})
+    assert status == 400
+    assert "system_mode" in error["error"]
+
+
+async def test_trigger_the_fritz_window_detection(api: Api) -> None:
+    _, box = await api.post("/api/fritzbox", {"window_target": "off", "locked_command": "ignore"})
+    assert (box["window_target"], box["locked_command"]) == ("off", "ignore")
+    _, device = await api.post("/api/devices/bad_heizung/window-detection", {"minutes": 10})
+    assert device["state"]["window_open_until"] == int(api.home.clock.now()) + 600
+    assert (await api.post("/api/fritzbox", {"window_target": "closed"}))[0] == 400
+    assert (await api.post("/api/devices/wohnzimmer/window-detection", {"minutes": 10}))[0] == 400
+
+
+async def test_health_needs_a_started_home_and_a_broker_connection(socket_enabled: None) -> None:
+    connected = False
+    home = SimulatedHome(
+        load_home(DEMO_HOME),
+        ManualClock(),
+        InMemoryBroker().client("sim"),
+        fritz_username="u",
+        fritz_password="p",
+        connected=lambda: connected,
+    )
+    runner = web.AppRunner(control_api.create_app(home))
+    await runner.setup()
+    await web.TCPSite(runner, "127.0.0.1", 0).start()
+    url = f"http://127.0.0.1:{runner.addresses[0][1]}/api/health"
+    try:
+        async with ClientSession() as session:
+            async with session.get(url) as response:
+                assert response.status == 503
+            home.start()
+            async with session.get(url) as response:
+                assert response.status == 503
+                assert "disconnected" in (await response.json())["reason"]
+            connected = True
+            async with session.get(url) as response:
+                assert response.status == 200
+    finally:
+        await runner.cleanup()

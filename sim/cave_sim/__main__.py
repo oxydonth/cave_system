@@ -126,6 +126,7 @@ async def run(config: Config) -> None:
         fritz_username=config.fritz_user,
         fritz_password=config.fritz_password,
         settings=settings,
+        connected=transport.connected.is_set,
     )
 
     runners = []

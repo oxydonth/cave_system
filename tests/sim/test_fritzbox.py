@@ -13,7 +13,7 @@ from requests.exceptions import HTTPError
 
 from cave_sim.clock import ManualClock
 from cave_sim.fritz import server
-from cave_sim.fritz.box import FakeFritzBox, md5_response, pbkdf2_response
+from cave_sim.fritz.box import FakeFritzBox, pbkdf2_response
 from cave_sim.home import DeviceSpec, parse_home
 from cave_sim.room import Room
 from cave_sim.testing import async_advance
@@ -27,11 +27,6 @@ def test_pbkdf2_response_matches_the_fritz_example() -> None:
     """The worked example of FRITZ!'s HTTP_Session-ID_EN.pdf."""
     response = pbkdf2_response("2$10000$5A1711$2000$5A1722", "1example!")
     assert response == "5A1722$1798a1672bca7c6463d6b245f82b53703b0f50813401b03e4045a5861e689adb"
-
-
-def test_md5_response_matches_the_fritz_example() -> None:
-    """The MD5 example of HTTP_Session-ID_EN.pdf, with a German umlaut."""
-    assert md5_response("1234567z", "äbc") == "1234567z-9e224a41eeefa284df7bb0f26c2913e2"
 
 
 class Box:
@@ -297,3 +292,83 @@ async def test_an_absent_thermostat_is_unavailable(
     sim.home.set_online("bad_heizung", True)
     await sim.async_refresh_fritzbox()
     assert hass.states.get("climate.bad_heizung").state == "heat"
+
+
+async def test_the_thermostat_s_own_window_detection(fritz: Box) -> None:
+    client = fritz.client()
+    await fritz.run(client.login)
+    fritz.box.detect_open_window(fritz.thermostat, 10)
+    device = (await fritz.run(client.get_devices))[0]
+    assert device.window_open is True
+    end = int(fritz.clock.now()) + 600
+    assert (
+        f"<windowopenactiveendtime>{end}</windowopenactiveendtime>" in fritz.box.device_list_xml()
+    )
+    assert device.target_temperature == 20.0  # "unchanged" is the default
+    assert fritz.thermostat.opening == 0.0
+
+    fritz.box.window_target = "off"
+    await fritz.run(client.update_devices)
+    assert client.get_device_by_ain(AIN).get_hkr_state() == "off"
+    fritz.clock.advance(601)
+    await fritz.run(client.update_devices)
+    device = client.get_device_by_ain(AIN)
+    assert device.window_open is False
+    assert device.target_temperature == 20.0
+
+
+async def test_a_locked_box_can_accept_a_command_without_effect(fritz: Box) -> None:
+    fritz.box.locked_command = "ignore"
+    fritz.thermostat.lock = True
+    client = fritz.client()
+    await fritz.run(client.login)
+    await fritz.run(client.set_target_temperature, AIN, 22.0)  # no error
+    assert fritz.thermostat.device_tsoll == 40
+    assert await fritz.run(client.get_target_temperature, AIN) == 20.0
+
+
+@pytest.mark.parametrize("window_target", ["unchanged", "off"])
+async def test_home_assistant_during_the_thermostat_s_window_detection(
+    hass: HomeAssistant, simulated_home: Any, window_target: str
+) -> None:
+    sim = await simulated_home(DEMO_BATHROOM)
+    sim.home.configure_fritzbox(window_target=window_target)
+    sim.home.detect_open_window("bad_heizung", 15)
+    await sim.async_refresh_fritzbox()
+
+    assert hass.states.get("binary_sensor.bad_heizung_open_window_detected").state == "on"
+    state = hass.states.get("climate.bad_heizung")
+    if window_target == "off":
+        assert state.state == "off"
+        assert state.attributes["temperature"] is None
+    else:
+        assert state.state == "heat"
+        assert state.attributes["temperature"] == 20.0
+
+
+@pytest.mark.parametrize("locked_command", ["refuse", "ignore"])
+async def test_a_lock_set_after_the_last_poll(
+    hass: HomeAssistant, simulated_home: Any, locked_command: str
+) -> None:
+    """Home Assistant checks the lock it last polled; in the gap the command reaches the box.
+
+    Refused, it reaches the caller as requests' HTTPError, not as a HomeAssistantError. Ignored,
+    the call succeeds and nothing changes, so only the missing confirmation shows it.
+    """
+    sim = await simulated_home(DEMO_BATHROOM)
+    sim.home.configure_fritzbox(locked_command=locked_command)
+    sim.home.set_fritz_lock("bad_heizung", lock=True)  # no refresh: Home Assistant does not know
+    call = hass.services.async_call(
+        "climate",
+        "set_temperature",
+        {"entity_id": "climate.bad_heizung", "temperature": 23.0},
+        blocking=True,
+    )
+    if locked_command == "refuse":
+        with pytest.raises(HTTPError) as error:
+            await call
+        assert not isinstance(error.value, HomeAssistantError)
+    else:
+        await call
+    await hass.async_block_till_done()
+    assert sim.home.fritzbox.thermostats[AIN].device_tsoll == 40
