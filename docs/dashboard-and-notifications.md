@@ -34,9 +34,38 @@ The texts of the dashboard are English. Room names are the `name` from the file.
 
 ### Generating it
 
-`./cave apply` generates the dashboard after it has validated and stored your `heating.yaml`
-(the command ships in a later pull request of work package 5). The generator can also be run
-by hand:
+`./cave apply` does three things, in this order, after you have edited `cave/heating.yaml`:
+
+1. It validates the file and stores it as the applied copy. An invalid file stops here: the
+   errors name the room and field, and nothing changes, not the applied copy, not the dashboard
+   and not Home Assistant.
+2. It regenerates `dashboards/heating.yaml` from the applied copy, in a one-off Home Assistant
+   container.
+3. It tells Home Assistant to reload `cave_heating`. Without a script token (before
+   `./cave bootstrap`) it says that Home Assistant has to be restarted instead
+   (`./cave restart homeassistant`).
+
+It ends with three lines that say what state each thing is in, for example:
+
+```text
+Applied copy:    updated
+Dashboard:       regenerated (dashboards/heating.yaml, shown at /cave-heating)
+Home Assistant:  cave_heating reloaded
+```
+
+Once the applied copy is stored, a later failure cannot undo it, so the command carries on and
+reports exactly what is left, and exits with status 1:
+
+| What failed | State afterwards | What to do |
+|---|---|---|
+| The dashboard could not be generated | The applied copy is new and the heating follows it. The dashboard file is untouched: it is the previous one and does not match. The generator's message is shown | Fix the cause it names and run `./cave apply` again |
+| Home Assistant is not running, or has no `cave_heating.reload` | Applied copy and dashboard are new. Home Assistant loads the applied copy when it starts | `./cave up`, or `./cave restart homeassistant` |
+| Home Assistant refused the reload | Applied copy and dashboard are new; the running configuration stays in effect, and its answer is shown | Fix what it names, or restart Home Assistant |
+
+Running `./cave apply` again with an unchanged file regenerates the dashboard and reloads
+anyway, which repairs a dashboard that went missing.
+
+The generator can also be run by hand:
 
 ```sh
 # On the server, in the Home Assistant container:

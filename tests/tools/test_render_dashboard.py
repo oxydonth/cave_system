@@ -463,7 +463,7 @@ def test_it_runs_as_a_script_without_the_repository_on_the_path(tmp_path: Path) 
     ]
 
     # The command is this interpreter running a file of this repository: nothing untrusted.
-    result = subprocess.run(command, capture_output=True, text=True, check=False, cwd=tmp_path)  # noqa: S603
+    result = subprocess.run(command, capture_output=True, text=True, check=False, cwd=tmp_path)
 
     assert result.returncode == 0, result.stderr
     assert output.read_text() == (GOLDEN / "one_room" / "dashboard.yaml").read_text()
