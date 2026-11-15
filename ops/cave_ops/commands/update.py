@@ -485,10 +485,9 @@ class _Update:
         return self.roll_back("it was interrupted (killed or a power cut) during the switch")
 
     def check_out_previous(self) -> list[str]:
+        # Always, and by force: a checkout that failed half-way leaves HEAD where it was but
+        # files of the new release in the working tree.
         switch = self._switch()
-        head = _server.git(self.ctx, "rev-parse", "--verify", "HEAD")
-        if head.ok and head.stdout.strip() == switch.from_commit:
-            return []
         self.ctx.say(f"Checking out {switch.from_label} ...")
         done = _server.git(self.ctx, "checkout", "--force", "--detach", switch.from_commit)
         if done.ok:
