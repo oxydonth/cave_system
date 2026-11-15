@@ -8,6 +8,7 @@ it with ``PYTHONPATH=ops python3 -m cave_ops.envfile > .env.example``).
 from __future__ import annotations
 
 import os
+import re
 import secrets
 import string
 import sys
@@ -92,7 +93,11 @@ VARIABLES: tuple[Variable, ...] = (
         "Optional: FRITZ!Box address (for example fritz.box) for the FRITZ! integrations.",
     ),
     Variable("CAVE_FRITZ_USER", "", "Optional: FRITZ!Box user for the FRITZ! integrations."),
-    Variable("CAVE_FRITZ_PASSWORD", "", "Optional: FRITZ!Box password."),
+    Variable(
+        "CAVE_FRITZ_PASSWORD",
+        "",
+        "Optional: FRITZ!Box password. In single quotes if it contains `$` or ` #`.",
+    ),
     Variable(
         "CAVE_AUTO_UPDATE",
         "1",
@@ -108,16 +113,24 @@ NAMES = tuple(v.name for v in VARIABLES)
 HEADER = (
     "# cave_system environment. Created by `./cave init`, which never changes an existing value.\n"
     "# Mode 0600, never committed. Docker Compose reads this file too.\n"
+    "# A value that contains `$` or ` #` must be written in single quotes: 'pa$$word'.\n"
 )
 EXAMPLE_HEADER = (
     "# Example of the `.env` file that `./cave init` creates in the checkout (mode 0600, never\n"
     "# committed). You normally do not copy this file: init writes the real one and generates the\n"
     "# passwords and tokens that are empty here. Docker Compose reads the real file as well.\n"
+    "#\n"
+    "# A value that contains `$` or ` #` must be written in single quotes: 'pa$$word'.\n"
 )
 
 
 def parse_env(text: str) -> dict[str, str]:
-    """Parse ``KEY=value`` lines. Comments and blank lines are skipped; quotes are removed."""
+    """Parse ``KEY=value`` lines the way Docker Compose reads the simple cases.
+
+    Comments and blank lines are skipped. A quoted value (single or double quotes) is taken up
+    to the closing quote; an unquoted one ends at ` #`. ``$`` is not interpolated, so a value
+    that contains ``$`` must be in single quotes, where Compose does not interpolate either.
+    """
     values: dict[str, str] = {}
     for raw in text.splitlines():
         line = raw.strip()
@@ -127,8 +140,10 @@ def parse_env(text: str) -> dict[str, str]:
             line = line[len("export ") :]
         key, _, value = line.partition("=")
         value = value.strip()
-        if len(value) >= 2 and value[0] == value[-1] and value[0] in "\"'":
-            value = value[1:-1]
+        if value[:1] in ("'", '"') and value.count(value[0], 1) > 0:
+            value = value[1 : value.index(value[0], 1)]
+        else:
+            value = re.split(r"\s+#", value, maxsplit=1)[0].rstrip()
         values[key.strip()] = value
     return values
 
@@ -155,6 +170,22 @@ def render_example() -> str:
     return EXAMPLE_HEADER + "\n" + render({})
 
 
+def _needs_value(var: Variable, existing: Mapping[str, str]) -> bool:
+    """A variable needs a value if it is absent, or empty where empty cannot work.
+
+    That is the case for the secrets that ``init`` generates (an empty password would be
+    accepted as "present" and never replaced) and for ``CAVE_DATA``.
+    """
+    if var.name not in existing:
+        return True
+    return existing[var.name] == "" and (var.generated or var.name == "CAVE_DATA")
+
+
+def missing_names(existing: Mapping[str, str]) -> list[str]:
+    """The variables of the table that ``existing`` (the parsed ``.env``) does not usably set."""
+    return [var.name for var in VARIABLES if _needs_value(var, existing)]
+
+
 def fresh_values(
     data_dir: Path,
     *,
@@ -166,7 +197,7 @@ def fresh_values(
     wanted = set(names)
     values: dict[str, str] = {}
     for var in VARIABLES:
-        if var.name not in wanted or (existing is not None and var.name in existing):
+        if var.name not in wanted or (existing is not None and not _needs_value(var, existing)):
             continue
         if var.name == "CAVE_DATA":
             values[var.name] = str(data_dir)
@@ -175,6 +206,27 @@ def fresh_values(
         else:
             values[var.name] = var.default
     return values
+
+
+def apply_updates(text: str, updates: Mapping[str, str]) -> str:
+    """Set ``updates`` in the text of a ``.env``, changing nothing else.
+
+    A variable that already has a line (an empty one) is changed in place; a variable that has
+    none is appended with its documentation.
+    """
+    appended: list[Variable] = []
+    for var in VARIABLES:
+        if var.name not in updates:
+            continue
+        pattern = re.compile(rf"^(\s*(?:export\s+)?){re.escape(var.name)}\s*=.*$", re.MULTILINE)
+        if pattern.search(text):
+            literal = f"{var.name}={updates[var.name]}".replace("\\", "\\\\")
+            text = pattern.sub(rf"\g<1>{literal}", text)
+        else:
+            appended.append(var)
+    if appended:
+        text = text.rstrip("\n") + "\n\n" + render(updates, appended)
+    return text
 
 
 def write_private(path: Path, text: str) -> None:

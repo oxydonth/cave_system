@@ -103,6 +103,11 @@ class Paths:
         return self.mosquitto_data / "passwd"
 
     @property
+    def mqtt_stamp(self) -> Path:
+        """Records which broker login ``passwd`` was written for (see ``init``)."""
+        return self.data / ".cave" / "mqtt-credentials"
+
+    @property
     def lock_file(self) -> Path:
         return self.data / ".cave" / "lock"
 
