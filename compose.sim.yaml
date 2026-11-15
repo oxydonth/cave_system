@@ -18,8 +18,8 @@ services:
     environment:
       TZ: ${TZ:-Europe/Berlin}
       CAVE_SIM_MQTT_HOST: mosquitto
-      CAVE_MQTT_USER: ${CAVE_MQTT_USER:-}
-      CAVE_MQTT_PASSWORD: ${CAVE_MQTT_PASSWORD:-}
+      CAVE_MQTT_USER: ${CAVE_MQTT_USER:-cave}
+      CAVE_MQTT_PASSWORD: ${CAVE_MQTT_PASSWORD:?run ./cave init first}
       CAVE_FRITZ_USER: ${CAVE_FRITZ_USER:-cave}
       CAVE_FRITZ_PASSWORD: ${CAVE_FRITZ_PASSWORD:?the simulated FRITZ!Box needs CAVE_FRITZ_PASSWORD}
     ports:

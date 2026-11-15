@@ -44,8 +44,9 @@ updates:
       python:
         patterns: ["*"]
 
-  # "/" for the Compose files at the repository root (compose.yaml, compose.sim.yaml); "/**/*" for
-  # Dockerfiles below it, such as sim/Dockerfile. A `**` glob does not match the root itself.
+  # "/" for the Compose files at the repository root (compose.yaml, compose.sim.yaml); a `**` glob
+  # does not match the root itself. cave-sim is the simulator image built locally from
+  # sim/Dockerfile (compose.sim.yaml), not something to look up in a registry.
   - package-ecosystem: docker-compose
     directories: ["/", "/**/*"]
     schedule:
@@ -54,12 +55,16 @@ updates:
       - dependency-name: ghcr.io/home-assistant/home-assistant
       - dependency-name: homeassistant/home-assistant
       - dependency-name: home-assistant/home-assistant
+      - dependency-name: cave-sim
     groups:
       compose-images:
         patterns: ["*"]
 
+  # Dockerfiles live below the root, such as sim/Dockerfile. Dependabot takes every file whose name
+  # contains "dockerfile" for one, so the build-context file next to it is excluded.
   - package-ecosystem: docker
-    directories: ["/", "/**/*"]
+    directories: ["/**/*"]
+    exclude-paths: ["*.dockerignore", "**/*.dockerignore"]
     schedule:
       interval: weekly
     ignore:

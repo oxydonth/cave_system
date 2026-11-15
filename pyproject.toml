@@ -25,7 +25,8 @@ dev = [
     # The client libraries of Home Assistant's MQTT and FRITZ!SmartHome integrations, pinned to
     # exactly the versions their manifests ask for (homeassistant/components/mqtt/manifest.json and
     # homeassistant/components/fritzbox/manifest.json in Home Assistant 2026.10.4). The test library
-    # does not install integration requirements, and the simulator tests drive the real clients.
+    # does not install integration requirements; it happens to require paho-mqtt itself, but not
+    # pyfritzhome. The simulator tests drive both real clients, and `make versions` checks the pins.
     # Bump together with Home Assistant; Dependabot ignores them.
     "paho-mqtt==2.1.0",
     "pyfritzhome==0.6.21",

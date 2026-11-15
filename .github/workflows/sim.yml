@@ -23,17 +23,20 @@ jobs:
         with:
           persist-credentials: false
 
-      - name: Validate compose.sim.yaml
+      - name: Validate compose.sim.yaml as an overlay on compose.yaml
         env:
+          # Placeholders: `config` only resolves them.
+          CAVE_DATA: /tmp/cave-validation
+          CAVE_MQTT_PASSWORD: validation-only
           CAVE_FRITZ_PASSWORD: validation-only
         run: |
-          if [ -f compose.yaml ]; then
-            docker compose -f compose.yaml -f compose.sim.yaml config --quiet
-          else
-            # Until the runtime stack exists, a stand-in for the mosquitto service it depends on.
-            printf 'services:\n  mosquitto:\n    image: %s\n' "${MOSQUITTO_IMAGE}" > "${RUNNER_TEMP}/stub.yaml"
-            docker compose -f "${RUNNER_TEMP}/stub.yaml" -f compose.sim.yaml --project-directory . config --quiet
-          fi
+          for profile in "" zigbee; do
+            COMPOSE_PROFILES="${profile}" docker compose -f compose.yaml -f compose.sim.yaml config --quiet
+          done
+          merged="$(docker compose -f compose.yaml -f compose.sim.yaml config --format json)"
+          jq -e '.services.sim.depends_on.mosquitto.condition == "service_healthy"' <<< "${merged}" > /dev/null
+          jq -e '[.services.sim.ports[] | "\(.host_ip):\(.published)"] | sort == ["127.0.0.1:8480", "127.0.0.1:8481"]' \
+            <<< "${merged}" > /dev/null
 
       - name: Build the image
         run: docker build -f sim/Dockerfile -t cave-sim:ci .
