@@ -1,0 +1,45 @@
+# Overlay adding the simulated devices to the stack, for the demo and the pipeline; never used at
+# home. Use it together with compose.yaml:
+#
+#   docker compose -f compose.yaml -f compose.sim.yaml up -d
+#
+# Home Assistant runs on the host network and reaches the fake FRITZ!Box at http://127.0.0.1:8480
+# and the control API at http://127.0.0.1:8481 (concept section 4.1); the simulator reaches the
+# broker over the Compose network as "mosquitto". The variables come from .env (concept section
+# 4.2): the broker login, and the FRITZ! login the fake box accepts, which bootstrap uses too.
+# The simulator's own variables are documented in sim/README.md.
+services:
+  sim:
+    build:
+      context: .
+      dockerfile: sim/Dockerfile
+    image: cave-sim:local
+    restart: unless-stopped
+    environment:
+      TZ: ${TZ:-Europe/Berlin}
+      CAVE_SIM_MQTT_HOST: mosquitto
+      CAVE_MQTT_USER: ${CAVE_MQTT_USER:-}
+      CAVE_MQTT_PASSWORD: ${CAVE_MQTT_PASSWORD:-}
+      CAVE_FRITZ_USER: ${CAVE_FRITZ_USER:-cave}
+      CAVE_FRITZ_PASSWORD: ${CAVE_FRITZ_PASSWORD:?the simulated FRITZ!Box needs CAVE_FRITZ_PASSWORD}
+    ports:
+      - "127.0.0.1:8480:8480"
+      - "127.0.0.1:8481:8481"
+    depends_on:
+      mosquitto:
+        condition: service_healthy
+    healthcheck:
+      test:
+        - CMD
+        - python
+        - -c
+        - "import urllib.request; urllib.request.urlopen('http://127.0.0.1:8481/api/health', timeout=4)"
+      interval: 10s
+      timeout: 5s
+      start_period: 10s
+      retries: 3
+    logging:
+      driver: json-file
+      options:
+        max-size: 10m
+        max-file: "3"

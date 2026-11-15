@@ -1,7 +1,7 @@
 name: CI
 
 # This file only lists jobs. A larger check lives in its own reusable workflow file
-# (stack.yml, e2e.yml, release.yml) and is added here as a short calling job that
+# (stack.yml, sim.yml, e2e.yml, release.yml) and is added here as a short calling job that
 # `ci-ok` also depends on. `ci-ok` is the one check to wait for: it fails when any other job
 # does. Branch protection is unavailable here, so GitHub does not enforce it.
 
@@ -89,12 +89,16 @@ jobs:
     name: stack
     uses: ./.github/workflows/stack.yml
 
+  sim:
+    name: sim
+    uses: ./.github/workflows/sim.yml
+
   ci-ok:
     name: ci-ok
     # Fails when any job it depends on failed, was cancelled or was skipped, so it can be the
     # one check to wait for. The list of jobs is `needs`; it is the only place to edit.
     if: always()
-    needs: [lint, test, hassfest, stack]
+    needs: [lint, test, hassfest, stack, sim]
     runs-on: ubuntu-24.04
     timeout-minutes: 5
     env:
