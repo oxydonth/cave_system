@@ -45,7 +45,7 @@ from typing import Any, TextIO
 from urllib.parse import urlsplit
 
 import aiohttp
-import yaml  # type: ignore[import-untyped]
+import yaml
 
 TOKEN_NAME = "cave-scripts"  # noqa: S105 - the token's name (concept section 4.5), not a secret
 TOKEN_LIFESPAN_DAYS = 3650
