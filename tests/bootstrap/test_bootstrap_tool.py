@@ -26,7 +26,9 @@ from homeassistant.helpers.json import json_bytes
 from tools.bootstrap import (
     DEFAULT_WEEK,
     TOKEN_NAME,
+    Api,
     Output,
+    Reply,
     Settings,
     WebSocket,
     main,
@@ -210,6 +212,25 @@ async def test_a_second_run_does_not_log_in(home: Home) -> None:
     assert second.ok, second.output
     create.assert_not_called()
     assert [t.client_name for t in user.refresh_tokens.values()] == [TOKEN_NAME]
+
+
+async def test_after_a_restart_without_onboarding_views_a_run_changes_nothing(home: Home) -> None:
+    # Started with onboarding complete, Home Assistant does not register /api/onboarding at all.
+    assert (await home.run()).ok
+    before = await snapshot(home)
+    original = Api.request
+
+    async def without_onboarding(self: Api, method: str, path: str, **kwargs: Any) -> Reply:
+        if path == "/api/onboarding":
+            return Reply(404, "404: Not Found")
+        return await original(self, method, path, **kwargs)
+
+    with patch.object(Api, "request", without_onboarding):
+        run = await home.run()
+
+    assert run.ok, run.output
+    assert "changed:" not in run.output
+    assert await snapshot(home) == before
 
 
 # ----------------------------------------------------------------------------- partial states

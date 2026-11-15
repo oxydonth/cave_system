@@ -360,8 +360,18 @@ class Bootstrap:
 
     # --- 1. Home Assistant answers
     async def onboarding_status(self) -> dict[str, bool]:
+        """Which onboarding steps are done, once Home Assistant answers.
+
+        A Home Assistant that starts with onboarding complete does not register the onboarding
+        views at all (``components/onboarding/__init__.py``), so 404 means every step is done.
+        The HTTP server starts listening once the frontend is set up (``components/http``), and
+        the frontend depends on onboarding, so the 404 never comes from an earlier moment.
+        """
+
         async def answered() -> dict[str, bool] | None:
             reply = await self.api.request("GET", "/api/onboarding")
+            if reply.status == 404:
+                return dict.fromkeys(ONBOARDING_STEPS, True)
             if reply.status != 200 or not isinstance(reply.body, list):
                 raise BootstrapError(f"/api/onboarding answered {reply.status}")
             return {item["step"]: bool(item["done"]) for item in reply.body}
