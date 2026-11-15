@@ -93,12 +93,16 @@ jobs:
     name: sim
     uses: ./.github/workflows/sim.yml
 
+  e2e:
+    name: e2e
+    uses: ./.github/workflows/e2e.yml
+
   ci-ok:
     name: ci-ok
     # Fails when any job it depends on failed, was cancelled or was skipped, so it can be the
     # one check to wait for. The list of jobs is `needs`; it is the only place to edit.
     if: always()
-    needs: [lint, test, hassfest, stack, sim]
+    needs: [lint, test, hassfest, stack, sim, e2e]
     runs-on: ubuntu-24.04
     timeout-minutes: 5
     env:

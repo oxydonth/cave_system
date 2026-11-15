@@ -1,0 +1,19 @@
+# The home description the first-run test applies before `./cave bootstrap`: two rooms that name
+# a schedule helper and one that does not. The thermostats do not exist; the bootstrap reads only
+# the rooms' schedules. Format: concept section 5.1.
+version: 1
+rooms:
+  - id: living_room
+    name: Wohnzimmer
+    trvs:
+      - entity: climate.wohnzimmer_heizung
+    schedule: schedule.living_room_heating
+  - id: bathroom
+    name: Bad
+    trvs:
+      - entity: climate.bad_heizung
+    schedule: schedule.bad_heizplan
+  - id: hall
+    name: Flur
+    trvs:
+      - entity: climate.flur_heizung

@@ -1,0 +1,110 @@
+name: End-to-end
+
+# The complete stack from a clean checkout (concept section 8, end-to-end level). This first
+# version covers first-run setup: `./cave init`, `./cave up`, `./cave bootstrap`, then
+# tests/e2e checks the result through Home Assistant's API with the stored script token, runs
+# the bootstrap again and proves that nothing changed, also after a deleted token file, a revoked
+# token, a changed owner password and a restart. The demo with simulated devices and the heating
+# scenarios follow once the simulators and cave_heating are merged. Called from ci.yml; its job
+# counts towards `ci-ok` through the one calling job.
+
+on:
+  workflow_call:
+
+permissions:
+  contents: read
+
+jobs:
+  e2e:
+    name: e2e
+    runs-on: ubuntu-24.04
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      # pytest and aiohttp for tests/e2e. The version equals UV_VERSION in ci.yml; a reusable
+      # workflow does not see that file's env.
+      - uses: astral-sh/setup-uv@68559e99cc807c1eb7e9238fd43a15bba460eec2 # v10.3.3
+        with:
+          version: "0.13.8"
+          enable-cache: true
+          cache-dependency-glob: uv.lock
+          cache-python: true
+
+      - run: make setup
+
+      - name: Initialise
+        run: ./cave init
+
+      - name: Pull the images
+        run: docker compose pull --quiet
+
+      - name: Start the stack and wait until it is healthy
+        run: ./cave up --timeout 420
+
+      - name: First-run setup, checked through Home Assistant's API, and run again
+        env:
+          CAVE_E2E: "1"
+        run: uv run --locked pytest tests/e2e -v -p no:cacheprovider
+
+      - name: Home Assistant logged no unexpected errors
+        run: |
+          # Home Assistant colours its log lines; remove the escape sequences before matching.
+          docker compose logs --no-color --no-log-prefix homeassistant 2>&1 |
+            sed 's/\x1b\[[0-9;]*m//g' > "${RUNNER_TEMP}/ha.log"
+          line_format='^[0-9-]+ [0-9:.]+ (DEBUG|INFO|WARNING|ERROR|CRITICAL) '
+          lines=$(grep -cE "${line_format}" "${RUNNER_TEMP}/ha.log" || true)
+          if [ "${lines}" -lt 10 ]; then
+            echo "::error::only ${lines} log lines match the expected format; has Home Assistant's log format changed?"
+            exit 1
+          fi
+
+          # Errors that are expected. Every entry is an extended regular expression matched
+          # against the whole log line, and says why it is harmless. Do not add one without a
+          # reason. There is none now.
+          allowed=(
+            '^$'
+          )
+
+          grep -E '^[0-9-]+ [0-9:.]+ (ERROR|CRITICAL) ' "${RUNNER_TEMP}/ha.log" > "${RUNNER_TEMP}/errors.log" || true
+          for pattern in "${allowed[@]}"; do
+            grep -vE "${pattern}" "${RUNNER_TEMP}/errors.log" > "${RUNNER_TEMP}/errors.next" || true
+            mv "${RUNNER_TEMP}/errors.next" "${RUNNER_TEMP}/errors.log"
+          done
+          if [ -s "${RUNNER_TEMP}/errors.log" ]; then
+            echo "::error::Home Assistant logged errors that are not on the allow-list:"
+            cat "${RUNNER_TEMP}/errors.log"
+            exit 1
+          fi
+          echo "no unexpected errors in $(wc -l < "${RUNNER_TEMP}/ha.log") log lines"
+
+      - name: Collect the logs, when something failed
+        if: failure()
+        run: |
+          mkdir -p "${RUNNER_TEMP}/logs"
+          ./cave logs --tail all > "${RUNNER_TEMP}/logs/compose.log" 2>&1 || true
+          # Written by the container as root.
+          sudo cp data/homeassistant/home-assistant.log "${RUNNER_TEMP}/logs/" || true
+          sudo chown -R "$(id -u)" "${RUNNER_TEMP}/logs"
+          # The logs must not carry a password; replace every generated secret before upload.
+          set -a
+          # shellcheck disable=SC1091
+          . ./.env
+          set +a
+          for secret in "${CAVE_HA_OWNER_PASSWORD}" "${CAVE_MQTT_PASSWORD}" "${CAVE_Z2M_FRONTEND_TOKEN}"; do
+            [ -n "${secret}" ] && sed -i "s/${secret}/********/g" "${RUNNER_TEMP}"/logs/*.log
+          done
+
+      - name: Upload the logs, when something failed
+        if: failure()
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: e2e-logs
+          path: ${{ runner.temp }}/logs
+          retention-days: 7
+
+      - name: Stop the stack
+        if: always()
+        run: ./cave down
