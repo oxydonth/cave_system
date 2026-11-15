@@ -1,0 +1,81 @@
+[project]
+name = "cave-system"
+version = "0.0.0"
+description = "Local-first home automation for a flat in Germany, heating first."
+readme = "README.md"
+# Home Assistant 2026.10.4 refuses anything below 3.14.2, and uv cannot resolve with ">=3.14".
+requires-python = ">=3.14.2"
+dependencies = []
+
+[dependency-groups]
+dev = [
+    "pytest",
+    "pytest-cov",
+    # Pins Home Assistant 2026.10.4. Bump together with the image tag in compose.yaml.
+    "pytest-homeassistant-custom-component==0.13.375",
+    "ruff",
+    "mypy",
+    "yamllint",
+    # Pre-built ShellCheck and actionlint binaries, so no system packages are needed.
+    "shellcheck-py",
+    "actionlint-py",
+]
+
+[tool.uv]
+# An application, not a distributable package: nothing here is built or installed.
+package = false
+
+[tool.pytest.ini_options]
+# custom_components must be importable from the repository root. Do not add
+# custom_components/__init__.py: Home Assistant's loader needs a namespace package.
+pythonpath = ["."]
+testpaths = ["tests"]
+# importlib: test files in different directories may share a basename.
+addopts = "-ra --strict-markers --strict-config --import-mode=importlib"
+asyncio_mode = "auto"
+
+[tool.coverage.run]
+branch = true
+
+[tool.coverage.report]
+show_missing = true
+skip_empty = true
+
+[tool.ruff]
+target-version = "py314"
+line-length = 100
+extend-exclude = [".claude", "data"]
+
+[tool.ruff.lint]
+select = [
+    "E", "W",   # pycodestyle
+    "F",        # pyflakes
+    "I",        # isort
+    "B",        # bugbear
+    "UP",       # pyupgrade
+    "SIM",      # simplify
+    "C4",       # comprehensions
+    "PT",       # pytest style
+    "RUF",      # ruff-specific
+    "ASYNC",    # blocking calls in async code
+    "T20",      # no print
+    "ERA",      # no commented-out code
+    "S",        # bandit
+]
+
+[tool.ruff.lint.isort]
+known-first-party = ["custom_components", "sim", "tools"]
+
+[tool.ruff.lint.per-file-ignores]
+"tests/**" = ["S101"]  # assert is how pytest tests state expectations
+
+[tool.mypy]
+python_version = "3.14"
+strict = true
+warn_unreachable = true
+# custom_components has no __init__.py (see above), so name modules from the repository root.
+explicit_package_bases = true
+mypy_path = "."
+# The paths to check are passed by `make typecheck`, which skips directories that
+# do not exist yet (sim/ and tools/ arrive in later work packages).
+exclude = ["^\\.venv/", "^\\.claude/", "^data/"]
