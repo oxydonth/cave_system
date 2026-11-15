@@ -1,13 +1,14 @@
 # yamllint reads tokens, not constructed objects, so Home Assistant's custom tags
 # (`!include`, `!secret`, `!include_dir_named`, ...) pass without special handling.
 # `make lint` passes the file list itself and skips .venv, .claude and data; the ignore
-# below covers running yamllint by hand.
+# below applies even to files passed explicitly. The patterns are anchored to the repository
+# root: a bare `data/` would also skip sim/demo/data/ and the like.
 extends: default
 
 ignore: |
-  .venv/
-  .claude/
-  data/
+  /.venv/
+  /.claude/
+  /data/
 
 rules:
   line-length:
