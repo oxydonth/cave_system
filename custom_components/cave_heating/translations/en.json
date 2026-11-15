@@ -1,0 +1,212 @@
+{
+  "config": {
+    "step": {
+      "user": {
+        "title": "Cave Heating",
+        "description": "Cave Heating sets itself up from the file cave/heating.yaml on the server."
+      }
+    },
+    "abort": {
+      "already_configured": "Cave Heating is already set up.",
+      "configured_by_file": "Cave Heating is configured through the file cave/heating.yaml on the server and applied with ./cave apply. It sets itself up when Home Assistant starts; there is nothing to add here."
+    }
+  },
+  "device": {
+    "home": {
+      "name": "Home"
+    }
+  },
+  "entity": {
+    "binary_sensor": {
+      "home_occupied": {
+        "name": "Occupied"
+      },
+      "problem": {
+        "name": "Problem",
+        "state_attributes": {
+          "messages": {
+            "name": "Messages"
+          },
+          "thermostats": {
+            "name": "Thermostats"
+          }
+        }
+      },
+      "window_open": {
+        "name": "Window open"
+      }
+    },
+    "button": {
+      "resume_schedule": {
+        "name": "Resume schedule"
+      }
+    },
+    "climate": {
+      "room": {
+        "state_attributes": {
+          "boost_until": {
+            "name": "Boost until"
+          },
+          "override_until": {
+            "name": "Override until"
+          },
+          "preset_mode": {
+            "state": {
+              "away": "Away",
+              "boost": "Boost",
+              "comfort": "Comfort",
+              "eco": "Eco",
+              "none": "Manual"
+            }
+          },
+          "reason": {
+            "name": "Reason",
+            "state": {
+              "away": "Away",
+              "boost": "Boost",
+              "comfort": "Comfort",
+              "eco": "Eco",
+              "override": "Override",
+              "room_off": "Room off",
+              "summer": "Summer",
+              "window": "Window open"
+            }
+          }
+        }
+      }
+    },
+    "number": {
+      "away_temperature": {
+        "name": "Away temperature"
+      },
+      "comfort_temperature": {
+        "name": "Comfort temperature"
+      },
+      "eco_temperature": {
+        "name": "Eco temperature"
+      }
+    },
+    "select": {
+      "home_mode": {
+        "name": "Mode",
+        "state": {
+          "auto": "Auto",
+          "away": "Away",
+          "off": "Off (summer)"
+        }
+      }
+    },
+    "sensor": {
+      "reason": {
+        "name": "Reason",
+        "state": {
+          "away": "Away",
+          "boost": "Boost",
+          "comfort": "Comfort",
+          "eco": "Eco",
+          "override": "Override",
+          "room_off": "Room off",
+          "summer": "Summer",
+          "window": "Window open"
+        }
+      }
+    }
+  },
+  "exceptions": {
+    "no_room": {
+      "message": "The target contains no room thermostat of Cave Heating. Choose a room thermostat (climate.cave_ followed by the room id), or the device or area of a room."
+    },
+    "not_a_room": {
+      "message": "{entity} is not a room thermostat of Cave Heating. Choose a room thermostat (climate.cave_ followed by the room id), or the device or area of a room."
+    },
+    "not_loaded": {
+      "message": "Cave Heating is not loaded."
+    },
+    "refused_room_off": {
+      "message": "{room} is switched off. Switch the room on before setting a temperature or preset."
+    },
+    "refused_summer": {
+      "message": "The heating is off for the summer (home mode off), so {room} cannot be set. Switch the home mode to auto first."
+    },
+    "reload_failed": {
+      "message": "The applied heating.yaml cannot be used, so the previous configuration stays in effect: {errors}"
+    },
+    "unknown_thermostat": {
+      "message": "{entity} is not a thermostat of any room in heating.yaml."
+    }
+  },
+  "issues": {
+    "applied_file_invalid": {
+      "title": "The heating configuration is not valid",
+      "description": "Cave Heating started without rooms because the applied file {path} is not valid:\n\n{errors}\n\nCorrect cave/heating.yaml on the server and run ./cave apply."
+    },
+    "applied_file_missing": {
+      "title": "The heating configuration is missing",
+      "description": "Cave Heating started without rooms because the applied file {path} does not exist. Describe the rooms in cave/heating.yaml on the server and run ./cave apply."
+    },
+    "disagreeing": {
+      "title": "{room}: {entity} keeps changing back",
+      "description": "The thermostat {entity} in {room} kept differing from what is wanted, so that its command budget was used up for {hours} hours in a row. To spare its battery it is now only tried again from time to time. Check whether the thermostat runs its own schedule or window detection, or whether something else controls it."
+    },
+    "missing_entity": {
+      "title": "{room}: {entity} does not exist",
+      "description": "heating.yaml names {entity} as {field} of the room {room}, but Home Assistant has no such entity. The room treats it as unavailable. Pair the device, or correct cave/heating.yaml and run ./cave apply."
+    },
+    "reload_invalid": {
+      "title": "The new heating configuration was not loaded",
+      "description": "Reloading {path} failed, so the previous configuration stays in effect:\n\n{errors}\n\nCorrect cave/heating.yaml on the server and run ./cave apply again."
+    },
+    "unresponsive": {
+      "title": "{room}: {entity} does not respond",
+      "description": "The thermostat {entity} in {room} did not confirm its commands, also after they were resent. It is tried again regularly. Check its battery and its connection."
+    }
+  },
+  "services": {
+    "boost": {
+      "name": "Boost",
+      "description": "Heats the chosen rooms at the boost temperature for a while.",
+      "fields": {
+        "duration": {
+          "name": "Duration",
+          "description": "How long the boost lasts. Default: the room's boost_duration from heating.yaml."
+        },
+        "temperature": {
+          "name": "Temperature",
+          "description": "The temperature to heat at. Default: the room's boost_temperature from heating.yaml."
+        }
+      }
+    },
+    "hold": {
+      "name": "Hold a thermostat",
+      "description": "Keeps the controller away from one thermostat: it sends the thermostat nothing and adopts nothing from it until it is released or the hold ends by itself. Used by ./cave device-check.",
+      "fields": {
+        "duration": {
+          "name": "Duration",
+          "description": "How long the hold lasts at most, up to four hours. Default: 15 minutes."
+        },
+        "entity_id": {
+          "name": "Thermostat",
+          "description": "The thermostat's climate entity, as named in heating.yaml."
+        }
+      }
+    },
+    "release": {
+      "name": "Release a thermostat",
+      "description": "Ends a hold. The thermostat is then brought in line with its room.",
+      "fields": {
+        "entity_id": {
+          "name": "Thermostat",
+          "description": "The thermostat's climate entity, as named in heating.yaml."
+        }
+      }
+    },
+    "reload": {
+      "name": "Reload",
+      "description": "Reads the applied copy of heating.yaml again. If it is not valid, the running configuration stays in effect."
+    },
+    "resume_schedule": {
+      "name": "Resume schedule",
+      "description": "Ends a boost or override in the chosen rooms."
+    }
+  }
+}
