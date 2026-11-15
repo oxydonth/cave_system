@@ -14,7 +14,8 @@ import pytest
 from freezegun.api import FrozenDateTimeFactory
 from homeassistant import block_async_io
 from homeassistant.config_entries import SOURCE_USER, ConfigEntryState
-from homeassistant.core import HomeAssistant
+from homeassistant.const import EVENT_HOMEASSISTANT_STARTED
+from homeassistant.core import CoreState, HomeAssistant
 from homeassistant.data_entry_flow import FlowResultType
 from homeassistant.exceptions import ServiceValidationError
 from homeassistant.helpers import area_registry as ar
@@ -602,3 +603,40 @@ async def test_diagnostics_show_the_controller_state(hass: HomeAssistant, home: 
     }
     assert living["thermostats"]["climate.living_trv"]["status"] == "ok"
     json.dumps(data)
+
+
+async def test_entities_not_loaded_while_home_assistant_starts_are_not_reported_missing(
+    hass: HomeAssistant, home: FakeHome, freezer: FrozenDateTimeFactory
+) -> None:
+    """Device integrations may load after cave_heating; only after the start is absent missing."""
+    hass.set_state(CoreState.not_running)
+    await home.start(
+        config(room("living_room", "climate.later", temperature_sensor="sensor.never"))
+    )
+    problem = "binary_sensor.cave_living_room_problem"
+    assert home.state(problem).state == "off"
+    assert not ir.async_get(hass).issues
+    trv = await home.thermostat("climate.later", target=18.0)
+    await home.advance(freezer, 3 * SEC)
+    assert trv.commands == [("set_temperature", {"temperature": 21.0})]
+    hass.set_state(CoreState.running)
+    hass.bus.async_fire(EVENT_HOMEASSISTANT_STARTED)
+    await hass.async_block_till_done()
+    assert home.state(problem).attributes["messages"] == [
+        "sensor.never (temperature_sensor) does not exist"
+    ]
+    assert ir.async_get(hass).async_get_issue(DOMAIN, "missing_living_room_sensor.never")
+
+
+async def test_nobody_home_at_start_counts_from_when_the_last_person_left(
+    hass: HomeAssistant, home: FakeHome, freezer: FrozenDateTimeFactory
+) -> None:
+    """A restart does not restart the away delay."""
+    await home.thermostat("climate.a", target=21.0)
+    home.set("person.max", "not_home")
+    await home.advance(freezer, timedelta(hours=1))
+    await home.start(
+        config(room("living_room", "climate.a"), presence="person.max", away_delay="00:30:00")
+    )
+    assert home.state("binary_sensor.cave_home_occupied").state == "off"
+    assert home.state("climate.cave_living_room").attributes["reason"] == "away"

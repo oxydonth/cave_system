@@ -931,3 +931,32 @@ async def test_setting_refused_by_home_assistant_is_reported(
     [message] = problem.attributes["messages"]
     assert message.startswith(f"setting {SENSOR_SELECT} was refused: Option remote_temperature")
     assert trv.commands == []
+
+
+async def test_numeric_setting_is_written_as_a_number(hass: HomeAssistant, home: FakeHome) -> None:
+    """A number entity in the settings block, for example a temperature offset."""
+    await home.thermostat("climate.trv", target=21.0)
+    offset = FakeNumber("number.trv_offset", 0.0)
+    await home.add(offset)
+    await start(home, {"entity": "climate.trv", "settings": {"number.trv_offset": 1.5}})
+    await home.settle()
+    assert offset.writes == [1.5]
+
+
+async def test_hand_change_still_settling_when_a_window_pause_starts_is_not_adopted(
+    hass: HomeAssistant, home: FakeHome, freezer: FrozenDateTimeFactory
+) -> None:
+    """Whether to adopt is decided when the changes have settled; then the radiators are off."""
+    trv = await home.thermostat("climate.late_turn", target=21.0)
+    home.set("binary_sensor.window", "off")
+    await start(home, "climate.late_turn", windows=["binary_sensor.window"], window_open_delay=0)
+    consume_first_report(trv)
+    trv.turn_dial(23.0)
+    await home.advance(freezer, 10 * SEC)
+    home.set("binary_sensor.window", "on")
+    await home.advance(freezer, 30 * SEC)
+    assert trv.commands == [], "nothing is sent while the hand changes settle"
+    await home.advance(freezer, 10 * SEC)
+    assert home.state(LIVING).attributes["reason"] == "window"
+    assert home.state(LIVING).attributes["temperature"] == 21.0
+    assert trv.commands == [OFF]
