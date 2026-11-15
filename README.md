@@ -15,7 +15,7 @@ Everything runs through [uv](https://docs.astral.sh/uv/) and `make`. The only pr
 
 ```sh
 make setup   # install Python 3.14 and all dependencies
-make check   # lint, typecheck and test: what the pipeline runs, apart from hassfest
+make check   # lint, type check and tests: everything that can run locally
 ```
 
 | Command | Does |
@@ -25,8 +25,8 @@ make check   # lint, typecheck and test: what the pipeline runs, apart from hass
 | `make format` | Apply Ruff fixes and formatting |
 | `make typecheck` | mypy `--strict` on `custom_components`, `sim` and `tools` |
 | `make test` | pytest with coverage |
-| `make check` | `lint`, `typecheck` and `test` |
+| `make check` | `lint`, `typecheck` and `test`: everything that can run locally |
 
-Configuration lives in `pyproject.toml` (dependencies, pytest, Ruff, mypy) and `.yamllint`. The pipeline is `.github/workflows/ci.yml`; its single required check is `ci-ok`. hassfest, Home Assistant's validator for integrations, runs only there because it needs Docker. After editing dependencies in `pyproject.toml`, run `uv lock`.
+Configuration lives in `pyproject.toml` (dependencies, pytest, Ruff, mypy) and `.yamllint`. The pipeline is `.github/workflows/ci.yml`; the one check to wait for is `ci-ok`. hassfest, Home Assistant's validator for integrations, runs only in the pipeline because it needs Docker, so a green `make check` does not replace a green pipeline. After editing dependencies in `pyproject.toml`, run `uv lock`.
 
 Contributors and coding agents: see [CLAUDE.md](CLAUDE.md) for the delivery rules, and the [concept](docs/concept.md) and [work packages](docs/work-packages.md) for what is being built and how.

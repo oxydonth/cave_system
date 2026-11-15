@@ -41,6 +41,12 @@ branch = true
 show_missing = true
 skip_empty = true
 
+# Everything targets Python 3.14, except the planned ops/ package (the `cave` command-line tool),
+# which must run on the server's system Python, 3.11 or newer, with the standard library only.
+# When it arrives it gets its own ops/ruff.toml (`extend = "../pyproject.toml"` and
+# `target-version = "py311"`; Ruff uses the closest config file) and a separate
+# `mypy --python-version 3.11 ops` run in `make typecheck`. Nothing below is specific to 3.14
+# apart from these two settings.
 [tool.ruff]
 target-version = "py314"
 line-length = 100

@@ -2,7 +2,8 @@ name: CI
 
 # This file only lists jobs. A larger check lives in its own reusable workflow file
 # (stack.yml, e2e.yml, release.yml) and is added here as a short calling job that
-# `ci-ok` also depends on. `ci-ok` is the single required status check.
+# `ci-ok` also depends on. `ci-ok` is the one check to wait for: it fails when any other job
+# does. Branch protection is unavailable here, so GitHub does not enforce it.
 
 on:
   pull_request:
@@ -70,7 +71,7 @@ jobs:
   ci-ok:
     name: ci-ok
     # Fails when any job it depends on failed, was cancelled or was skipped, so it can be
-    # the one required check. Add every new job to `needs` and to `env` below.
+    # the one check to wait for. Add every new job to `needs` and to `env` below.
     if: always()
     needs: [lint, test, hassfest]
     runs-on: ubuntu-24.04
