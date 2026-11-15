@@ -588,9 +588,11 @@ async def test_a_hold_is_not_restored_after_a_restart(
 
 
 async def test_diagnostics_show_the_controller_state(hass: HomeAssistant, home: FakeHome) -> None:
-    """Rooms, decisions, thermostats and feeds."""
+    """Rooms, decisions, thermostats and feeds; who is at home is redacted."""
     await two_thermostats(home)
-    entry = await home.start(two_rooms())
+    home.set("person.max", "not_home")
+    entry = await home.start({**two_rooms(), "presence": "person.max"})
+    assert home.runtime().diagnostics()["home"]["presence"] == {"person.max": "not_home"}
     data = await async_get_config_entry_diagnostics(hass, entry)
     assert data["loaded"] is True
     assert data["timing"]["confirm_timeout"] == "0:05:00"
