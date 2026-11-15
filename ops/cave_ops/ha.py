@@ -60,6 +60,15 @@ def read_token(paths: Paths) -> str | None:
             f"cannot read the script token {paths.token}: {error.strerror}. "
             "It must be readable by the user that runs ./cave."
         ) from error
+    except (OSError, UnicodeDecodeError) as error:
+        raise CaveError(f"cannot read the script token {paths.token}: {error}") from error
+    if token and not (
+        token.isascii() and token.isprintable() and not any(c.isspace() for c in token)
+    ):
+        raise CaveError(
+            f"the script token {paths.token} is not a single line of printable characters. "
+            "Remove it and run `./cave bootstrap` again to create a new one."
+        )
     return token or None
 
 
@@ -88,7 +97,7 @@ class HAClient:
             body = json.dumps(payload).encode()
         try:
             status, raw = self._transport(method, self._base + path, headers, body, self._timeout)
-        except (OSError, TimeoutError, http.client.HTTPException) as error:
+        except (OSError, TimeoutError, ValueError, http.client.HTTPException) as error:
             raise HAUnreachable(f"cannot reach Home Assistant at {self._base}: {error}") from error
         if status >= 400:
             raise HAError(status, raw.decode(errors="replace").strip()[:300])

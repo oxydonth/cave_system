@@ -75,7 +75,7 @@ class Call:
 @dataclass
 class _Rule:
     prefix: tuple[str, ...]
-    responses: list[tuple[int, str, str]]
+    responses: list[tuple[int, str | Callable[[Call], str], str]]
     side_effect: Callable[[Call], None] | None
     used: int = 0
 
@@ -85,6 +85,7 @@ class FakeRunner:
 
     ``on(prefix, rc=0, out="", err="")`` answers every call whose arguments start with
     ``prefix``. Later rules win over earlier ones, so a test can override a default.
+    ``out`` may be a function of the ``Call`` when the output depends on it.
     ``sequence=[(rc, out, err), ...]`` answers successive calls in order, repeating the last.
     ``side_effect(call)`` runs when the rule matches, to create files the command would create.
     A command with no matching rule raises ``AssertionError``.
@@ -99,7 +100,7 @@ class FakeRunner:
         prefix: Sequence[str],
         *,
         rc: int = 0,
-        out: str = "",
+        out: str | Callable[[Call], str] = "",
         err: str = "",
         sequence: Sequence[tuple[int, str, str]] | None = None,
         side_effect: Callable[[Call], None] | None = None,
@@ -127,7 +128,7 @@ class FakeRunner:
                 rc, out, err = rule.responses[index]
                 if rule.side_effect is not None:
                     rule.side_effect(call)
-                result = Result(call.args, rc, out, err)
+                result = Result(call.args, rc, out(call) if callable(out) else out, err)
                 if check and not result.ok:
                     raise CommandError(result)
                 return result

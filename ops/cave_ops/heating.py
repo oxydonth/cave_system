@@ -25,7 +25,7 @@ if TYPE_CHECKING:
     from .context import Context
 
 VALIDATOR_MODULE = "custom_components.cave_heating.validate"
-STAGED_NAME = ".validating.yaml"
+STAGED_PREFIX = ".validating-"
 
 
 @dataclass(frozen=True)
@@ -67,12 +67,20 @@ def store_applied(ctx: Context, source: Path | bytes) -> bool:
 
 
 def _validate_snapshot(ctx: Context, content: bytes, label: str) -> tuple[bool, tuple[str, ...]]:
-    """Validate ``content`` by running the validator on a staged copy of exactly these bytes."""
-    staged = ctx.paths.ha_config / "cave" / STAGED_NAME
-    staged.parent.mkdir(parents=True, exist_ok=True)
-    staged.write_bytes(content)
-    container_file = f"{CONTAINER_CONFIG}/cave/{STAGED_NAME}"
+    """Validate ``content`` by running the validator on a staged copy of exactly these bytes.
+
+    The staged file has a name of its own for every run, so two runs at the same time (``apply``
+    does not hold the lock) never validate each other's bytes or delete each other's file.
+    """
+    cave_dir = ctx.paths.ha_config / "cave"
+    cave_dir.mkdir(parents=True, exist_ok=True)
+    fd, staged_name = tempfile.mkstemp(dir=cave_dir, prefix=STAGED_PREFIX, suffix=".yaml")
+    staged = Path(staged_name)
     try:
+        with os.fdopen(fd, "wb") as handle:
+            handle.write(content)
+        os.chmod(staged, 0o644)
+        container_file = f"{CONTAINER_CONFIG}/cave/{staged.name}"
         result = run_in_homeassistant(
             ctx, ["-m", VALIDATOR_MODULE, container_file], workdir=CONTAINER_CONFIG
         )
@@ -87,8 +95,8 @@ def validate(ctx: Context, source: Path | None = None) -> tuple[bool, tuple[str,
     """Run the validator on ``source`` (default: the edited file) in a one-off container.
 
     Returns ``(valid, messages)``. The file is read once and a copy of those bytes is staged in
-    the state directory (``cave/.validating.yaml``, removed afterwards), because the container
-    sees only ``/config`` and the file may change while the container starts. Any non-zero
+    the state directory (``cave/.validating-<random>.yaml``, removed afterwards), because the
+    container sees only ``/config`` and the file may change while the container starts. Any non-zero
     exit status counts as invalid, including a container that could not run; its output is
     the message, with the staged file's name replaced by ``source``.
     """

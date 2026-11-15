@@ -2,7 +2,7 @@
 # Prepare a Debian 13 or Raspberry Pi OS 64-bit host for cave_system (concept section 11):
 #
 #   * Docker Engine and the Compose plugin, from Docker's own package repository
-#   * Git and Python 3 (the `cave` command needs Python 3.11 or newer)
+#   * Git, an SSH client and Python 3 (the `cave` command needs Python 3.11 or newer)
 #   * the service user (home /var/lib/cave-home), /opt/cave (the checkout) and /var/lib/cave (the state)
 #
 # Idempotent: every step first looks whether it is already done. Run it as root:
@@ -117,7 +117,7 @@ ARCH=$(dpkg --print-architecture 2>/dev/null || echo arm64)
 # --- packages
 say "[1/5] Base packages"
 missing=""
-for pkg in ca-certificates curl git gnupg python3; do
+for pkg in ca-certificates curl git gnupg openssh-client python3; do
   if dpkg -s "$pkg" >/dev/null 2>&1; then
     say "  $pkg: installed"
   else

@@ -169,7 +169,7 @@ Because code is read-only and state lives elsewhere, moving the server to anothe
 | Variable | Set by | Read by | Meaning |
 |---|---|---|---|
 | `CAVE_DATA` | init, default as above | Compose, every command | State directory |
-| `TZ` | init, default `Europe/Berlin` | all services | Time zone |
+| `TZ` | init, default `Europe/Berlin` | all services; `cave bootstrap` for Home Assistant's own time zone, units, country and currency, which are not in `configuration.yaml` | Time zone |
 | `COMPOSE_PROFILES` | owner; empty, or `zigbee` once a coordinator is connected | Compose | Whether Zigbee2MQTT runs |
 | `CAVE_MQTT_USER`, `CAVE_MQTT_PASSWORD` | init, password generated | Mosquitto's password file, Zigbee2MQTT, bootstrap, simulators | Broker login |
 | `CAVE_HA_OWNER_NAME`, `CAVE_HA_OWNER_USER`, `CAVE_HA_OWNER_PASSWORD` | init, password generated | bootstrap | Home Assistant's owner account |

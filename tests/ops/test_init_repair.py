@@ -181,3 +181,42 @@ def test_the_tools_mount_source_is_created_by_init_not_by_docker(run_cave, check
     run_cave("init")
 
     assert (checkout / "tools").is_dir()
+
+
+@pytest.mark.parametrize(
+    ("name", "default"),
+    [("CAVE_MQTT_USER", "cave"), ("TZ", "Europe/Berlin"), ("CAVE_Z2M_ADAPTER", "ember")],
+)
+def test_an_empty_value_that_compose_replaces_by_a_default_is_set_to_that_default(
+    run_cave, checkout, name, default
+):
+    """Compose reads ${VAR:-default} as the default for an empty value, so cave must agree."""
+    run_cave("init")
+    edit_env(checkout, f"{name}={default}", f"{name}=")
+
+    result = run_cave("init")
+
+    assert "Nothing to do" not in result.out
+    assert load_env(checkout / ".env")[name] == default
+    assert_can_start(checkout)
+
+
+def test_an_empty_broker_user_does_not_leave_a_password_file_for_nobody(run_cave, checkout):
+    run_cave("init")
+    edit_env(checkout, "CAVE_MQTT_USER=cave", "CAVE_MQTT_USER=")
+
+    run_cave("init")
+
+    values = load_env(checkout / ".env")
+    text = (checkout / "data/mosquitto/passwd").read_text()
+    assert values["CAVE_MQTT_USER"] == "cave"
+    assert text.startswith("cave:")
+    assert accepts(text, "cave", values["CAVE_MQTT_PASSWORD"])
+    assert not text.startswith(":")
+
+
+def test_optional_values_may_stay_empty(run_cave, checkout):
+    run_cave("init")
+
+    assert run_cave("init").out.startswith("Nothing to do")  # the empty FRITZ! variables stay empty
+    assert load_env(checkout / ".env")["CAVE_FRITZ_HOST"] == ""

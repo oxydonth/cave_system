@@ -52,3 +52,5 @@ def notify(ctx: Context, title: str, message: str) -> Notification:
         return Notification("persistent_notification")
     except CaveError as error:
         return Notification(None, str(error))
+    except Exception as error:  # the contract: whatever goes wrong, never raise
+        return Notification(None, f"unexpected {type(error).__name__}: {error}")

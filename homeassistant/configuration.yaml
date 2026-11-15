@@ -36,7 +36,9 @@ ssdp:
 #   dhcp                  discovery by DHCP sniffing; devices are added by name, not discovered
 #   conversation, assist_pipeline, media_source, file, energy, usage_prediction, my
 #                         voice, media and energy features that are out of scope
-# Push notifications to the phone apps do not need `cloud`: the apps use their own relay.
+# Push notifications to the phone apps do not need `cloud`: the apps use their own relay (the
+# one connection to the internet that concept 7 accepts). Home Assistant's built-in `brands`
+# integration still fetches an icon from brands.home-assistant.io when one is shown.
 
 # Keep the database small and its writes rare, which matters on an SSD or SD card. Heating
 # graphs need weeks, not years.
@@ -44,9 +46,10 @@ recorder:
   purge_keep_days: 30
   commit_interval: 30
 
-# Only warnings and errors, plus two kinds of line that the pipeline's stack job reads:
-# "Setting up <integration>" (to see that `cave_heating` was loaded) and "Home Assistant
-# initialized" (to know that start-up is over before it looks for errors).
+# Only warnings and errors, plus two kinds of line that others read: "Setting up <integration>"
+# (the pipeline's stack job, to see that `cave_heating` was loaded) and "Home Assistant
+# initialized" (the health check in compose.yaml, which is not healthy before it, and the stack
+# job). Removing these levels would make Home Assistant never healthy.
 logger:
   default: warning
   logs:

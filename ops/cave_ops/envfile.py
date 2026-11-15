@@ -174,11 +174,14 @@ def _needs_value(var: Variable, existing: Mapping[str, str]) -> bool:
     """A variable needs a value if it is absent, or empty where empty cannot work.
 
     That is the case for the secrets that ``init`` generates (an empty password would be
-    accepted as "present" and never replaced) and for ``CAVE_DATA``.
+    accepted as "present" and never replaced) and for every variable that has a default:
+    Docker Compose fills in `${VAR:-default}` for an empty value, so `cave` and Compose would
+    disagree about it (the broker's login, the time zone, the coordinator driver). Only the
+    optional variables, whose default is empty, may be empty.
     """
     if var.name not in existing:
         return True
-    return existing[var.name] == "" and (var.generated or var.name == "CAVE_DATA")
+    return existing[var.name] == "" and (var.generated or var.default != "")
 
 
 def missing_names(existing: Mapping[str, str]) -> list[str]:

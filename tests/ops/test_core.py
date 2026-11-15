@@ -573,3 +573,81 @@ def test_the_service_hook_lets_a_fake_react_to_a_call(ctx, fake_ha, write_token)
     ctx.ha().call_service("climate", "set_temperature", {"temperature": 21.5})
 
     assert ctx.ha().get_state("climate.x")["attributes"]["temperature"] == 21.5
+
+
+# ------------------------------------------------------------------------ malformed tokens
+
+
+@pytest.fixture(params=["two_lines", "directory", "not_utf8", "non_ascii", "inner_space"])
+def damaged_token(request, ctx):
+    path = ctx.paths.token
+    path.parent.mkdir(parents=True, exist_ok=True)
+    if request.param == "two_lines":
+        path.write_text("abc\ndef\n")
+    elif request.param == "directory":
+        path.mkdir()
+    elif request.param == "not_utf8":
+        path.write_bytes(b"\xff\xfe\xfd")
+    elif request.param == "non_ascii":
+        path.write_text("tökën\n", encoding="utf-8")
+    else:
+        path.write_text("abc def\n")
+    return request.param
+
+
+def test_a_damaged_token_is_a_clear_error_where_one_is_required(ctx, damaged_token):
+    with pytest.raises(CaveError) as raised:
+        read_token(ctx.paths)
+
+    assert str(ctx.paths.token) in str(raised.value)
+    with pytest.raises(CaveError):
+        ctx.ha()
+
+
+def test_a_damaged_token_does_not_break_notify(ctx, damaged_token, journal):
+    result = notify(ctx, "Update", "rolled back")
+
+    assert not result.delivered
+    assert str(ctx.paths.token) in (result.error or "")
+    assert journal == ["Update: rolled back"]
+
+
+def test_a_damaged_token_makes_the_health_check_say_so_instead_of_crashing(
+    ctx, fake_runner, damaged_token, clock
+):
+    stack(fake_runner, ["a"], ps(a=("running", "healthy")))
+
+    health = check_health(ctx)
+    waited = wait_healthy(ctx, timeout=10, interval=5)
+
+    assert not health.healthy
+    assert "Home Assistant API" in health.problems[0]
+    assert not waited.healthy
+    assert clock.now == 10
+
+
+def test_a_transport_that_rejects_the_request_is_unreachable_not_a_crash(ctx, write_token):
+    write_token()
+
+    def rejects(method, url, headers, body, timeout):
+        raise ValueError("Invalid header value")
+
+    ctx.transport = rejects
+
+    with pytest.raises(HAUnreachable):
+        ctx.ha().config()
+
+
+def test_notify_survives_any_exception_from_home_assistant_code(ctx, write_token, journal):
+    write_token()
+
+    def broken(method, url, headers, body, timeout):
+        raise RuntimeError("something nobody expected")
+
+    ctx.transport = broken
+
+    result = notify(ctx, "Update", "ok")
+
+    assert not result.delivered
+    assert "RuntimeError" in (result.error or "")
+    assert journal == ["Update: ok"]

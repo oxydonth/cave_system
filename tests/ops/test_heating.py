@@ -7,6 +7,7 @@ tests pin how it is called and what is done with its verdict.
 from __future__ import annotations
 
 import os
+import re
 import time
 
 import pytest
@@ -15,6 +16,12 @@ from cave_ops.heating import store_applied, validate, validate_and_store
 
 VALID = "version: 1\nrooms: []\n"
 VALIDATOR = ["docker", "compose", "run"]
+# The staged copy has a name of its own for every run, in the state directory and in the container.
+STAGED_PATH = re.compile(r"/config/cave/\.validating-[A-Za-z0-9_]+\.yaml")
+
+
+def staged_files(home):
+    return sorted((home.ha_config / "cave").glob(".validating-*"))
 
 
 @pytest.fixture
@@ -44,7 +51,7 @@ def test_the_validator_runs_in_a_one_off_container_with_config_as_working_direct
     validate_and_store(ctx)
 
     (call,) = fake_runner.matching(*VALIDATOR)
-    assert call.args == (
+    assert call.args[:-1] == (
         "docker",
         "compose",
         "run",
@@ -58,8 +65,8 @@ def test_the_validator_runs_in_a_one_off_container_with_config_as_working_direct
         "homeassistant",
         "-m",
         "custom_components.cave_heating.validate",
-        "/config/cave/.validating.yaml",
     )
+    assert STAGED_PATH.fullmatch(call.args[-1])
     assert call.cwd == ctx.paths.root
 
 
@@ -96,7 +103,7 @@ def test_a_file_outside_the_state_directory_is_staged_and_cleaned_up(
     seen = []
 
     def spy(call):
-        seen.append((home.ha_config / "cave" / ".validating.yaml").read_text())
+        seen.append(staged_files(home)[0].read_text())
 
     fake_runner.on(VALIDATOR, side_effect=spy)
 
@@ -104,8 +111,8 @@ def test_a_file_outside_the_state_directory_is_staged_and_cleaned_up(
 
     assert result.ok
     assert seen == [VALID + "# demo\n"]
-    assert fake_runner.matching(*VALIDATOR)[0].args[-1] == "/config/cave/.validating.yaml"
-    assert not (home.ha_config / "cave" / ".validating.yaml").exists()
+    assert STAGED_PATH.fullmatch(fake_runner.matching(*VALIDATOR)[0].args[-1])
+    assert staged_files(home) == []
     assert home.heating_applied.read_text() == VALID + "# demo\n"
     assert home.heating.read_text() != VALID + "# demo\n"  # the edited file is not touched
 
@@ -116,7 +123,7 @@ def test_the_staged_copy_is_removed_even_when_the_run_fails(ctx, home, fake_runn
     fake_runner.on(VALIDATOR, rc=1, out="bad\n")
 
     assert not validate_and_store(ctx, demo).ok
-    assert not (home.ha_config / "cave" / ".validating.yaml").exists()
+    assert staged_files(home) == []
 
 
 def test_storing_the_same_content_does_not_touch_the_file(ctx, home):
@@ -157,7 +164,7 @@ def test_the_bytes_that_were_validated_are_the_bytes_that_are_stored(ctx, home, 
     seen = []
 
     def save_again_while_validating(call):
-        seen.append((home.ha_config / "cave" / ".validating.yaml").read_text())
+        seen.append(staged_files(home)[0].read_text())
         home.heating.write_text("version: 1\nrooms: [this was never validated]\n")
 
     fake_runner.on(VALIDATOR, side_effect=save_again_while_validating)
@@ -171,7 +178,7 @@ def test_the_bytes_that_were_validated_are_the_bytes_that_are_stored(ctx, home, 
 
 
 def test_messages_name_the_edited_file_not_the_staged_copy(ctx, home, fake_runner):
-    fake_runner.on(VALIDATOR, rc=1, out="/config/cave/.validating.yaml: rooms[0]: bad\n")
+    fake_runner.on(VALIDATOR, rc=1, out=lambda call: f"{call.args[-1]}: rooms[0]: bad\n")
 
     result = validate_and_store(ctx)
 
@@ -182,3 +189,45 @@ def test_store_applied_accepts_bytes(ctx, home):
     assert store_applied(ctx, b"version: 1\nrooms: []\n# bytes\n") is True
 
     assert home.heating_applied.read_bytes().endswith(b"# bytes\n")
+
+
+def test_runs_at_the_same_time_validate_their_own_bytes_and_keep_their_own_file(
+    ctx, home, fake_runner, tmp_path
+):
+    """apply does not hold the lock, so two validations can overlap."""
+    first, second = tmp_path / "first.yaml", tmp_path / "second.yaml"
+    first.write_text("version: 1\nrooms: []\n# first\n")
+    second.write_text("version: 1\nrooms: []\n# second\n")
+    log = []
+
+    def run_second_inside_the_first(call):
+        container_file = call.args[-1]
+        log.append(("first", container_file, staged_files(home)[0].read_text()))
+        if len(log) == 1:
+            nested = validate_and_store(ctx, second)  # while the first container "runs"
+            assert nested.ok
+            assert staged_files(home) != []  # the second run did not remove the first's file
+            assert staged_files(home)[0].read_text() == first.read_text()
+
+    fake_runner.on(VALIDATOR, side_effect=run_second_inside_the_first)
+
+    assert validate_and_store(ctx, first).ok
+
+    names = {entry[1] for entry in log}
+    assert len(log) == 2
+    assert len(names) == 2  # a name of its own for each run
+    assert staged_files(home) == []
+    # The last store was the first run's own, validated, bytes.
+    assert home.heating_applied.read_text() == first.read_text()
+
+
+def test_the_staged_file_is_removed_when_running_the_container_raises(ctx, home, fake_runner):
+    def boom(call):
+        raise RuntimeError("docker exploded")
+
+    fake_runner.on(VALIDATOR, side_effect=boom)
+
+    with pytest.raises(RuntimeError):
+        validate_and_store(ctx)
+
+    assert staged_files(home) == []

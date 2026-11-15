@@ -19,7 +19,7 @@ each part (`tests/ops/conftest.py`).
 | `context.py` | `Context`: `paths`, `env` (`.env` overlaid by the process environment), `runner`, `out`/`err`, `ha()`, `lock(name)`, `docker(...)`, `compose(...)`, `git(...)`, `say()`/`warn()`, `journal`, `sleep`/`monotonic`, `compose_files`, `compose_env`. `Context.create(root)` builds the real one. See "Compose with overlays and environment" below. |
 | `paths.py` | `Paths(root, data)`: every path of concept sections 4.2 and 4.5 (`heating`, `heating_applied`, `dashboard`, `token`, `lock_file`, ...), and `container_path(host_path)` for the path inside the Home Assistant container. |
 | `envfile.py` | The variable table of concept section 4.2 (`VARIABLES`), `.env` parsing (`parse_env`: quotes, inline comments; no `$` interpolation, so use single quotes for values with `$`), `missing_names()` / `apply_updates()` to complete a `.env` in place, and rendering. `.env.example` is rendered from the table: `PYTHONPATH=ops python3 -m cave_ops.envfile > .env.example`. |
-| `runner.py` | `Runner` protocol and `SubprocessRunner`: `run(args, cwd=, env=, capture=, check=, input_text=, timeout=) -> Result(returncode, stdout, stderr)`. A missing program is status 127 and a timeout is status 124, not exceptions; `check=True` raises `CommandError`. Nothing in `cave` runs unbounded by accident: `ctx.git()` defaults to 120 s, the health check asks Docker with 60 s, `run_in_homeassistant` defaults to 600 s. |
+| `runner.py` | `Runner` protocol and `SubprocessRunner`: `run(args, cwd=, env=, capture=, check=, input_text=, timeout=) -> Result(returncode, stdout, stderr)`. A missing program is status 127 and a timeout is status 124, not exceptions; `check=True` raises `CommandError`. Nothing in `cave` runs unbounded by accident: `ctx.git()` defaults to 120 s, the health check asks Docker with 60 s, `run_in_homeassistant` defaults to 600 s, which also has to cover the first pull of the image (about 2 GB): pull first with `ctx.compose("pull", timeout=None)` where a slow link is likely. |
 | `ha.py` | `read_token(paths)` and `HAClient`: `config()`, `get_state()`, `services()`, `has_service()`, `call_service()`. Failures are `HAError` (with `status`) and `HAUnreachable`. The transport is replaceable. |
 | `health.py` | `check_health(ctx)` and `wait_healthy(ctx, timeout=, interval=)`: "Healthy" as defined in concept section 4.5, returning `Health(healthy, problems)`. Without the script token it proves: every container of the active profiles runs and passes its health check, which for Home Assistant includes that it logged "Home Assistant initialized". It does not prove that Home Assistant is out of recovery mode. With the token it also requires `/api/config` to report `state` RUNNING, no `recovery_mode`/`safe_mode`, and `cave_heating` set up. |
 | `notify.py` | `notify(ctx, title, message)`: the notification contract of concept section 4.5 (`script.cave_notify` called with the fields `title` and `message`, else `persistent_notification.create`, always also the journal). Never raises. |
@@ -80,6 +80,12 @@ Compose from reading its default files. Set `ctx.compose_env = {"CAVE_DATA": "/s
 `.env`, which is how the demo gets a state directory of its own. Pass a copy of the context, not
 the original, when only one command should use them (`dataclasses.replace(ctx, compose_files=...)`).
 
+`CAVE_DATA` in `compose_env` alone does not make a separate demo. The demo also needs its own
+Compose project name (`COMPOSE_PROJECT_NAME` in `compose_env`; the project is `cave` otherwise, so
+`up` would replace the home's containers) and its own `ctx.paths` (`Paths(root, demo_data)`), because
+the token, the applied copy and `validate_and_store` follow `ctx.paths`, which still points at the
+home's state.
+
 ## Hand-over to the work packages that build on this
 
 * Files that containers create in the state directory (the script token, Home Assistant's
@@ -91,6 +97,7 @@ the original, when only one command should use them (`dataclasses.replace(ctx, c
   currency, location): any of them in YAML would lock them all in the UI. **Bootstrap** has to
   set the time zone from `TZ`, metric units, country and currency through Home Assistant, or
   Home Assistant stays on UTC; the owner sets the home's location in the UI or in onboarding.
+* `init` records which broker login it wrote into `passwd` in `CAVE_DATA/.cave/mqtt-credentials`, because after the first start the broker's container owns `passwd` and `init` cannot read it. The record can only mislead if the password file is changed outside `init` while it is unreadable; the broker login is changed only through `.env` and `init`.
 * `script.cave_notify` is called with the fields `title` and `message`.
 * `init` stores the starter as the applied copy without the validator. Once the validator has
   merged, a later work package may switch `init` to `validate_and_store`.
