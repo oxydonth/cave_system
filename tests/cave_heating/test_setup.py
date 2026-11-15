@@ -594,6 +594,9 @@ async def test_diagnostics_show_the_controller_state(hass: HomeAssistant, home: 
     data = await async_get_config_entry_diagnostics(hass, entry)
     assert data["loaded"] is True
     assert data["timing"]["confirm_timeout"] == "0:05:00"
+    assert data["home"]["presence"] == "**REDACTED**", "who is at home is not in the download"
+    assert data["home"]["nobody_home_since"] == "**REDACTED**"
+    assert data["occupied"] == "**REDACTED**"
     living = data["rooms"]["living_room"]
     assert living["decision"] == {
         "target": 21.0,
@@ -772,3 +775,40 @@ async def test_a_reload_keeps_pending_commands_holds_and_the_window_pause(
     ], "the command in flight was neither forgotten nor sent again"
     assert held.commands == [], "still held"
     assert len(paused.commands) == 2, "paused once, resumed once"
+
+
+@pytest.mark.parametrize(("schedule_now", "reason"), [("off", "eco"), ("on", "override")])
+async def test_a_schedule_change_during_a_restart_ends_the_override(
+    hass: HomeAssistant,
+    home: FakeHome,
+    hass_storage: dict[str, Any],
+    schedule_now: str,
+    reason: str,
+) -> None:
+    """P4: the schedule state an override was set under is restored and compared."""
+    await home.thermostat("climate.a", target=21.0)
+    until = (dt_util.utcnow() + timedelta(hours=3)).isoformat()
+    hass_storage[STORAGE_KEY] = {
+        "version": 1,
+        "minor_version": 1,
+        "key": STORAGE_KEY,
+        "data": {
+            "home": {"mode": "auto", "away_temperature": 16.0},
+            "rooms": {
+                "living_room": {
+                    "mode": "heat",
+                    "hand": {
+                        "kind": "override",
+                        "until": until,
+                        "target": 23.0,
+                        "preset": None,
+                        "waiting_for_home": False,
+                        "schedule": True,
+                    },
+                }
+            },
+        },
+    }
+    home.set("schedule.living", schedule_now)
+    await home.start(config(room("living_room", "climate.a", schedule="schedule.living")))
+    assert home.state("climate.cave_living_room").attributes["reason"] == reason

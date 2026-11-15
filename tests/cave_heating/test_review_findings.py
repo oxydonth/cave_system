@@ -185,7 +185,7 @@ async def test_m5_nothing_is_adopted_from_a_thermostat_held_while_its_dial_settl
     checked = await home.thermostat("climate.a", target=21.0)
     other = await home.thermostat("climate.b", target=21.0)
     await one_room(home, "climate.a", "climate.b")
-    checked.report(current=20.3)  # the first report after the start
+    await home.advance(freezer, 6 * MIN)  # past the exemption window (P10)
     checked.turn_dial(22.0)
     await home.advance(freezer, 10 * SEC)
     await call(hass, DOMAIN, "hold", entity_id="climate.a")
@@ -319,7 +319,7 @@ async def test_s4_dial_turned_back_on_a_thermostat_that_clamps_adopts_nothing(
     low = await home.thermostat("climate.low", target=20.0, max_temp=20.0)
     other = await home.thermostat("climate.other", target=21.0)
     await one_room(home, "climate.low", "climate.other")
-    low.report(current=20.3)  # the first report after the start
+    await home.advance(freezer, 6 * MIN)  # past the exemption window (P10)
     low.turn_dial(19.5)
     await home.advance(freezer, 5 * SEC)
     low.turn_dial(20.0)  # back to what the controller wants from it
@@ -333,7 +333,7 @@ async def test_s5_home_mode_away_by_hand_also_cancels_a_dial_that_is_still_settl
 ) -> None:
     trv = await home.thermostat("climate.a", target=21.0)
     await one_room(home, "climate.a")
-    trv.report(current=20.3)  # the first report after the start
+    await home.advance(freezer, 6 * MIN)  # past the exemption window (P10)
     trv.turn_dial(24.0)
     await home.advance(freezer, 10 * SEC)
     await call(hass, "select", "select_option", entity_id="select.cave_home_mode", option="away")

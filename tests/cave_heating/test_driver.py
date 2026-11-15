@@ -306,6 +306,97 @@ def test_budget_streak_ends_after_an_hour_without_exhaustion() -> None:
     assert not driver.disagreeing
 
 
+def _disagreeing() -> ThermostatDriver:
+    """A thermostat made unresponsive by the budget, its next retry due."""
+    driver = started(target=21.0)
+    driver.on_report(report(21.0, mode="auto", modes=("heat", "auto", "off")), T0)
+    _disagree_for(driver, 5)
+    assert driver.disagreeing
+    return driver
+
+
+def test_a_disagreeing_thermostat_stays_unresponsive_if_it_disagreed_since_the_last_retry() -> None:
+    """Reading 3: matching at a retry is not enough after a differing report in between."""
+    driver = _disagreeing()
+    first = driver.deadline
+    assert first is not None
+    assert driver.tick(first) is not None, "the retry"
+    driver.on_report(report(21.0), first + SEC)
+    driver.on_report(report(21.0, mode="auto", modes=("heat", "auto", "off")), first + MIN)
+    driver.on_report(report(21.0), first + 2 * MIN)
+    second = first + TIMING.retry_interval
+    assert driver.tick(second) is None, "it matches: nothing to send"
+    assert driver.status(second) is Status.UNRESPONSIVE, "but it disagreed in between"
+    assert driver.tick(second + TIMING.retry_interval) is None
+    assert driver.status(second + TIMING.retry_interval) is Status.OK
+
+
+def test_a_new_wanted_value_waits_for_the_retry_of_a_disagreeing_thermostat() -> None:
+    """Reading 3: only retry_interval tries it again, also with something new to send."""
+    driver = _disagreeing()
+    due = driver.deadline
+    assert due is not None
+    driver.set_want(Want(heat=True, target=23.0), due - 10 * MIN)
+    assert driver.send_due is None
+    assert driver.tick(due - 5 * MIN) is None
+    retry = driver.tick(due)
+    assert retry is not None
+    assert retry.data["temperature"] == 23.0
+
+
+def test_a_report_with_an_unchanged_target_consumes_nothing() -> None:
+    """P3: only a report whose target has changed removes queued targets.
+
+    21, 25, 21 are in flight; the late report of the first 21 arrives, then a reading with the
+    target still at 21. That reading must not take the second 21 out of the queue, or the late
+    report of 25 that follows would look like a hand change.
+    """
+    driver = started(target=18.0, want=18.0)
+    for index, target in enumerate((21.0, 25.0, 21.0)):
+        send(driver, target, T0 + index * MIN)
+    driver.on_report(report(21.0), T0 + 5 * MIN)
+    assert driver.queue == [25.0, 21.0]
+    driver.on_report(report(21.0, current=19.5), T0 + 6 * MIN)
+    assert driver.queue == [25.0, 21.0]
+    late = driver.on_report(report(25.0), T0 + 7 * MIN, adopt=True)
+    assert late.hand_target is None, "the late report of 25 is still recognised"
+
+
+def test_a_refused_commands_target_leaves_the_queue() -> None:
+    """Reading 5: a refused command was never sent to the device."""
+    driver = started(target=21.0)
+    command = send(driver, 22.0, T0)
+    assert driver.queue == [22.0]
+    driver.on_refused(T0 + SEC, "key lock", command)
+    assert driver.queue == []
+
+
+def test_the_queue_is_cleared_when_the_thermostat_returns() -> None:
+    """Reading 5: the exemption window covers late reports after a return instead."""
+    driver = started(target=21.0)
+    send(driver, 22.0, T0)
+    assert driver.queue == [22.0]
+    driver.on_report(None, T0 + MIN)
+    driver.on_report(report(20.0), T0 + 2 * MIN)
+    assert driver.queue == []
+    late = driver.on_report(report(22.0), T0 + 2 * MIN + TIMING.confirm_timeout, adopt=True)
+    assert late.hand_target is None, "22 is what is wanted"
+
+
+def test_a_report_that_empties_the_queue_while_differing_is_corrected_at_once() -> None:
+    """N2 and the concept's confirmation rule."""
+    driver = started(target=21.0)
+    send(driver, 25.0, T0)
+    driver.set_want(Want(heat=True, target=21.0), T0 + 10 * SEC)
+    assert driver.send_due is None, "it still reports 21: nothing to send yet"
+    driver.on_report(report(25.0), T0 + 20 * SEC)
+    assert driver.queue == []
+    assert driver.send_due == T0 + 20 * SEC + TIMING.debounce
+    correction = driver.tick(T0 + 20 * SEC + TIMING.debounce)
+    assert correction is not None
+    assert correction.data["temperature"] == 21.0
+
+
 # --- Other edges ---------------------------------------------------------------------------------
 
 
