@@ -1,0 +1,28 @@
+# yamllint reads tokens, not constructed objects, so Home Assistant's custom tags
+# (`!include`, `!secret`, `!include_dir_named`, ...) pass without special handling.
+# `make lint` passes the file list itself and skips .venv, .claude and data; the ignore
+# below applies even to files passed explicitly. The patterns are anchored to the repository
+# root: a bare `data/` would also skip sim/demo/data/ and the like.
+extends: default
+
+ignore: |
+  /.venv/
+  /.claude/
+  /data/
+
+rules:
+  line-length:
+    max: 120
+    allow-non-breakable-words: true
+    allow-non-breakable-inline-mappings: true
+  document-start: disable
+  comments:
+    min-spaces-from-content: 1
+  comments-indentation: disable
+  # GitHub Actions uses `on:` as a key, which YAML 1.1 reads as a boolean.
+  truthy:
+    allowed-values: ["true", "false"]
+    check-keys: false
+  indentation:
+    spaces: consistent
+    indent-sequences: consistent
