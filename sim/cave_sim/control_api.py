@@ -138,11 +138,11 @@ def create_app(home: SimulatedHome) -> web.Application:
     @routes.post("/api/zigbee2mqtt")
     async def zigbee2mqtt(request: web.Request) -> web.Response:
         data = await _body(request)
-        unknown = set(data) - {"passive_timeout"}
+        unknown = set(data) - {"passive_timeout_minutes"}
         if unknown:
             raise BadRequest(f"unknown fields {sorted(unknown)}")
         home.configure_zigbee2mqtt(
-            passive_timeout_minutes=_optional_number(data, "passive_timeout")
+            passive_timeout_minutes=_optional_number(data, "passive_timeout_minutes")
         )
         return _json(home.state()["zigbee2mqtt"])
 

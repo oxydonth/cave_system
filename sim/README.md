@@ -56,7 +56,7 @@ fritzbox:
   window_target: unchanged        # what <tsoll> shows during window open mode: unchanged or off
   locked_command: refuse          # sethkrtsoll while locked: refuse (HTTP 400) or ignore (200, no effect)
 zigbee2mqtt:                      # optional
-  passive_timeout: 1500           # minutes until a silent battery device shows as unavailable
+  passive_timeout_minutes: 1500   # until a silent battery device shows as unavailable
 rooms:
   - id: living_room               # used by the control API
     name: Wohnzimmer
@@ -145,10 +145,10 @@ Requests and responses are JSON. Unknown room or device: 404; invalid request: 4
 | Method and path | Body | Does |
 |---|---|---|
 | `GET /api/health` | | `{"status":"ok"}` once the devices are published and while the broker connection stands; otherwise 503 with `{"status":"unavailable","reason":...}`. The container's health check uses it. |
-| `GET /api/state` | | Time, outdoor temperature, FRITZ!Box settings, rooms, every device's state |
-| `GET /api/devices/{id}` | | One device: `state` (the device's own registers, or the FRITZ! values), `zigbee2mqtt_state` (what Zigbee2MQTT has cached and publishes), `answering`, `available`, valve opening and the temperatures behind it; Sonoff `external_received`, Bosch `remote_received` |
+| `GET /api/state` | | Time, outdoor temperature, FRITZ!Box and Zigbee2MQTT settings, rooms, every device's state (see below) |
+| `GET /api/devices/{id}` | | One device (see below) |
 | `POST /api/devices/{id}/window` | `{"open": true}` | Open or close the window a contact sensor sits on |
-| `POST /api/devices/{id}/silent` | `{"silent": true}` | A Zigbee device stops answering (dead battery, out of range): it stays available until `passive_timeout` after its last message, commands to it fail without a trace, and what changes on it meanwhile is reported when it answers again (`"silent": false`) |
+| `POST /api/devices/{id}/silent` | `{"silent": true}` | A Zigbee device stops answering (dead battery, out of range): it stays available until `passive_timeout_minutes` after its last message, commands to it fail without a trace, and what changes on it meanwhile is reported when it answers again (`"silent": false`) |
 | `POST /api/devices/{id}/availability` | `{"online": false}` | A shortcut: the device stops answering and shows as unavailable at once; `true` brings it back. FRITZ!: `present` 0 or 1 |
 | `POST /api/devices/{id}/mode` | `{"mode": "off"}` | Change a Zigbee thermostat's mode on the device: `system_mode` (`off`, `auto`, `heat`) for TRV-ZBT and TRVZB, `operating_mode` (`schedule`, `manual`, `pause`) for BTH-RA |
 | `POST /api/devices/{id}/window-detection` | `{"minutes": 15}` | A FRITZ! thermostat's own window detection starts its window open mode |
@@ -160,7 +160,57 @@ Requests and responses are JSON. Unknown room or device: 404; invalid request: 4
 | `POST /api/rooms/{id}/humidity` | `{"humidity": 70}` | Set a room's humidity |
 | `POST /api/outdoor` | `{"temperature": -5}` | Set the outdoor temperature |
 | `POST /api/fritzbox` | `{"report_delay": 180, "summer": true, "holiday": false, "txbusy_while_pending": false, "window_target": "off", "locked_command": "ignore"}` | Change the FRITZ!Box's behaviour; omitted fields stay |
-| `POST /api/zigbee2mqtt` | `{"passive_timeout": 5}` | Zigbee2MQTT's `availability.passive.timeout`, in minutes, counted from each device's last message |
+| `POST /api/zigbee2mqtt` | `{"passive_timeout_minutes": 5}` | Zigbee2MQTT's `availability.passive.timeout`, in minutes, counted from each device's last message |
+
+### What the control API returns
+
+`GET /api/state` (the same object as `SimulatedHome.state()`):
+
+```json
+{
+  "time": 1767225600.0,
+  "outdoor_temperature": 5.0,
+  "fritzbox": {"report_delay": 0.0, "summer": false, "holiday": false, "txbusy_while_pending": false,
+               "window_target": "unchanged", "locked_command": "refuse"},
+  "zigbee2mqtt": {"passive_timeout_minutes": 1500.0},
+  "rooms": {"bedroom": {"name": "Schlafzimmer", "temperature": 18.0, "humidity": 55.0, "open_windows": 0,
+                        "devices": ["schlafzimmer_heizung", "schlafzimmer", "schlafzimmer_fenster"]}},
+  "devices": {"<device id>": "<as GET /api/devices/{id}>"}
+}
+```
+
+`GET /api/devices/{id}` (the same object as `SimulatedHome.device_state(id)`) and every answer of a
+`POST /api/devices/{id}/...`:
+
+| Field | Devices | Meaning |
+|---|---|---|
+| `id`, `family`, `model`, `name`, `room` | all | Control-API ID, `zigbee` or `fritz`, model, friendly or FRITZ! name, room ID |
+| `ieee` | Zigbee | IEEE address |
+| `ain` | FRITZ! | Actor identification number |
+| `answering` | all | The device receives commands and its messages arrive (`false` while silent or unavailable; FRITZ!: `present`) |
+| `available` | all | What Zigbee2MQTT publishes on `<name>/availability` (FRITZ!: `present`) |
+| `state` | all | Zigbee: the device's own registers, keyed like Zigbee2MQTT's properties. FRITZ!: `target_temperature` (°C, `"off"` or `"on"`), `reported_target_temperature` (what the box reports), `comfort_temperature`, `eco_temperature`, `temperature`, `battery`, `battery_low`, `lock` (as reported, including summer and holiday), `device_lock`, `window_open_until` (Unix time or `null`) |
+| `zigbee2mqtt_state` | Zigbee | What Zigbee2MQTT has cached and publishes on `zigbee2mqtt/<name>`, without `last_seen`, `linkquality` and `update`. It differs from `state` while the device is silent, and after a value the device ignored or rounded |
+| `valve_opening` | thermostats | 0 to 1 |
+| `internal_temperature`, `regulation_temperature` | Zigbee thermostats | What the own sensor reads; what the valve regulates on (and the device reports as `local_temperature`) |
+| `external_received`, `returns_on_feed` | TRV-ZBT, TRVZB | Unix time of the last accepted external temperature (or `null`); whether the device returns to it by itself |
+| `remote_received` | BTH-RA | Unix time of the last accepted remote temperature (or `null`) |
+
+### Renamed since the first version of this interface
+
+The first version of this pull request (before review) used other names. Nothing in `main` used
+them, but anyone who read that version should take the new ones:
+
+- A device's `online` is now two fields: `answering` (it receives commands and is heard) and
+  `available` (what Zigbee2MQTT publishes).
+- A Zigbee device's `state` now means the device's own registers; Zigbee2MQTT's cache is
+  `zigbee2mqtt_state` (in Python, `ZigbeeDevice.cache`).
+- `ZigbeeDevice.online` and `ZigbeeDevice.set_online()` became `ZigbeeDevice.answering` and
+  `ZigbeeDevice.set_answering()`. `SimulatedHome.set_online()` keeps its name and now means
+  "unavailable at once"; `SimulatedHome.set_silent()` is the realistic case.
+- The passive timeout is `passive_timeout_minutes` everywhere: in `home.yaml`, in
+  `POST /api/zigbee2mqtt`, in its answer and in `/api/state`, and in
+  `SimulatedHome.configure_zigbee2mqtt()`.
 
 ## `cave_sim.testing`: a simulated home inside Home Assistant's tests
 
@@ -269,7 +319,7 @@ General (Zigbee2MQTT):
   scenes, OTA, `bridge/devices` or the web UI. `bridge/info` carries only what the bridge entities
   read; the bridge's `log_level` select, network map and coordinator version entities are left out.
 - Availability follows Zigbee2MQTT's passive check (`availability.ts`): a silent device stays
-  available until `passive_timeout` (default 1500 minutes) after its last message. A device that
+  available until `passive_timeout_minutes` (default 1500) after its last message. A device that
   answers counts as heard all the time, since real devices check in regularly; the moment it falls
   silent is its last message. Commands to a silent device fail without anything being published;
   the device keeps regulating with its own settings, and its own registers (`state`) stay separate

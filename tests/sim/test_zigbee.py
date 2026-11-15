@@ -354,7 +354,7 @@ def test_the_passive_timeout_is_configurable(rig: Rig) -> None:
     rig.home.set_silent("sonoff", True)
     rig.clock.advance(5 * 60 + 1)
     assert _availability(rig, "Sonoff") == "offline"
-    home = parse_home({"zigbee2mqtt": {"passive_timeout": 2}, "rooms": []})
+    home = parse_home({"zigbee2mqtt": {"passive_timeout_minutes": 2}, "rooms": []})
     assert home.zigbee2mqtt.passive_timeout_minutes == 2
 
 
@@ -388,3 +388,21 @@ def test_an_external_temperature_out_of_range_is_published_but_ignored(rig: Rig)
     assert sonoff.cache["external_temperature_input"] == 120  # Zigbee2MQTT's optimistic state
     assert sonoff.state["external_temperature_input"] == 0  # the device ignored it
     assert sonoff.external_received is None
+
+
+def test_a_shorter_timeout_applies_to_a_device_already_silent_longer(rig: Rig) -> None:
+    rig.home.set_silent("sonoff", True)
+    rig.clock.advance(15 * 60)
+    assert _availability(rig, "Sonoff") == "online"
+    rig.home.configure_zigbee2mqtt(passive_timeout_minutes=10)  # already silent for 15 minutes
+    assert _availability(rig, "Sonoff") == "offline"
+
+
+def test_a_shorter_timeout_counts_from_the_last_message(rig: Rig) -> None:
+    rig.home.set_silent("sonoff", True)
+    rig.clock.advance(5 * 60)
+    rig.home.configure_zigbee2mqtt(passive_timeout_minutes=10)
+    rig.clock.advance(4 * 60)  # nine minutes of silence
+    assert _availability(rig, "Sonoff") == "online"
+    rig.clock.advance(2 * 60)  # eleven
+    assert _availability(rig, "Sonoff") == "offline"

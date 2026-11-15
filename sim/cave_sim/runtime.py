@@ -205,7 +205,7 @@ class SimulatedHome:
         """Change Zigbee2MQTT's ``availability.passive.timeout``, counted from each last message."""
         if passive_timeout_minutes is not None:
             if passive_timeout_minutes <= 0:
-                raise ControlError("passive_timeout must be positive")
+                raise ControlError("passive_timeout_minutes must be positive")
             self.zigbee.set_passive_timeout(passive_timeout_minutes * 60)
 
     def set_device_mode(self, device_id: str, mode: str) -> None:

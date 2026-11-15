@@ -4,7 +4,7 @@
 
     outdoor_temperature: 5.0          # optional, °C
     zigbee2mqtt:                      # optional
-      passive_timeout: 1500           # minutes until a silent battery device is unavailable
+      passive_timeout_minutes: 1500   # until a silent battery device is unavailable
     fritzbox:                         # optional
       report_delay: 0                 # seconds before a new setpoint is reported; 0 = at once
       window_target: unchanged        # what tsoll shows during window detection: unchanged or off
@@ -241,12 +241,14 @@ def parse_home(raw: Any) -> HomeSpec:
     if locked_command not in LOCKED_COMMANDS:
         raise HomeError(f"fritzbox.locked_command: one of {LOCKED_COMMANDS}")
     z2m_raw = _mapping(data.get("zigbee2mqtt", {}), "zigbee2mqtt")
-    unknown = set(z2m_raw) - {"passive_timeout"}
+    unknown = set(z2m_raw) - {"passive_timeout_minutes"}
     if unknown:
         raise HomeError(f"zigbee2mqtt: unknown keys {sorted(unknown)}")
-    passive_timeout = _number(z2m_raw.get("passive_timeout", 1500), "zigbee2mqtt.passive_timeout")
+    passive_timeout = _number(
+        z2m_raw.get("passive_timeout_minutes", 1500), "zigbee2mqtt.passive_timeout_minutes"
+    )
     if passive_timeout <= 0:
-        raise HomeError("zigbee2mqtt.passive_timeout: must be positive")
+        raise HomeError("zigbee2mqtt.passive_timeout_minutes: must be positive")
     home = HomeSpec(
         rooms=rooms,
         outdoor_temperature=_number(data.get("outdoor_temperature", 5.0), "outdoor_temperature"),
