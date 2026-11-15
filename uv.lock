@@ -676,14 +676,23 @@ source = { virtual = "." }
 [package.dev-dependencies]
 dev = [
     { name = "actionlint-py" },
+    { name = "aiohttp" },
     { name = "mypy" },
+    { name = "paho-mqtt" },
+    { name = "pyfritzhome" },
     { name = "pytest" },
     { name = "pytest-cov" },
     { name = "pytest-homeassistant-custom-component" },
     { name = "pyyaml" },
     { name = "ruff" },
     { name = "shellcheck-py" },
+    { name = "types-pyyaml" },
     { name = "yamllint" },
+]
+sim = [
+    { name = "aiohttp" },
+    { name = "paho-mqtt" },
+    { name = "pyyaml" },
 ]
 
 [package.metadata]
@@ -691,14 +700,24 @@ dev = [
 [package.metadata.requires-dev]
 dev = [
     { name = "actionlint-py" },
+    { name = "aiohttp" },
     { name = "mypy" },
+    { name = "paho-mqtt" },
+    { name = "paho-mqtt", specifier = "==2.1.0" },
+    { name = "pyfritzhome", specifier = "==0.6.21" },
     { name = "pytest" },
     { name = "pytest-cov" },
     { name = "pytest-homeassistant-custom-component", specifier = "==0.13.375" },
     { name = "pyyaml" },
     { name = "ruff" },
     { name = "shellcheck-py" },
+    { name = "types-pyyaml" },
     { name = "yamllint" },
+]
+sim = [
+    { name = "aiohttp" },
+    { name = "paho-mqtt" },
+    { name = "pyyaml" },
 ]
 
 [[package]]
@@ -2400,6 +2419,19 @@ wheels = [
 ]
 
 [[package]]
+name = "pyfritzhome"
+version = "0.6.21"
+source = { registry = "https://pypi.org/simple" }
+dependencies = [
+    { name = "cryptography" },
+    { name = "requests" },
+]
+sdist = { url = "https://files.pythonhosted.org/packages/83/32/a60751a899efb4239dccb019afca528db5dfde15982b1252b1fe575a19b4/pyfritzhome-0.6.21.tar.gz", hash = "sha256:23b2284ec440686469a363df8203f2c98cfdbfda1050878ef51bae82eff33ab0", size = 27230, upload-time = "2026-09-21T20:49:54.012Z" }
+wheels = [
+    { url = "https://files.pythonhosted.org/packages/6f/1b/c1a4c74cd04c25b16ca7d3b39761bd69a6f18d07a8629330d656bc0f389e/pyfritzhome-0.6.21-py3-none-any.whl", hash = "sha256:8728014d7dd916cd0120e83dafea2a17e06cc86c0ed514fa3cab9c246a1cc442", size = 26331, upload-time = "2026-09-21T20:49:53.02Z" },
+]
+
+[[package]]
 name = "pygithub"
 version = "2.10.0"
 source = { registry = "https://pypi.org/simple" }
@@ -3198,6 +3230,15 @@ source = { registry = "https://pypi.org/simple" }
 sdist = { url = "https://files.pythonhosted.org/packages/ee/9f/c5201d42a484c061e528825fc8e2d565f5abd50a4ced6fb7d29c4ec99b2b/truststore-0.10.5.tar.gz", hash = "sha256:30d36967ccaded5cbb38d602c433f53600036c79d502f4533a49b60a03bbefcd", size = 28091, upload-time = "2026-10-12T22:27:31.808Z" }
 wheels = [
     { url = "https://files.pythonhosted.org/packages/51/e9/3a7820be2bb0fe53b6bc9c3be26d3d1158004e4c3ab953aa6840b955b1e9/truststore-0.10.5-py3-none-any.whl", hash = "sha256:9aaaedaefaf06d8b206278cf8b5012bc897f485a874503501e12d776df78951c", size = 19017, upload-time = "2026-10-12T22:27:30.377Z" },
+]
+
+[[package]]
+name = "types-pyyaml"
+version = "6.0.12.20261113"
+source = { registry = "https://pypi.org/simple" }
+sdist = { url = "https://files.pythonhosted.org/packages/4d/8b/ba599d956693dbc98e170f32097128bdea0a17f9d42b0b490fa749c12b1a/types_pyyaml-6.0.12.20261113.tar.gz", hash = "sha256:0828be2580fd94151182364f4d0158e4de62fdbeeb8d4296f7f7d2b6c22bb640", size = 19017, upload-time = "2026-11-13T08:51:21.488Z" }
+wheels = [
+    { url = "https://files.pythonhosted.org/packages/fd/2e/36fc0941a40ef066dbc8abac41bbbefb41389f547c779aef832aea6b873d/types_pyyaml-6.0.12.20261113-py3-none-any.whl", hash = "sha256:3600749e613748afdc4327f0b17c3296cf880cdbc7335f320007abd9dd815f67", size = 21321, upload-time = "2026-11-13T08:51:20.417Z" },
 ]
 
 [[package]]

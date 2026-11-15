@@ -1,6 +1,5 @@
 # Weekly update proposals, one grouped pull request per ecosystem. Each goes through the
-# normal pipeline and review. The docker and docker-compose entries match every directory,
-# so the Compose files and the sim/ Dockerfile are covered when later work packages add them.
+# normal pipeline and review.
 #
 # Home Assistant is never bumped by Dependabot. Its version appears in three places that move
 # together, by hand, in one pull request: `homeassistant` in uv.lock (through
@@ -17,31 +16,55 @@ updates:
       actions:
         patterns: ["*"]
 
+  # Only the tools this repository chooses itself. Everything else in the dev group is pinned
+  # exactly, directly or through its dependencies, by the test library
+  # pytest-homeassistant-custom-component or by Home Assistant: pytest, pytest-cov, paho-mqtt,
+  # pyfritzhome, aiohttp, pyyaml and the rest move only together with Home Assistant, in the same
+  # pull request as the test library. A bump of any of them on its own cannot be resolved; that is
+  # why the weekly job failed for pytest. With `allow`, Dependabot considers only the names listed;
+  # a name that is both allowed and ignored is ignored, so the `ignore` entries below are a second
+  # guard should one of them ever be added to `allow` by mistake.
   - package-ecosystem: uv
     directory: /
     schedule:
       interval: weekly
+    allow:
+      - dependency-name: ruff
+      - dependency-name: mypy
+      - dependency-name: types-pyyaml
+      - dependency-name: yamllint
+      - dependency-name: shellcheck-py
+      - dependency-name: actionlint-py
     ignore:
       - dependency-name: pytest-homeassistant-custom-component
       - dependency-name: homeassistant
+      - dependency-name: paho-mqtt
+      - dependency-name: pyfritzhome
     groups:
       python:
         patterns: ["*"]
 
+  # "/" for the Compose files at the repository root (compose.yaml, compose.sim.yaml); a `**` glob
+  # does not match the root itself. cave-sim is the simulator image built locally from
+  # sim/Dockerfile (compose.sim.yaml), not something to look up in a registry.
   - package-ecosystem: docker-compose
-    directories: ["/**/*"]
+    directories: ["/", "/**/*"]
     schedule:
       interval: weekly
     ignore:
       - dependency-name: ghcr.io/home-assistant/home-assistant
       - dependency-name: homeassistant/home-assistant
       - dependency-name: home-assistant/home-assistant
+      - dependency-name: cave-sim
     groups:
       compose-images:
         patterns: ["*"]
 
+  # Dockerfiles live below the root, such as sim/Dockerfile. Dependabot takes every file whose name
+  # contains "dockerfile" for one, so the build-context file next to it is excluded.
   - package-ecosystem: docker
     directories: ["/**/*"]
+    exclude-paths: ["*.dockerignore", "**/*.dockerignore"]
     schedule:
       interval: weekly
     ignore:

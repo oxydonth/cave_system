@@ -1,0 +1,101 @@
+name: sim
+
+# Builds the simulator image and runs it against a real Mosquitto: it must publish its devices and
+# answer a command (python -m cave_sim.smoke, run from the same image). Called from ci.yml.
+
+on:
+  workflow_call:
+
+permissions:
+  contents: read
+
+jobs:
+  sim:
+    name: sim
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    env:
+      # The broker of concept section 2. Its digest is the registry's index digest for the tag.
+      MOSQUITTO_IMAGE: eclipse-mosquitto:2.0.22@sha256:81a6193ae693942a3231cd3ac52875b02b7e3a19da671b2fb4b55cc874c5b279
+      NETWORK: cave-sim-ci
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - name: Validate compose.sim.yaml as an overlay on compose.yaml
+        env:
+          # Placeholders: `config` only resolves them.
+          CAVE_DATA: /tmp/cave-validation
+          CAVE_MQTT_PASSWORD: validation-only
+          CAVE_Z2M_FRONTEND_TOKEN: validation-only
+          CAVE_FRITZ_PASSWORD: validation-only
+        run: |
+          for profile in "" zigbee; do
+            COMPOSE_PROFILES="${profile}" docker compose -f compose.yaml -f compose.sim.yaml config --quiet
+          done
+          merged="$(docker compose -f compose.yaml -f compose.sim.yaml config --format json)"
+          jq -e '.services.sim.depends_on.mosquitto.condition == "service_healthy"' <<< "${merged}" > /dev/null
+          jq -e '[.services.sim.ports[] | "\(.host_ip):\(.published)"] | sort == ["127.0.0.1:8480", "127.0.0.1:8481"]' \
+            <<< "${merged}" > /dev/null
+
+      - name: Build the image
+        run: docker build -f sim/Dockerfile -t cave-sim:ci .
+
+      - name: Generate throw-away credentials
+        run: |
+          mqtt_password="$(openssl rand -hex 16)"
+          fritz_password="$(openssl rand -hex 16)"
+          echo "::add-mask::${mqtt_password}"
+          echo "::add-mask::${fritz_password}"
+          {
+            echo "CAVE_MQTT_USER=cave"
+            echo "CAVE_MQTT_PASSWORD=${mqtt_password}"
+            echo "CAVE_FRITZ_USER=cave"
+            echo "CAVE_FRITZ_PASSWORD=${fritz_password}"
+          } >> "${GITHUB_ENV}"
+
+      - name: Start Mosquitto with a password
+        run: |
+          mkdir -p "${RUNNER_TEMP}/mosquitto"
+          printf 'listener 1883\nallow_anonymous false\npassword_file /mosquitto/config/passwd\n' \
+            > "${RUNNER_TEMP}/mosquitto/mosquitto.conf"
+          docker run --rm -v "${RUNNER_TEMP}/mosquitto:/mosquitto/config" "${MOSQUITTO_IMAGE}" \
+            mosquitto_passwd -b -c /mosquitto/config/passwd "${CAVE_MQTT_USER}" "${CAVE_MQTT_PASSWORD}"
+          # The broker runs as the image's user mosquitto (1883) and must read its password file.
+          sudo chown -R 1883:1883 "${RUNNER_TEMP}/mosquitto"
+          docker network create "${NETWORK}"
+          docker run -d --name mosquitto --network "${NETWORK}" \
+            -v "${RUNNER_TEMP}/mosquitto:/mosquitto/config" "${MOSQUITTO_IMAGE}"
+
+      - name: Start the simulator and wait until it is healthy
+        run: |
+          docker run -d --name sim --network "${NETWORK}" \
+            -e CAVE_SIM_MQTT_HOST=mosquitto \
+            -e CAVE_MQTT_USER -e CAVE_MQTT_PASSWORD -e CAVE_FRITZ_USER -e CAVE_FRITZ_PASSWORD \
+            -p 127.0.0.1:8480:8480 -p 127.0.0.1:8481:8481 \
+            cave-sim:ci
+          for _ in $(seq 60); do
+            status="$(docker inspect --format '{{.State.Health.Status}}' sim)"
+            [ "${status}" = healthy ] && exit 0
+            [ "$(docker inspect --format '{{.State.Running}}' sim)" = true ] || break
+            sleep 2
+          done
+          echo "simulator not healthy: ${status:-not running}"
+          exit 1
+
+      - name: Smoke test against the running simulator
+        run: |
+          docker run --rm --network "${NETWORK}" \
+            -e CAVE_SIM_MQTT_HOST=mosquitto -e CAVE_SIM_SMOKE_HTTP_HOST=sim \
+            -e CAVE_MQTT_USER -e CAVE_MQTT_PASSWORD -e CAVE_FRITZ_USER -e CAVE_FRITZ_PASSWORD \
+            cave-sim:ci python -m cave_sim.smoke
+
+      - name: The published ports answer on the loopback address
+        run: curl --fail --silent http://127.0.0.1:8481/api/health
+
+      - name: Logs
+        if: always()
+        run: |
+          docker logs sim || true
+          docker logs mosquitto || true

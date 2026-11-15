@@ -1,0 +1,8 @@
+# The build context of sim/Dockerfile (BuildKit reads <Dockerfile>.dockerignore next to it): only
+# what the image copies, so that the virtualenv and the state directory never reach the daemon.
+*
+!pyproject.toml
+!uv.lock
+!sim/cave_sim
+!sim/demo
+**/__pycache__
