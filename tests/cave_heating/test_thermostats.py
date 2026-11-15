@@ -403,21 +403,28 @@ async def test_dial_turn_becomes_the_room_override_and_the_others_follow(
 async def test_late_report_of_an_earlier_command_is_not_a_hand_change(
     hass: HomeAssistant, home: FakeHome, freezer: FrozenDateTimeFactory
 ) -> None:
-    """A slow thermostat reporting 21 while 22 waits: no override, no extra command."""
+    """A slow thermostat reporting 21 while 22 waits: no override, no extra command.
+
+    22 is sent two minutes after 21, so the report of 21 stands alone for longer than
+    manual_settle: were it taken for a hand change, 21 would become the room's override.
+    """
     trv = await home.thermostat("climate.slowpoke", target=20.0, delay=3 * MIN)
     await start(home, "climate.slowpoke")
     consume_first_report(trv)
     await home.advance(freezer, 3 * SEC)
     assert trv.commands == [heat(21.0)]
+    await home.advance(freezer, 2 * MIN)
     await set_comfort(hass, 22.0)
     await home.advance(freezer, 3 * SEC)
     assert trv.commands == [heat(21.0), heat(22.0)]
-    # 21 was sent three seconds before 22; the thermostat reports each three minutes late.
-    await home.advance(freezer, 3 * MIN - 2 * SEC)
+    await home.advance(freezer, 1 * MIN)
     assert home.state("climate.slowpoke").attributes["temperature"] == 21.0, "the late report"
-    assert home.state(LIVING).attributes["reason"] == "comfort"
     assert statuses(home) == {"climate.slowpoke": "pending"}
-    await home.advance(freezer, 2 * MIN)
+    await home.advance(freezer, 1 * MIN + 50 * SEC)
+    assert home.state("climate.slowpoke").attributes["temperature"] == 21.0
+    assert home.state(LIVING).attributes["reason"] == "comfort"
+    assert home.state(LIVING).attributes["temperature"] == 22.0
+    await home.advance(freezer, 15 * SEC)
     assert home.state("climate.slowpoke").attributes["temperature"] == 22.0
     assert statuses(home) == {"climate.slowpoke": "ok"}
     assert home.state(LIVING).attributes["reason"] == "comfort"
@@ -523,8 +530,9 @@ async def test_dial_turned_during_a_window_pause_is_not_adopted_and_is_corrected
     await home.advance(freezer, 63 * SEC)
     assert trv.commands == [OFF]
     trv.report(mode="heat", target=24.0)
+    await home.advance(freezer, 3 * SEC)
+    assert trv.commands == [OFF, OFF], "corrected at once, not collected as a hand change"
     await home.advance(freezer, 50 * SEC)
-    assert trv.commands == [OFF, OFF]
     assert home.state(LIVING).attributes["reason"] == "window"
     assert home.state(LIVING).attributes["temperature"] == 21.0
     home.set("binary_sensor.window", "off")
@@ -550,6 +558,8 @@ async def test_dial_turned_while_the_room_or_home_is_off_is_not_adopted(
         )
     consume_first_report(trv)
     trv.turn_dial(22.0)
+    await home.advance(freezer, 3 * SEC)
+    assert trv.commands == [heat(5.0)], "corrected at once, not collected as a hand change"
     await home.advance(freezer, 50 * SEC)
     assert trv.commands == [heat(5.0)]
     assert home.state(LIVING).attributes["reason"] in ("room_off", "summer")

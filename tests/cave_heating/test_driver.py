@@ -88,7 +88,7 @@ def test_a_hand_change_needs_every_condition(
         report(new_target, mode="heat" if in_heat_mode else "off"), T0, adopt=True
     )
     is_hand = in_heat_mode and target_changed and not_known
-    assert (outcome.hand_target == 23.0) is is_hand
+    assert (outcome.hand_target is not None) is is_hand
 
 
 def test_nothing_is_adopted_when_adoption_is_not_allowed() -> None:
