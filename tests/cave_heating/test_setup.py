@@ -14,7 +14,7 @@ async def test_integration_is_discovered(hass: HomeAssistant) -> None:
     """The loader finds this repository's integration and reads its manifest."""
     integration = await async_get_integration(hass, DOMAIN)
 
-    assert integration.domain == "cave_heating"
+    assert integration.domain == "nope"
     assert integration.file_path.parts[-2:] == ("custom_components", "cave_heating")
 
 
