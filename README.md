@@ -6,8 +6,10 @@ Home Assistant runs everything on a small box at home. This repository holds the
 
 - [Concept](docs/concept.md): what is being built, which hardware it is for, and why.
 - [Work packages](docs/work-packages.md): how the build is split up, implemented and reviewed.
+- [What to buy](docs/hardware.md): the shopping list, in the order to buy it.
+- [Phone, presence and remote access](docs/phone-and-remote.md): the apps, notifications, presence and the FRITZ!Box VPN.
 
-Status: concept stage. Nothing here is deployable yet.
+Status: concept stage. Nothing here is deployable yet (parts 2 and 3 of the phone guide apply once the system is installed).
 
 ## Development
 

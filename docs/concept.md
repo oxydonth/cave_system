@@ -103,7 +103,7 @@ A three-room flat with four radiators: four Sonoff TRV Gen2 (€140), three SNZB
 
 ### 3.5 Fit and tenancy
 
-- German radiator valves almost always have an M30 × 1.5 thread, which all thermostats above fit directly. Danfoss RA, RAV and RAVL valves need one of the adapters that come in the box.
+- German radiator valves almost always have an M30 × 1.5 thread, which all thermostats above fit directly. Danfoss RA, RAV and RAVL valves need an adapter. The Sonoff thermostats include all three; the Bosch includes RA and RAVL; the FRITZ!Smart Thermo 302 includes RA only. Other adapters are bought separately.
 - Tenants may generally replace the thermostat heads without asking the landlord, because the valve itself is not touched. Keep the original heads and refit them when moving out.
 
 ## 4. Architecture
@@ -394,13 +394,13 @@ The pairing guide gives the exact entries per model. A FRITZ! dial turned all th
 - **Heating dashboard** at `/cave-heating`, generated from the applied `heating.yaml` by `./cave apply`, so it cannot drift from the room configuration. One card per room with target, preset, resume button, temperature and humidity history, window state and the reason; a header with home mode, away temperature and who is home; a maintenance view with the battery levels of all battery-powered devices, unavailable devices and each room's problem sensor. It uses built-in cards only, so there is no third-party frontend code.
 - **Schedules** are edited under Settings → Devices & services → Helpers, on a weekly calendar.
 - **Zigbee2MQTT's own web UI** on port 8080 is used for pairing and firmware updates.
-- **Notifications** for a low battery, a device that has gone silent, a window left open, high humidity (a prompt to air the room), a room's problem sensor, and the result of each self-update and backup. All go through one script, `script.cave_notify`, which always creates a persistent notification in the UI and also calls the notify service named in the helper `input_text.cave_notify_service` when one is set there, for example the phone app's service.
+- **Notifications** for a low battery, a device that has gone silent, a window left open, high humidity (a prompt to air the room), a room's problem sensor, and the result of each self-update and backup. All go through one script, `script.cave_notify` (fields `title` and `message`), which always creates a persistent notification in the UI and also calls the notify action whose full name (for example `notify.mobile_app_pixel_8`) is stored in the helper `input_text.cave_notify_service`; an empty helper means no phone. The helper has no `initial` value, so what the user enters survives restarts and updates.
 
 ## 7. Phone apps and remote access
 
 - **Apps:** the official Home Assistant apps for Android and iOS are free and open source. They show the same dashboards and deliver notifications.
 - **Presence:** the FRITZ!Box knows which phones are on the Wi-Fi. The "FRITZ!Box Tools" integration exposes each as a device tracker, entirely locally; the trackers for the household's phones are enabled once and listed under `presence`. The apps can report location too, but outside the home that only reaches the server while the phone is connected to the VPN.
-- **Remote access without a cloud:** the WireGuard VPN built into the FRITZ!Box. The phone connects to the VPN and the app uses the same address as at home. Connections where the provider gives no public IPv4 address (DS-Lite) need IPv6 on the phone's side.
+- **Remote access without a cloud:** the WireGuard VPN built into the FRITZ!Box. The phone connects to the VPN and the app uses the same address as at home. With a plain `http://` address the app's connection security level must allow it over the VPN: on Android "Most secure" with "VPN connected" as home network, on iOS "Less secure", because iOS recognises the home network only by its Wi-Fi name. Connections where the provider gives no public IPv4 address (DS-Lite) need IPv6 on the phone's side.
 - **Push notifications** to a phone outside the home travel through Apple's or Google's push service. This is the one place the internet is involved, and nothing depends on it.
 - **A custom app later:** Home Assistant exposes a documented WebSocket and REST API with token authentication. The entities and services in section 5.2 are the stable contract; a custom app would be another client of that API and needs no change on the server.
 
@@ -507,6 +507,7 @@ Thermostats and tests
 - [FRITZ!Smart Thermo 302 with Home Assistant](https://www.einfachgadgets.de/artikel/fritz-smart-thermo-302-home-assistant)
 - [FRITZ!DECT 301/302 command delay, simon42 community](https://community.simon42.com/t/dect-301-bzw-302-die-verzoegerungszeit-umgehen/38542)
 - [FRITZ! interface documentation](https://fritz.com/en/pages/interfaces)
+- [Bosch Thermostat II package contents](https://www.bosch-smarthome.com/de/de/produkte/heizung/heizkoerper-thermostat/) and [FRITZ!Smart Thermo 302 package contents](https://fritz.com/en/products/fritz-smart-thermo-302)
 - [Stiftung Warentest: smart radiator thermostats](https://www.test.de/Heizkoerperthermostat-Test-5115581-0/) and [ADAC summary](https://www.adac.de/rund-ums-haus/energie/versorgung/smarte-heizkoerperthermostate/)
 - [Aqara W600: valve opening and heating state not reported, Zigbee2MQTT issue 33428](https://github.com/Koenkk/zigbee2mqtt/issues/33428) and [external sensor does not control the valve, Aqara forum](https://forum.aqara.com/t/w600-external-sensor-does-not-control-valve-firmware-issue/341137)
 
