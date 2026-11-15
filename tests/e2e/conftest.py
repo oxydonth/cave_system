@@ -35,6 +35,11 @@ def e2e_only() -> None:
         pytest.skip("end-to-end tests run against a running stack: CAVE_E2E=1 (the e2e job)")
 
 
+@pytest.fixture(autouse=True)
+def network(socket_enabled: None) -> None:
+    """Home Assistant's test plugin blocks sockets in every test; these talk to the real stack."""
+
+
 @dataclass
 class Stack:
     """The checkout with its running stack."""

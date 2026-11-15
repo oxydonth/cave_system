@@ -47,7 +47,8 @@ jobs:
       - name: First-run setup, checked through Home Assistant's API, and run again
         env:
           CAVE_E2E: "1"
-        run: uv run --locked pytest tests/e2e -v -p no:cacheprovider
+        # -s: the output of every ./cave run is part of the job log.
+        run: uv run --locked pytest tests/e2e -v -s -p no:cacheprovider
 
       - name: Home Assistant logged no unexpected errors
         run: |
@@ -96,6 +97,10 @@ jobs:
           for secret in "${CAVE_HA_OWNER_PASSWORD}" "${CAVE_MQTT_PASSWORD}" "${CAVE_Z2M_FRONTEND_TOKEN}"; do
             [ -n "${secret}" ] && sed -i "s/${secret}/********/g" "${RUNNER_TEMP}"/logs/*.log
           done
+          # Also in the job log, in case the artifact cannot be stored.
+          echo "::group::Home Assistant's log (warnings and errors)"
+          grep -E ' (WARNING|ERROR|CRITICAL) ' "${RUNNER_TEMP}/logs/home-assistant.log" | tail -200 || true
+          echo "::endgroup::"
 
       - name: Upload the logs, when something failed
         if: failure()
