@@ -42,11 +42,13 @@ class Timing:
     retry_interval: timedelta = timedelta(minutes=30)
     manual_settle: timedelta = timedelta(seconds=45)
     command_budget_per_hour: int = 20
+    budget_exhausted_hours: int = 3
     feed_threshold: float = 0.2
     feed_min_interval: timedelta = timedelta(minutes=10)
     feed_max_interval: timedelta = timedelta(minutes=25)
     sensor_stale: timedelta = timedelta(hours=3)
     window_unavailable_grace: timedelta = timedelta(minutes=30)
+    presence_unavailable_grace: timedelta = timedelta(minutes=30)
 
 
 @dataclass(frozen=True, slots=True)
@@ -186,6 +188,11 @@ def read_file(path: Path) -> object:
         raise ConfigError([f"the file {path} cannot be read: {err}"]) from err
     try:
         return yaml.load(text, Loader=_StrictLoader)  # noqa: S506  (a SafeLoader subclass)
+    except RecursionError as err:
+        raise ConfigError(["the file is nested too deeply to be read"]) from err
+    except ValueError as err:
+        # For example an integer with more digits than Python converts.
+        raise ConfigError([f"the file contains a value that cannot be read: {err}"]) from err
     except yaml.MarkedYAMLError as err:
         where = ""
         if err.problem_mark is not None:
@@ -198,7 +205,13 @@ def read_file(path: Path) -> object:
 
 def load_file(path: Path) -> HeatingConfig:
     """Read, convert and validate a heating.yaml. Raises ConfigError listing every problem."""
-    return parse(read_file(path))
+    data = read_file(path)
+    try:
+        return parse(data)
+    except (OverflowError, RecursionError, ValueError) as err:
+        # The validators guard against these; this keeps a file that slips past them a
+        # validation error rather than a crash.
+        raise ConfigError([f"the file contains a value that cannot be used: {err}"]) from err
 
 
 # --- Versions ---------------------------------------------------------------------------------
@@ -258,16 +271,28 @@ def _describe(value: object) -> str:
     return repr(value) if not isinstance(value, str) else f'"{value}"'
 
 
+def _finite(value: object) -> bool:
+    """A number that is neither infinite, nor NaN, nor too large for a float."""
+    if isinstance(value, bool) or not isinstance(value, int | float):
+        return False
+    try:
+        return math.isfinite(value)
+    except OverflowError:
+        return False
+
+
 def _duration(err: _Collector, path: str, value: object, *, positive: bool) -> timedelta | None:
     """A duration: "HH:MM:SS" or "HH:MM" as a string, or a number of seconds."""
     result: timedelta | None = None
-    if isinstance(value, bool):
-        result = None
-    elif isinstance(value, int | float) and math.isfinite(value) and value >= 0:
-        result = timedelta(seconds=value)
-    elif isinstance(value, str) and (match := _DURATION.match(value.strip())):
-        hours, minutes, seconds = match.groups()
-        result = timedelta(hours=int(hours), minutes=int(minutes), seconds=int(seconds or 0))
+    try:
+        if _finite(value) and value >= 0:  # type: ignore[operator]
+            result = timedelta(seconds=value)  # type: ignore[arg-type]
+        elif isinstance(value, str) and (match := _DURATION.match(value.strip())):
+            hours, minutes, seconds = match.groups()
+            result = timedelta(hours=int(hours), minutes=int(minutes), seconds=int(seconds or 0))
+    except OverflowError:
+        err.add(path, f"is too long to be a duration: {_describe(value)}")
+        return None
     if result is None:
         err.add(
             path,
@@ -282,9 +307,10 @@ def _duration(err: _Collector, path: str, value: object, *, positive: bool) -> t
 
 
 def _temperature(err: _Collector, path: str, value: object) -> float | None:
-    if isinstance(value, bool) or not isinstance(value, int | float) or not math.isfinite(value):
+    if not _finite(value):
         err.add(path, f"must be a temperature in °C, but is {_describe(value)}")
         return None
+    assert isinstance(value, int | float)  # noqa: S101  (checked by _finite)
     if not MIN_TEMPERATURE <= value <= MAX_TEMPERATURE:
         err.add(
             path,
@@ -352,7 +378,11 @@ def _unknown_keys(err: _Collector, prefix: str, data: Mapping[str, Any], known: 
 
 
 _TIMING_DEFAULTS: Final = Timing()
-_TIMING_COUNTS: Final = {"resend_attempts": 0, "command_budget_per_hour": 1}
+_TIMING_COUNTS: Final = {
+    "resend_attempts": 0,
+    "command_budget_per_hour": 1,
+    "budget_exhausted_hours": 1,
+}
 
 
 def _timing(err: _Collector, value: object) -> Timing:
@@ -374,19 +404,19 @@ def _timing(err: _Collector, value: object) -> Timing:
             else:
                 values[name] = raw
         elif name == "feed_threshold":
-            if (
-                isinstance(raw, bool)
-                or not isinstance(raw, int | float)
-                or not math.isfinite(raw)
-                or raw <= 0
-            ):
+            if not _finite(raw) or raw <= 0:
                 err.add(
                     path, f"must be a temperature difference above 0 K, but is {_describe(raw)}"
                 )
             else:
                 values[name] = float(raw)
         else:
-            positive = name not in {"debounce", "manual_settle", "window_unavailable_grace"}
+            positive = name not in {
+                "debounce",
+                "manual_settle",
+                "window_unavailable_grace",
+                "presence_unavailable_grace",
+            }
             duration = _duration(err, path, raw, positive=positive)
             if duration is not None:
                 values[name] = duration
@@ -448,10 +478,10 @@ def _room_defaults(err: _Collector, path: str, data: Mapping[str, Any]) -> dict[
 def _setting(err: _Collector, path: str, entity: str, value: object) -> SettingValue | None:
     domain = entity.split(".", 1)[0]
     if domain == "number":
-        if isinstance(value, bool) or not isinstance(value, int | float):
+        if not _finite(value):
             err.add(path, f"must be a number for a number entity, but is {_describe(value)}")
             return None
-        return float(value)
+        return float(value)  # type: ignore[arg-type]
     if isinstance(value, bool):
         # YAML 1.1 reads an unquoted on/off as true/false.
         return "on" if value else "off"
@@ -569,6 +599,8 @@ def _check_unique(err: _Collector, rooms: list[tuple[int, RoomConfig]]) -> None:
     room_ids: dict[str, int] = {}
     thermostats: dict[str, str] = {}
     inputs: dict[str, str] = {}
+    # The room thermostats this file creates; none of them can be a radiator thermostat.
+    room_climates = {f"climate.cave_{room.id}": room.id for _, room in rooms}
     for index, room in rooms:
         if room.id in room_ids:
             with err.room(f'room "{room.id}" (rooms[{index}])'):
@@ -576,6 +608,13 @@ def _check_unique(err: _Collector, rooms: list[tuple[int, RoomConfig]]) -> None:
         room_ids.setdefault(room.id, index)
         for trv_index, trv in enumerate(room.trvs):
             with err.room(f'room "{room.id}" (rooms[{index}])'):
+                if trv.entity in room_climates:
+                    err.add(
+                        f"trvs[{trv_index}].entity",
+                        f'"{trv.entity}" is the room thermostat of room '
+                        f'"{room_climates[trv.entity]}" that cave_heating creates, not a radiator '
+                        "thermostat",
+                    )
                 if trv.entity in thermostats:
                     err.add(
                         f"trvs[{trv_index}].entity",
