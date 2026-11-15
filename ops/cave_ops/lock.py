@@ -19,6 +19,27 @@ class LockBusy(CaveError):
     """Another ``cave`` command holds the lock."""
 
 
+def held_by(path: Path) -> str | None:
+    """Who holds the lock at ``path`` right now, or ``None``. Needs only read access.
+
+    For ``status``, which must not take the lock. It probes with a shared lock for an instant; a
+    command that tries to take the lock in exactly that instant is refused as if it were busy.
+    """
+    try:
+        fd = os.open(path, os.O_RDONLY)
+    except OSError:
+        return None
+    try:
+        try:
+            fcntl.flock(fd, fcntl.LOCK_SH | fcntl.LOCK_NB)
+        except BlockingIOError:
+            return os.pread(fd, 200, 0).decode(errors="replace").strip() or "another cave command"
+        fcntl.flock(fd, fcntl.LOCK_UN)
+        return None
+    finally:
+        os.close(fd)
+
+
 class Lock:
     """``with Lock(path, "update"): ...``. Raises ``LockBusy`` naming the holder if it is taken."""
 

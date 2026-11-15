@@ -108,6 +108,17 @@ jobs:
     name: e2e
     uses: ./.github/workflows/e2e.yml
 
+  release:
+    name: release
+    # The exception to the rule above: it runs after ci-ok, only for pushes to main, and ci-ok
+    # does not wait for it. A reusable workflow cannot raise the read-only default, so the
+    # permission to create the tag and the release is granted here.
+    needs: ci-ok
+    if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+    permissions:
+      contents: write
+    uses: ./.github/workflows/release.yml
+
   ci-ok:
     name: ci-ok
     # Fails when any job it depends on failed, was cancelled or was skipped, so it can be the
