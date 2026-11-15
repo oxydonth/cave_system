@@ -42,6 +42,7 @@ import pytest
 
 from cave_ops import cli
 from cave_ops.context import Context
+from cave_ops.envfile import NAMES
 from cave_ops.paths import Paths
 from cave_ops.runner import CommandError, Result
 
@@ -134,6 +135,13 @@ class FakeRunner:
 
     def matching(self, *prefix: str) -> list[Call]:
         return [call for call in self.calls if call.args[: len(prefix)] == prefix]
+
+
+@pytest.fixture(autouse=True)
+def clean_environment(monkeypatch: pytest.MonkeyPatch) -> None:
+    """No ``CAVE_*`` setting of the developer's shell may leak into a test."""
+    for name in NAMES:
+        monkeypatch.delenv(name, raising=False)
 
 
 @pytest.fixture
