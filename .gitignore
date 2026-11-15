@@ -1,0 +1,26 @@
+# OS
+.DS_Store
+
+# Python
+__pycache__/
+*.py[cod]
+.venv/
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+.coverage
+coverage.xml
+htmlcov/
+dist/
+build/
+*.egg-info/
+
+# Secrets and runtime state: generated on the box, never committed
+.env
+.env.*
+!.env.example
+secrets.yaml
+/data/
+
+# Agent worktrees
+.claude/worktrees/
