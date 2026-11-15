@@ -745,6 +745,9 @@ async def test_a_reload_keeps_pending_commands_holds_and_the_window_pause(
     await home.advance(freezer, 2 * MIN)
     assert slow.commands == [("set_temperature", {"temperature": 21.0})]
     assert paused.commands == [("set_hvac_mode", {"hvac_mode": "off"})]
+    # The window is closed, and the reload comes within the close delay: the pause goes on.
+    home.set("binary_sensor.window", "off")
+    await home.advance(freezer, 30 * SEC)
     await home.reload(file)
     await home.advance(freezer, 3 * SEC)
     problem = "binary_sensor.cave_living_room_problem"
@@ -753,6 +756,9 @@ async def test_a_reload_keeps_pending_commands_holds_and_the_window_pause(
         "climate.held": "held",
     }
     assert home.state("binary_sensor.cave_bathroom_window_open").state == "on"
+    assert paused.commands == [("set_hvac_mode", {"hvac_mode": "off"})]
+    await home.advance(freezer, 90 * SEC)
+    assert paused.commands[1:] == [("set_temperature", {"temperature": 21.0, "hvac_mode": "heat"})]
     await hass.services.async_call(
         "number",
         "set_value",
@@ -765,4 +771,4 @@ async def test_a_reload_keeps_pending_commands_holds_and_the_window_pause(
         ("set_temperature", {"temperature": 22.0}),
     ], "the command in flight was neither forgotten nor sent again"
     assert held.commands == [], "still held"
-    assert paused.commands == [("set_hvac_mode", {"hvac_mode": "off"})], "still paused"
+    assert len(paused.commands) == 2, "paused once, resumed once"

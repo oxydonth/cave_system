@@ -1077,3 +1077,65 @@ async def test_a_setting_skipped_while_its_thermostat_was_held_is_written_at_rel
     await hass.services.async_call(DOMAIN, "release", {"entity_id": "climate.trv"}, blocking=True)
     await home.settle()
     assert select.commands == [("select_option", {"option": "external"})]
+
+
+async def test_a_hold_discards_a_dial_change_still_settling_even_if_released_in_time(
+    hass: HomeAssistant, home: FakeHome, freezer: FrozenDateTimeFactory
+) -> None:
+    """M5 and P9: the device check's target is not adopted, also after a quick release."""
+    checked = await home.thermostat("climate.a", target=21.0)
+    other = await home.thermostat("climate.b", target=21.0)
+    await start(home, "climate.a", "climate.b")
+    await past_start_window(home, freezer)
+    checked.turn_dial(22.0)
+    await home.advance(freezer, 10 * SEC)
+    await _hold(hass, "climate.a")
+    checked.turn_dial(27.5)
+    await home.advance(freezer, 10 * SEC)
+    await hass.services.async_call(DOMAIN, "release", {"entity_id": "climate.a"}, blocking=True)
+    await home.advance(freezer, 2 * MIN)
+    assert home.state(LIVING).attributes["reason"] == "comfort"
+    assert other.commands == []
+    assert checked.commands == [heat(21.0)], "brought back in line after the release"
+
+
+async def test_one_room_failing_does_not_stop_the_others(
+    hass: HomeAssistant,
+    home: FakeHome,
+    freezer: FrozenDateTimeFactory,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """M6: the failure is logged and shown on that room's problem sensor; the rest goes on."""
+    await home.thermostat("climate.a", target=21.0)
+    bedroom = await home.thermostat("climate.b", target=21.0)
+    home.set("binary_sensor.bed_window", "off")
+    await home.start(
+        config(
+            room("living_room", "climate.a"),
+            room("bedroom", "climate.b", windows=["binary_sensor.bed_window"]),
+        )
+    )
+    runtime = home.runtime()
+    original = runtime._feed
+
+    def failing_feed(room: Any, reading: Any, now: Any) -> None:
+        if room.config.id == "living_room":
+            raise RuntimeError("broken on purpose")
+        original(room, reading, now)
+
+    monkeypatch.setattr(runtime, "_feed", failing_feed)
+    home.set("binary_sensor.bed_window", "on")
+    await home.advance(freezer, 2 * MIN)
+    assert bedroom.commands == [OFF]
+    problem = home.state(PROBLEM)
+    assert problem.state == "on"
+    assert problem.attributes["messages"] == [
+        "the controller failed on this room: broken on purpose"
+    ]
+    home.set("binary_sensor.bed_window", "off")
+    await home.advance(freezer, 3 * MIN)
+    assert bedroom.commands == [OFF, heat(21.0, "heat")], "timers still run for the others"
+    monkeypatch.setattr(runtime, "_feed", original)
+    home.set("binary_sensor.bed_window", "off")
+    await home.settle()
+    assert home.state(PROBLEM).state == "off"

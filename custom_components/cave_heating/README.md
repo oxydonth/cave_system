@@ -60,7 +60,7 @@ timing: {}                      # optional; see below
 | Key | Default | Meaning |
 |---|---|---|
 | `version` | — | Format of the file. Every earlier version stays accepted and is converted on load. |
-| `presence` | none | Someone is home if any says so: a zone with a count above zero, a person or device tracker `home`, anything else `on`. Unknown or unavailable counts as home. |
+| `presence` | none | Someone is home if any says so: a zone with a count above zero, a person or device tracker `home`, anything else `on`. An entity that becomes unavailable keeps its last reading for `presence_unavailable_grace`, then counts as home; one never heard from counts as home at once. |
 | `away_delay` | `00:30:00` | How long presence must report nobody home before the home is away. |
 | `away_temperature` | 16.0 | First value of `number.cave_away_temperature`; afterwards the UI value wins. |
 | `comfort_temperature`, `eco_temperature` | 21.0, 17.5 | First values of the room's two numbers; afterwards the UI values win. A differing file value is logged on load. |
@@ -71,7 +71,7 @@ timing: {}                      # optional; see below
 | `trvs[].external_temperature` | none | A `number` or `input_number` the room sensor's reading is written to. |
 | `trvs[].settings` | none | Device settings (`select`, `switch`, `number` entities and the value each should have), written when the file is loaded, when the thermostat returns from being unavailable, and `confirm_timeout` after the temperature feed starts again; never watched in between. |
 | `trvs[].slow` | `true` for the FRITZ!Box integration, else `false` | Slow thermostats get `confirm_timeout_slow`. |
-| `temperature_sensor`, `humidity_sensor` | none | Without a (fresh) room sensor the room shows the average of its thermostats' readings and the feed stops. |
+| `temperature_sensor`, `humidity_sensor` | none | Without a fresh room sensor (see `sensor_stale`) the room shows the average of its thermostats' readings and the feed stops. |
 | `windows` | none | Window contacts (`binary_sensor` or `input_boolean`), one entity or a list. |
 | `schedule` | none | A `schedule` (or `input_boolean`, `binary_sensor`); on means comfort, off means eco. Without one the room is at comfort. |
 
@@ -89,11 +89,13 @@ in quotes, or a number of seconds.
 | `retry_interval` | 30 min | How often an `unresponsive` or `blocked` thermostat is tried again. |
 | `manual_settle` | 45 s | Dial turns are collected this long before the last one becomes the room's override. |
 | `command_budget_per_hour` | 20 | Mode and target commands per thermostat per hour; more wait. |
+| `budget_exhausted_hours` | 3 | A thermostat whose budget is used up this many hours in a row is `unresponsive`: tried again only every `retry_interval`, with a repair notice, until it has matched for a whole `retry_interval`. |
 | `feed_threshold` | 0.2 K | Change of the room temperature that is written to the thermostat... |
 | `feed_min_interval` | 10 min | ...once this long has passed since the last write. |
 | `feed_max_interval` | 25 min | The temperature is written at least this often. |
-| `sensor_stale` | 3 h | A room sensor that has not reported for this long counts as unavailable. |
+| `sensor_stale` | 3 h | A room sensor counts as unavailable when neither it nor any other entity of its device (its humidity or battery reading, say) has reported for this long. Home Assistant does not record a repeated identical value, so the temperature alone looks silent in a steady room. |
 | `window_unavailable_grace` | 30 min | A window contact that goes silent while open keeps the pause this long. |
+| `presence_unavailable_grace` | 30 min | A presence entity that becomes unavailable keeps its last reading this long. |
 
 ## The validator
 
@@ -130,10 +132,10 @@ home). Each room is a device in the area named like the room.
 
 | Service | Fields | Does |
 |---|---|---|
-| `cave_heating.boost` | target: room thermostats (entity, device or area); `duration`, `temperature` optional | Boosts the rooms. |
-| `cave_heating.resume_schedule` | target: room thermostats | Ends a boost or override. |
+| `cave_heating.boost` | target: room thermostats (entity, device or area); `duration`, `temperature` optional | Boosts the rooms. A target that is not a room thermostat, or that reaches none, is refused with a message. |
+| `cave_heating.resume_schedule` | target: room thermostats, refused like `boost` | Ends a boost or override. |
 | `cave_heating.reload` | none | Reads the applied copy again. Fails with the problems in its message (HTTP 400 over the REST API) if the file is not valid; the running configuration stays. |
-| `cave_heating.hold` | `entity_id`: a thermostat named in the file; `duration` optional, 15 minutes by default, at most 4 hours | The controller sends the thermostat nothing and adopts nothing from it. Not kept across a restart. |
+| `cave_heating.hold` | `entity_id`: a thermostat named in the file; `duration` optional, 15 minutes by default, more than zero and at most 4 hours | The controller sends the thermostat nothing and adopts nothing from it. Not kept across a restart. |
 | `cave_heating.release` | `entity_id` | Ends a hold (also one that has already ended); the thermostat is brought in line with its room. |
 
 Setting a temperature or preset, or boosting, is refused with a message while the home mode is
@@ -143,4 +145,13 @@ Setting a temperature or preset, or boosting, is refused with a message while th
 
 `applied_file_missing`, `applied_file_invalid` (at start-up), `reload_invalid` (on reload),
 `missing_<room>_<entity>` for an entity named in the file that Home Assistant does not have, and
-`unresponsive_<entity>` for a thermostat that does not confirm its commands.
+`unresponsive_<entity>` for a thermostat that does not confirm its commands, or that kept differing
+from what is wanted for `budget_exhausted_hours`.
+
+## Restarts
+
+The state file keeps each room's mode, temperatures, boost and override (with the schedule state
+it was set under), whether its window pause is in effect, since when nobody has been home, and the
+presence entities' last readings. Holds are not kept. Nothing is sent to the thermostats until Home
+Assistant has finished starting, so a restart sends nothing to a thermostat that is where it
+should be.
