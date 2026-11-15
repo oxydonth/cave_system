@@ -16,17 +16,17 @@ each part (`tests/ops/conftest.py`).
 | Module | Provides |
 |---|---|
 | `cli.py` | Command discovery (`discover()`), the argument parser and `main(argv, root=, ctx=)`. A `CaveError` becomes `cave: <message>` and exit status 1. |
-| `context.py` | `Context`: `paths`, `env` (`.env` overlaid by the process environment), `runner`, `out`/`err`, `ha()`, `lock(name)`, `docker(...)`, `compose(...)`, `git(...)`, `say()`/`warn()`, `journal`, `sleep`/`monotonic`, `compose_files` (the demo adds `compose.sim.yaml`). `Context.create(root)` builds the real one. |
+| `context.py` | `Context`: `paths`, `env` (`.env` overlaid by the process environment), `runner`, `out`/`err`, `ha()`, `lock(name)`, `docker(...)`, `compose(...)`, `git(...)`, `say()`/`warn()`, `journal`, `sleep`/`monotonic`, `compose_files`, `compose_env`. `Context.create(root)` builds the real one. See "Compose with overlays and environment" below. |
 | `paths.py` | `Paths(root, data)`: every path of concept sections 4.2 and 4.5 (`heating`, `heating_applied`, `dashboard`, `token`, `lock_file`, ...), and `container_path(host_path)` for the path inside the Home Assistant container. |
-| `envfile.py` | The variable table of concept section 4.2 (`VARIABLES`), `.env` parsing and rendering. `.env.example` is rendered from the table: `PYTHONPATH=ops python3 -m cave_ops.envfile > .env.example`. |
-| `runner.py` | `Runner` protocol and `SubprocessRunner`: `run(args, cwd=, env=, capture=, check=, input_text=, timeout=) -> Result(returncode, stdout, stderr)`. A missing program is status 127, not an exception; `check=True` raises `CommandError`. |
+| `envfile.py` | The variable table of concept section 4.2 (`VARIABLES`), `.env` parsing (`parse_env`: quotes, inline comments; no `$` interpolation, so use single quotes for values with `$`), `missing_names()` / `apply_updates()` to complete a `.env` in place, and rendering. `.env.example` is rendered from the table: `PYTHONPATH=ops python3 -m cave_ops.envfile > .env.example`. |
+| `runner.py` | `Runner` protocol and `SubprocessRunner`: `run(args, cwd=, env=, capture=, check=, input_text=, timeout=) -> Result(returncode, stdout, stderr)`. A missing program is status 127 and a timeout is status 124, not exceptions; `check=True` raises `CommandError`. Nothing in `cave` runs unbounded by accident: `ctx.git()` defaults to 120 s, the health check asks Docker with 60 s, `run_in_homeassistant` defaults to 600 s. |
 | `ha.py` | `read_token(paths)` and `HAClient`: `config()`, `get_state()`, `services()`, `has_service()`, `call_service()`. Failures are `HAError` (with `status`) and `HAUnreachable`. The transport is replaceable. |
-| `health.py` | `check_health(ctx)` and `wait_healthy(ctx, timeout=, interval=)`: "Healthy" as defined in concept section 4.5, returning `Health(healthy, problems)`. |
+| `health.py` | `check_health(ctx)` and `wait_healthy(ctx, timeout=, interval=)`: "Healthy" as defined in concept section 4.5, returning `Health(healthy, problems)`. Without the script token it proves: every container of the active profiles runs and passes its health check, which for Home Assistant includes that it logged "Home Assistant initialized". It does not prove that Home Assistant is out of recovery mode. With the token it also requires `/api/config` to report `state` RUNNING, no `recovery_mode`/`safe_mode`, and `cave_heating` set up. |
 | `notify.py` | `notify(ctx, title, message)`: the notification contract of concept section 4.5 (`script.cave_notify` called with the fields `title` and `message`, else `persistent_notification.create`, always also the journal). Never raises. |
 | `container.py` | `run_in_homeassistant(ctx, command, entrypoint=, workdir=, capture=)`: a one-off command in the pinned Home Assistant image with the service's mounts (`/config`, `/cave/tools`); for everything that needs Home Assistant's own Python packages. |
-| `heating.py` | `validate_and_store(ctx, source=None) -> ApplyResult`: runs the validator in a one-off container, and only if it passes stores the applied copy. Also `validate()` and `store_applied()`. |
+| `heating.py` | `validate_and_store(ctx, source=None) -> ApplyResult`: reads the file **once**, validates a staged copy of exactly those bytes in a one-off container, and only if it passes stores those same bytes as the applied copy. Also `validate()` and `store_applied(ctx, path_or_bytes)`. |
 | `lock.py` | `Lock(path, command)` and `ctx.lock(command)`: the one lock of concept section 4.5, `with ctx.lock("update"): ...`. Raises `LockBusy` naming the holder. |
-| `mosquitto.py` | `password_line(user, password)`: a line of the broker's password file. |
+| `mosquitto.py` | `password_line(user, password)`: a line of the broker's password file; `accepts(text, user, password)`: whether a password file lets that login in. |
 | `versioncheck.py` | The version check behind `make versions`. |
 | `errors.py` | `CaveError`: raise it for failures the user can act on. |
 
@@ -69,6 +69,31 @@ Rules for commands:
 * Whatever needs Home Assistant's own Python packages runs in a one-off container, as
   `heating.validate()` does, never by importing Home Assistant here.
 * Document the command in `docs/` where a user would look.
+
+## Compose with overlays and environment
+
+`ctx.compose(...)` runs `docker compose` from the checkout. By default Compose chooses its own
+files (`compose.yaml` and, if it exists, `compose.override.yaml`). Set `ctx.compose_files = ("compose.sim.yaml",)` to add overlays: the context then names `compose.yaml`, the local
+`compose.override.yaml` if present, and the overlays, in that order, because any `-f` stops
+Compose from reading its default files. Set `ctx.compose_env = {"CAVE_DATA": "/srv/demo"}` (or pass
+`env={...}` to a call) to give Compose environment variables; Compose lets the environment win over
+`.env`, which is how the demo gets a state directory of its own. Pass a copy of the context, not
+the original, when only one command should use them (`dataclasses.replace(ctx, compose_files=...)`).
+
+## Hand-over to the work packages that build on this
+
+* Files that containers create in the state directory (the script token, Home Assistant's
+  `.storage`, Mosquitto's data) are owned by root or by the container's user, mode 0600 or
+  similar. **Bootstrap** must give the script token to the user that runs `./cave`. **Backup** and
+  **restore** cannot read `.storage` or Mosquitto's data as that user: they need `docker compose
+  exec`/`run` as root inside the containers, or root.
+* `homeassistant/configuration.yaml` sets no core setting (name, time zone, units, country,
+  currency, location): any of them in YAML would lock them all in the UI. **Bootstrap** has to
+  set the time zone from `TZ`, metric units, country and currency through Home Assistant, or
+  Home Assistant stays on UTC; the owner sets the home's location in the UI or in onboarding.
+* `script.cave_notify` is called with the fields `title` and `message`.
+* `init` stores the starter as the applied copy without the validator. Once the validator has
+  merged, a later work package may switch `init` to `validate_and_store`.
 
 ## Recipes
 

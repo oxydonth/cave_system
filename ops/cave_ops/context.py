@@ -49,7 +49,15 @@ class Context:
     sleep: Callable[[float], None] = time.sleep
     monotonic: Callable[[], float] = time.monotonic
     compose_files: tuple[str, ...] = ()
-    """Extra ``-f`` files for Compose (the demo adds ``compose.sim.yaml``)."""
+    """Overlay files given to Compose after ``compose.yaml`` (the demo adds ``compose.sim.yaml``).
+
+    Empty means Compose's own default: ``compose.yaml`` and, if present, ``compose.override.yaml``.
+    Non-empty: ``compose.yaml``, then ``compose.override.yaml`` if present, then these files.
+    """
+    compose_env: dict[str, str] = field(default_factory=dict)
+    """Environment added to every Compose call, over the process environment and ``.env``
+    (Compose lets the environment win). The demo sets ``CAVE_DATA`` here for a state directory
+    of its own."""
 
     @classmethod
     def create(cls, root: Path, environ: Mapping[str, str] | None = None) -> Context:
@@ -75,16 +83,27 @@ class Context:
         check: bool = False,
         input_text: str | None = None,
         timeout: float | None = None,
+        env: Mapping[str, str] | None = None,
     ) -> Result:
         """``docker <args>``; the keywords are those of ``Runner.run``."""
         return self.runner.run(
             ["docker", *args],
             cwd=self.paths.root,
+            env=env,
             capture=capture,
             check=check,
             input_text=input_text,
             timeout=timeout,
         )
+
+    def compose_prefix(self) -> list[str]:
+        """The ``-f`` options of ``compose_files``; empty when Compose may choose its files."""
+        if not self.compose_files:
+            return []
+        files = ["compose.yaml"]
+        if (self.paths.root / "compose.override.yaml").is_file():
+            files.append("compose.override.yaml")
+        return [part for name in (*files, *self.compose_files) for part in ("-f", name)]
 
     def compose(
         self,
@@ -93,22 +112,31 @@ class Context:
         check: bool = False,
         input_text: str | None = None,
         timeout: float | None = None,
+        env: Mapping[str, str] | None = None,
     ) -> Result:
-        """``docker compose <args>`` for the active profiles and ``compose_files``."""
-        files = [part for name in self.compose_files for part in ("-f", name)]
+        """``docker compose <args>`` for the active profiles, ``compose_files`` and ``compose_env``.
+
+        ``env`` is added to ``compose_env`` for this call.
+        """
+        merged = {**self.compose_env, **(env or {})}
         return self.docker(
             "compose",
-            *files,
+            *self.compose_prefix(),
             *args,
             capture=capture,
             check=check,
             input_text=input_text,
             timeout=timeout,
+            env=merged or None,
         )
 
-    def git(self, *args: str, capture: bool = True, check: bool = False) -> Result:
-        """``git <args>`` in the checkout."""
-        return self.runner.run(["git", *args], cwd=self.paths.root, capture=capture, check=check)
+    def git(
+        self, *args: str, capture: bool = True, check: bool = False, timeout: float | None = 120.0
+    ) -> Result:
+        """``git <args>`` in the checkout. Bounded by ``timeout`` (``None``: unbounded)."""
+        return self.runner.run(
+            ["git", *args], cwd=self.paths.root, capture=capture, check=check, timeout=timeout
+        )
 
     # --- Home Assistant
     def ha(self) -> HAClient | None:

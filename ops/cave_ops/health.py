@@ -1,8 +1,11 @@
 """ "Healthy", as defined in concept section 4.5.
 
-Every container of the active profiles is running and its Docker health check passes. If the
-script token exists, additionally ``GET /api/config`` returns 200 and its ``components`` list
-contains ``cave_heating``.
+Every container of the active profiles is running and its Docker health check passes. Home
+Assistant's own check (compose.yaml) needs its frontend to answer and the line "Home Assistant
+initialized" in its log, so it is not healthy while it is still starting; it cannot tell recovery
+mode from normal operation without a login. If the script token exists, additionally
+``GET /api/config`` returns 200 and reports ``state`` RUNNING, neither ``recovery_mode`` nor
+``safe_mode``, and ``cave_heating`` among its ``components``.
 """
 
 from __future__ import annotations
@@ -17,6 +20,7 @@ if TYPE_CHECKING:
     from .context import Context
 
 HEATING_COMPONENT = "cave_heating"
+DOCKER_TIMEOUT = 60.0  # seconds for each Docker question; a hung daemon is "not healthy"
 
 
 @dataclass(frozen=True)
@@ -45,12 +49,12 @@ def check_health(ctx: Context) -> Health:
     """Ask Docker, and Home Assistant if a script token exists, whether the stack is healthy."""
     problems: list[str] = []
 
-    expected = ctx.compose("config", "--services")
+    expected = ctx.compose("config", "--services", timeout=DOCKER_TIMEOUT)
     if not expected.ok:
         return Health(False, (f"docker compose config failed: {expected.output.strip()}",))
     services = [line.strip() for line in expected.stdout.splitlines() if line.strip()]
 
-    listing = ctx.compose("ps", "--all", "--format", "json")
+    listing = ctx.compose("ps", "--all", "--format", "json", timeout=DOCKER_TIMEOUT)
     if not listing.ok:
         return Health(False, (f"docker compose ps failed: {listing.output.strip()}",))
     try:
@@ -80,12 +84,19 @@ def _check_api(ctx: Context) -> list[str]:
         client = ctx.ha()
         if client is None:
             return []
-        components = client.config().get("components", [])
+        config = client.config()
     except CaveError as error:
         return [f"Home Assistant API: {error}"]
-    if HEATING_COMPONENT not in components:
-        return [f"Home Assistant has not set up {HEATING_COMPONENT}"]
-    return []
+    problems = []
+    if config.get("state") != "RUNNING":
+        problems.append(
+            f"Home Assistant is {config.get('state', 'in an unknown state')}, not RUNNING"
+        )
+    if config.get("recovery_mode") or config.get("safe_mode"):
+        problems.append("Home Assistant is in recovery or safe mode: its configuration is broken")
+    if HEATING_COMPONENT not in config.get("components", []):
+        problems.append(f"Home Assistant has not set up {HEATING_COMPONENT}")
+    return problems
 
 
 def wait_healthy(ctx: Context, *, timeout: float = 300.0, interval: float = 5.0) -> Health:

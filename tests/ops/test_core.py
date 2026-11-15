@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import http.client
 import json
 import os
 import subprocess
@@ -391,9 +392,10 @@ def test_one_off_container_command_with_working_directory_and_entrypoint(ctx, fa
     assert not call.capture
 
 
-def test_compose_files_of_the_context_come_before_the_subcommand(ctx, fake_runner):
+def test_compose_with_overlays_names_compose_yaml_first(ctx, fake_runner):
+    """Any -f stops Compose from reading compose.yaml by itself, so the context adds it."""
     fake_runner.on(["docker", "compose"])
-    ctx.compose_files = ("compose.yaml", "compose.sim.yaml")
+    ctx.compose_files = ("compose.sim.yaml",)
 
     ctx.compose("ps")
 
@@ -406,3 +408,168 @@ def test_compose_files_of_the_context_come_before_the_subcommand(ctx, fake_runne
         "compose.sim.yaml",
         "ps",
     )
+
+
+def test_compose_with_overlays_keeps_the_local_override_between_them(ctx, fake_runner):
+    fake_runner.on(["docker", "compose"])
+    (ctx.paths.root / "compose.override.yaml").write_text("services: {}\n")
+    ctx.compose_files = ("compose.sim.yaml",)
+
+    ctx.compose("ps")
+
+    args = fake_runner.calls[0].args
+    assert args[2:8] == (
+        "-f",
+        "compose.yaml",
+        "-f",
+        "compose.override.yaml",
+        "-f",
+        "compose.sim.yaml",
+    )
+
+
+def test_compose_without_overlays_leaves_the_choice_of_files_to_compose(ctx, fake_runner):
+    fake_runner.on(["docker", "compose"])
+
+    ctx.compose("ps")
+
+    assert fake_runner.calls[0].args == ("docker", "compose", "ps")
+
+
+def test_compose_passes_the_environment_of_the_context_and_of_the_call(ctx, fake_runner):
+    fake_runner.on(["docker", "compose"])
+    ctx.compose_env = {"CAVE_DATA": "/srv/demo-state", "TZ": "UTC"}
+
+    ctx.compose("up", env={"TZ": "Europe/Berlin"})
+    ctx.compose("ps")
+
+    assert fake_runner.calls[0].env == {"CAVE_DATA": "/srv/demo-state", "TZ": "Europe/Berlin"}
+    assert fake_runner.calls[1].env == {"CAVE_DATA": "/srv/demo-state", "TZ": "UTC"}
+
+
+def test_compose_without_environment_passes_none(ctx, fake_runner):
+    fake_runner.on(["docker", "compose"])
+
+    ctx.compose("ps")
+
+    assert fake_runner.calls[0].env is None
+
+
+def test_nothing_runs_without_a_time_limit_unless_asked_to(ctx, fake_runner, write_token):
+    fake_runner.on(["git"], out="v1\n")
+    fake_runner.on(["docker", "compose", "config", "--services"], out="a\n")
+    fake_runner.on(["docker", "compose", "ps"], out=ps(a=("running", "healthy")))
+    fake_runner.on(["docker", "compose", "run"])
+
+    ctx.git("describe")
+    check_health(ctx)
+    run_in_homeassistant(ctx, ["-V"])
+    run_in_homeassistant(ctx, ["-V"], timeout=None)
+
+    git_call = fake_runner.matching("git")[0]
+    health_calls = fake_runner.matching("docker", "compose", "config") + fake_runner.matching(
+        "docker", "compose", "ps"
+    )
+    run_calls = fake_runner.matching("docker", "compose", "run")
+    assert git_call.timeout == 120.0
+    assert [call.timeout for call in health_calls] == [60.0, 60.0]
+    assert [call.timeout for call in run_calls] == [600.0, None]
+
+
+def test_a_hung_docker_is_reported_as_not_healthy_instead_of_hanging(ctx, fake_runner):
+    fake_runner.on(
+        ["docker", "compose", "config"], rc=124, err="docker: timed out after 60 seconds\n"
+    )
+
+    health = check_health(ctx)
+
+    assert not health.healthy
+    assert "timed out" in health.problems[0]
+
+
+def test_home_assistant_that_is_still_starting_is_not_healthy(
+    ctx, fake_runner, fake_ha, write_token
+):
+    stack(fake_runner, ["a"], ps(a=("running", "healthy")))
+    write_token()
+    fake_ha.state = "NOT_RUNNING"
+
+    health = check_health(ctx)
+
+    assert not health.healthy
+    assert "NOT_RUNNING" in health.problems[0]
+    fake_ha.state = "RUNNING"
+    assert check_health(ctx).healthy
+
+
+@pytest.mark.parametrize("mode", ["recovery_mode", "safe_mode"])
+def test_home_assistant_in_recovery_or_safe_mode_is_not_healthy(
+    ctx, fake_runner, fake_ha, write_token, mode
+):
+    stack(fake_runner, ["a"], ps(a=("running", "healthy")))
+    write_token()
+    setattr(fake_ha, mode, True)
+
+    health = check_health(ctx)
+
+    assert not health.healthy
+    assert "recovery or safe mode" in health.problems[0]
+
+
+def test_a_dropped_connection_is_unreachable_not_a_crash(ctx, write_token):
+    write_token()
+
+    def dropped(method, url, headers, body, timeout):
+        raise http.client.IncompleteRead(b"par")
+
+    ctx.transport = dropped
+
+    with pytest.raises(HAUnreachable):
+        ctx.ha().config()
+
+
+def test_malformed_answers_are_ha_errors(ctx, fake_ha, write_token):
+    write_token()
+    answers = {"/api/services": b'{"not": "a list"}', "/api/config": b"[1, 2]"}
+
+    def odd(method, url, headers, body, timeout):
+        return 200, answers[url.removeprefix("http://127.0.0.1:8123")]
+
+    ctx.transport = odd
+    client = ctx.ha()
+
+    with pytest.raises(HAError):
+        client.services()
+    with pytest.raises(HAError):
+        client.config()
+
+
+def test_notify_never_raises_whatever_home_assistant_does(ctx, write_token, journal):
+    write_token()
+
+    def broken(method, url, headers, body, timeout):
+        raise http.client.BadStatusLine("garbage")
+
+    ctx.transport = broken
+
+    result = notify(ctx, "Update", "failed")
+
+    assert not result.delivered
+    assert journal == ["Update: failed"]
+
+    ctx.transport = lambda *args: (200, b'{"x": 1}')
+    assert not notify(ctx, "Update", "failed").delivered
+
+
+def test_the_service_hook_lets_a_fake_react_to_a_call(ctx, fake_ha, write_token):
+    write_token()
+    fake_ha.states["climate.x"] = {"state": "heat", "attributes": {"temperature": 20.0}}
+
+    def confirm(data):
+        fake_ha.states["climate.x"]["attributes"]["temperature"] = data["temperature"]
+
+    fake_ha.on_service("climate", "set_temperature", confirm)
+
+    ctx.ha().call_service("climate", "set_temperature", {"temperature": 21.5})
+
+    assert ctx.ha().get_state("climate.x")["attributes"]["temperature"] == 21.5

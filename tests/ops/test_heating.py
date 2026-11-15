@@ -58,7 +58,7 @@ def test_the_validator_runs_in_a_one_off_container_with_config_as_working_direct
         "homeassistant",
         "-m",
         "custom_components.cave_heating.validate",
-        "/config/cave/heating.yaml",
+        "/config/cave/.validating.yaml",
     )
     assert call.cwd == ctx.paths.root
 
@@ -148,3 +148,37 @@ def test_validate_alone_does_not_store(ctx, home, fake_runner):
 
     assert ok
     assert "only validated" not in home.heating_applied.read_text()
+
+
+def test_the_bytes_that_were_validated_are_the_bytes_that_are_stored(ctx, home, fake_runner):
+    """The edited file may be saved again while the validator's container starts."""
+    validated = VALID + "# the version that was validated\n"
+    home.heating.write_text(validated)
+    seen = []
+
+    def save_again_while_validating(call):
+        seen.append((home.ha_config / "cave" / ".validating.yaml").read_text())
+        home.heating.write_text("version: 1\nrooms: [this was never validated]\n")
+
+    fake_runner.on(VALIDATOR, side_effect=save_again_while_validating)
+
+    result = validate_and_store(ctx)
+
+    assert result.ok
+    assert seen == [validated]
+    assert home.heating_applied.read_text() == validated
+    assert home.heating.read_text() != validated  # the later save is the edited file's business
+
+
+def test_messages_name_the_edited_file_not_the_staged_copy(ctx, home, fake_runner):
+    fake_runner.on(VALIDATOR, rc=1, out="/config/cave/.validating.yaml: rooms[0]: bad\n")
+
+    result = validate_and_store(ctx)
+
+    assert result.messages == (f"{home.heating}: rooms[0]: bad",)
+
+
+def test_store_applied_accepts_bytes(ctx, home):
+    assert store_applied(ctx, b"version: 1\nrooms: []\n# bytes\n") is True
+
+    assert home.heating_applied.read_bytes().endswith(b"# bytes\n")

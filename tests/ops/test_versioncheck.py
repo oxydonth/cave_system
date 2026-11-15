@@ -93,3 +93,14 @@ def test_the_repository_agrees_with_itself(repo_root):
     ]
 
     assert problems == []
+
+
+def test_every_occurrence_is_checked_not_only_the_first():
+    stale_comment = "  # was ghcr.io/home-assistant/hassfest:2026.9.0\n"
+
+    problems = check(LOCK, COMPOSE, CI + stale_comment)
+    assert len(problems) == 1
+    assert "2026.9.0" in problems[0]
+
+    two_services = COMPOSE + "  other:\n    image: ghcr.io/home-assistant/home-assistant:2026.9.0\n"
+    assert any("2026.9.0" in problem for problem in check(LOCK, two_services, CI))

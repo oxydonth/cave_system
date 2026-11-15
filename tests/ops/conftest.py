@@ -13,7 +13,9 @@ this file, because ``--import-mode=importlib`` does not allow it. Later work pac
     Replaces ``docker`` and ``git``. Declare answers with ``fake_runner.on(prefix, ...)``; an
     unexpected command fails the test. See ``FakeRunner``.
 ``fake_ha``
-    Replaces Home Assistant's REST API. See ``FakeHomeAssistant``.
+    Replaces Home Assistant's REST API. See ``FakeHomeAssistant``: ``state``, ``recovery_mode``,
+    ``components``, ``services``, ``states``, ``down``, and
+    ``on_service(domain, service, callback)`` to react to a service call.
 ``ctx``
     A ``Context`` wired to all of the above, with captured output, a journal list and a fake clock.
 ``run_cave``
@@ -66,6 +68,8 @@ class Call:
     capture: bool
     check: bool
     input_text: str | None
+    env: Mapping[str, str] | None = None
+    timeout: float | None = None
 
 
 @dataclass
@@ -114,7 +118,7 @@ class FakeRunner:
         input_text: str | None = None,
         timeout: float | None = None,
     ) -> Result:
-        call = Call(tuple(args), cwd, capture, check, input_text)
+        call = Call(tuple(args), cwd, capture, check, input_text, env, timeout)
         self.calls.append(call)
         for rule in reversed(self._rules):
             if call.args[: len(rule.prefix)] == rule.prefix:
@@ -162,6 +166,9 @@ class FakeHomeAssistant:
     def __init__(self) -> None:
         self.token = "fake-token-for-tests"
         self.components: list[str] = ["homeassistant", "cave_heating"]
+        self.state = "RUNNING"  # what GET /api/config reports; "NOT_RUNNING" while starting
+        self.recovery_mode = False
+        self.safe_mode = False
         self.services: dict[str, list[str]] = {
             "persistent_notification": ["create", "dismiss"],
             "homeassistant": ["reload_all"],
@@ -170,6 +177,17 @@ class FakeHomeAssistant:
         self.down = False
         self.requests: list[tuple[str, str, Any]] = []
         self.service_calls: list[tuple[str, str, dict[str, Any]]] = []
+        self._hooks: dict[tuple[str, str], Callable[[dict[str, Any]], None]] = {}
+
+    def on_service(
+        self, domain: str, service: str, callback: Callable[[dict[str, Any]], None]
+    ) -> None:
+        """Declare the service and run ``callback(data)`` whenever it is called, for example to
+        change an entry of ``states`` the way a thermostat that confirms a target would."""
+        self.services.setdefault(domain, [])
+        if service not in self.services[domain]:
+            self.services[domain].append(service)
+        self._hooks[(domain, service)] = callback
 
     def __call__(
         self, method: str, url: str, headers: Mapping[str, str], body: bytes | None, timeout: float
@@ -182,7 +200,13 @@ class FakeHomeAssistant:
         if headers.get("Authorization") != f"Bearer {self.token}":
             return 401, b"401: Unauthorized"
         if method == "GET" and path == "/api/config":
-            return 200, json.dumps({"components": self.components}).encode()
+            config = {
+                "components": self.components,
+                "state": self.state,
+                "recovery_mode": self.recovery_mode,
+                "safe_mode": self.safe_mode,
+            }
+            return 200, json.dumps(config).encode()
         if method == "GET" and path == "/api/services":
             listing = [
                 {"domain": domain, "services": {name: {} for name in names}}
@@ -200,6 +224,8 @@ class FakeHomeAssistant:
             if name not in self.services.get(domain, []):
                 return 400, b"Service not found."
             self.service_calls.append((domain, name, payload or {}))
+            if (domain, name) in self._hooks:
+                self._hooks[(domain, name)](payload or {})
             return 200, b"[]"
         return 404, b"404: Not Found"
 

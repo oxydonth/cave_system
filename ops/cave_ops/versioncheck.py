@@ -33,12 +33,9 @@ def locked_versions(lock_text: str) -> dict[str, str]:
     return {item["name"]: item["version"] for item in packages if "version" in item}
 
 
-def _find(pattern: re.Pattern[str], text: str, what: str, problems: list[str]) -> str | None:
-    match = pattern.search(text)
-    if match is None:
-        problems.append(f"{what}: not found")
-        return None
-    return match.group(1)
+def _find_all(pattern: re.Pattern[str], text: str) -> list[str]:
+    """Every tag the pattern finds: a second, stale occurrence must not hide behind the first."""
+    return [match.group(1) for match in pattern.finditer(text)]
 
 
 def installed_manifest_requirement(integration: str, library: str) -> str | None:
@@ -74,16 +71,18 @@ def check(
     if ha is None:
         problems.append("uv.lock: homeassistant is not locked")
     else:
-        compose_tag = _find(
-            _HA_IMAGE, compose_text, "compose.yaml: Home Assistant image tag", problems
-        )
-        ci_tag = _find(_HASSFEST_IMAGE, ci_text, "ci.yml: hassfest image tag", problems)
-        for place, tag in (
-            ("compose.yaml image tag", compose_tag),
-            ("ci.yml hassfest image tag", ci_tag),
+        for place, pattern, text in (
+            ("compose.yaml image tag", _HA_IMAGE, compose_text),
+            ("ci.yml hassfest image tag", _HASSFEST_IMAGE, ci_text),
         ):
-            if tag is not None and tag != ha:
-                problems.append(f"{place} is {tag}, but uv.lock locks homeassistant {ha}")
+            tags = _find_all(pattern, text)
+            if not tags:
+                problems.append(f"{place}: not found")
+            problems.extend(
+                f"{place} is {tag}, but uv.lock locks homeassistant {ha}"
+                for tag in tags
+                if tag != ha
+            )
 
     for library, integration in CLIENT_LIBRARIES.items():
         if library not in locked:

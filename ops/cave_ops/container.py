@@ -19,6 +19,7 @@ if TYPE_CHECKING:
     from .context import Context
 
 SERVICE = "homeassistant"
+DEFAULT_TIMEOUT = 600.0  # seconds; a first run may pull the image
 
 
 def run_in_homeassistant(
@@ -28,14 +29,15 @@ def run_in_homeassistant(
     entrypoint: str = "python3",
     workdir: str | None = None,
     capture: bool = True,
-    timeout: float | None = None,
+    timeout: float | None = DEFAULT_TIMEOUT,
 ) -> Result:
     """Run ``entrypoint command...`` in a one-off Home Assistant container and return the result.
 
     ``ctx.compose("run", "--rm", "--no-deps", "-T", ...)`` underneath. For example
     ``run_in_homeassistant(ctx, ["-m", "custom_components.cave_heating.validate", file],
     workdir="/config")`` or ``run_in_homeassistant(ctx, ["/cave/tools/bootstrap.py"])``.
-    ``capture=False`` lets the output reach the terminal.
+    ``capture=False`` lets the output reach the terminal. ``timeout`` bounds the run (``None``:
+    unbounded), so that a hung Docker daemon cannot hold a lock forever.
     """
     args = ["run", "--rm", "--no-deps", "-T"]
     if workdir is not None:

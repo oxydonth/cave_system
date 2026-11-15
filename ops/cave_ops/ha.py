@@ -6,6 +6,7 @@ The transport is a plain function so that tests can replace it (``fake_ha`` in
 
 from __future__ import annotations
 
+import http.client
 import json
 import urllib.error
 import urllib.request
@@ -87,7 +88,7 @@ class HAClient:
             body = json.dumps(payload).encode()
         try:
             status, raw = self._transport(method, self._base + path, headers, body, self._timeout)
-        except (OSError, TimeoutError) as error:
+        except (OSError, TimeoutError, http.client.HTTPException) as error:
             raise HAUnreachable(f"cannot reach Home Assistant at {self._base}: {error}") from error
         if status >= 400:
             raise HAError(status, raw.decode(errors="replace").strip()[:300])
@@ -100,7 +101,9 @@ class HAClient:
 
     def config(self) -> dict[str, Any]:
         """``GET /api/config``; its ``components`` list says what is loaded."""
-        result: dict[str, Any] = self.request("GET", "/api/config")
+        result = self.request("GET", "/api/config")
+        if not isinstance(result, dict):
+            raise HAError(200, "/api/config answered in an unexpected shape")
         return result
 
     def get_state(self, entity_id: str) -> dict[str, Any] | None:
@@ -116,7 +119,10 @@ class HAClient:
     def services(self) -> dict[str, set[str]]:
         """``GET /api/services``, as ``{domain: {service, ...}}``."""
         listing = self.request("GET", "/api/services")
-        return {entry["domain"]: set(entry.get("services", {})) for entry in listing}
+        try:
+            return {entry["domain"]: set(entry.get("services", {})) for entry in listing}
+        except (KeyError, TypeError, AttributeError) as error:
+            raise HAError(200, "/api/services answered in an unexpected shape") from error
 
     def has_service(self, domain: str, service: str) -> bool:
         return service in self.services().get(domain, set())
