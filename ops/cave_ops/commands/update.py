@@ -367,7 +367,10 @@ class _Update:
             return self.roll_back(reason)
 
         record.failed.pop(tag, None)
-        state.prune_snapshots(ctx)
+        try:
+            state.prune_snapshots(ctx)
+        except OSError as error:
+            ctx.warn(f"Old snapshots could not be removed: {error}")
         return self.conclude(
             tag,
             "installed",
@@ -415,7 +418,10 @@ class _Update:
         release again."""
         ctx, switch = self.ctx, self._switch()
         ctx.warn(f"Update to {switch.to_release} stopped: {reason}. Starting {switch.from_label}.")
-        state.remove_partial_snapshots(ctx)
+        try:
+            state.remove_partial_snapshots(ctx)
+        except OSError as error:
+            ctx.warn(f"The partial snapshot could not be removed: {error}")
         problems = self.check_out_previous()
         started, health = self.start()
         head = f"Update to {switch.to_release} stopped before the switch: {reason}."
@@ -435,7 +441,7 @@ class _Update:
         ctx.warn(f"Update to {switch.to_release} failed: {reason}. Rolling back.")
         switch.phase = state.ROLLING_BACK
         record.failed[switch.to_release] = {"time": state.now(), "reason": reason}
-        state.save(ctx, record)
+        self.save_quietly()
 
         problems: list[str] = []
         down = ctx.compose("down", timeout=DOWN_TIMEOUT)
@@ -536,6 +542,15 @@ class _Update:
         return self.conclude(switch.to_release, "broken", BROKEN, message)
 
     # ---------------------------------------------------------------------------- reporting
+    def save_quietly(self) -> bool:
+        """Write the record; on the way back a full disk must not stop the stack from starting."""
+        try:
+            state.save(self.ctx, self.record)
+        except OSError as error:
+            self.ctx.warn(f"The update record could not be written: {error}")
+            return False
+        return True
+
     def _switch(self) -> state.Switch:
         if self.record.switch is None:
             raise CaveError("internal error: no update in flight")
@@ -552,7 +567,10 @@ class _Update:
             "status": status,
         }
         record.last_check = {"time": state.now(), "message": message}
-        state.save(self.ctx, record)
+        if not self.save_quietly():
+            message += (
+                " (The update record could not be written; `cave status` may be out of date.)"
+            )
         (self.ctx.say if status == OK else self.ctx.warn)(message)
         notify(self.ctx, TITLE, message)
         return status

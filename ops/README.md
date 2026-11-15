@@ -25,7 +25,7 @@ each part (`tests/ops/conftest.py`).
 | `notify.py` | `notify(ctx, title, message)`: the notification contract of concept section 4.5 (`script.cave_notify` called with the fields `title` and `message`, else `persistent_notification.create`, always also the journal). Never raises. |
 | `container.py` | `run_in_homeassistant(ctx, command, entrypoint=, workdir=, capture=)`: a one-off command in the pinned Home Assistant image with the service's mounts (`/config`, `/cave/tools`); for everything that needs Home Assistant's own Python packages. |
 | `heating.py` | `validate_and_store(ctx, source=None) -> ApplyResult`: reads the file **once**, validates a staged copy of exactly those bytes in a one-off container, and only if it passes stores those same bytes as the applied copy. Also `validate()` and `store_applied(ctx, path_or_bytes)`. |
-| `lock.py` | `Lock(path, command)` and `ctx.lock(command)`: the one lock of concept section 4.5, `with ctx.lock("update"): ...`. Raises `LockBusy` naming the holder. |
+| `lock.py` | `Lock(path, command)` and `ctx.lock(command)`: the one lock of concept section 4.5, `with ctx.lock("update"): ...`. Raises `LockBusy` naming the holder. `held_by(path)` says who holds it without taking it (for `status`). |
 | `mosquitto.py` | `password_line(user, password)`: a line of the broker's password file; `accepts(text, user, password)`: whether a password file lets that login in. |
 | `versioncheck.py` | The version check behind `make versions`. |
 | `errors.py` | `CaveError`: raise it for failures the user can act on. |
@@ -101,6 +101,17 @@ home's state.
 * `script.cave_notify` is called with the fields `title` and `message`.
 * `init` stores the starter as the applied copy without the validator. Once the validator has
   merged, a later work package may switch `init` to `validate_and_store`.
+
+## Update, backup and restore
+
+`update`, `status`, `backup` and `restore` share helpers that only they use, in
+`commands/_server.py` (which user may run them, Git as the owner of the checkout, copying files
+with their owners, checked archive extraction), `commands/_update_state.py` (the update record
+and the snapshots), `commands/_archives.py` (backup archives, SQLite's online backup) and
+`commands/_releases.py` (release tags; also run by the pipeline's release job). Their working
+files live in `CAVE_DATA/.cave/ops/`, which neither a snapshot nor a backup contains. Every other
+entry of `CAVE_DATA`, including the rest of `CAVE_DATA/.cave/`, is in both. docs/operations.md
+explains them to the owner; their tests are in `tests/ops/maintenance/`.
 
 ## Recipes
 

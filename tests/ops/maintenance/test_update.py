@@ -457,3 +457,24 @@ def test_a_stale_lock_file_does_not_block(server, run_cave, ctx):
 
     assert run_cave("update").code == 0
     assert server.stack.running == NEW
+
+
+def test_a_full_disk_on_the_way_back_does_not_keep_the_stack_stopped(server, run_cave, monkeypatch):
+    from cave_ops.commands import _update_state
+
+    server.release(NEW)
+    server.stack.unhealthy.add(NEW)
+    real_save = _update_state.save
+
+    def full_disk(ctx, record):
+        if record.switch is None or record.switch.phase == "rolling-back":
+            raise OSError(28, "No space left on device")
+        real_save(ctx, record)
+
+    monkeypatch.setattr(_update_state, "save", full_disk)
+
+    result = run_cave("update")
+
+    assert result.code == 2
+    assert server.stack.running == "v2026.11.14.1"
+    assert "The update record could not be written" in result.err
