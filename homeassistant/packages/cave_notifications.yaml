@@ -1,0 +1,306 @@
+# Notifications of the heating system (concept section 6).
+#
+# Everything that tells a person something goes through one script, script.cave_notify. It always
+# creates a persistent notification in the Home Assistant UI, and it also calls the notify service
+# named in the helper input_text.cave_notify_service when that helper is not empty (for example
+# `notify.mobile_app_pixel_8`, with or without the `notify.` prefix). A wrong or unknown service
+# name is logged and does not stop the persistent notification, which is created first.
+#
+# Five template sensors watch what needs attention, without knowing any device by name. Each
+# lists the things that need attention in its attribute `entries`, a mapping from a key to the
+# sentence a person reads. The automation at the end sends a notification when a key appears
+# and dismisses it when the key disappears, so a problem is reported once and not once a minute.
+# The sensors are evaluated every minute, so a notification appears within a minute of the
+# moment its condition holds.
+
+# ---- Settings ------------------------------------------------------------------------------
+# The only place with thresholds and durations. Change a value here and restart Home Assistant.
+# Durations are in minutes.
+template:
+  - triggers:
+      - trigger: time_pattern
+        minutes: "/1"
+      - trigger: homeassistant
+        event: start
+    variables:
+      # A battery sensor (a percentage, or a low-battery flag) at or below this level in
+      # percent raises "low battery".
+      battery_below: 20
+      # A device whose entities are all unavailable for this long raises "device unavailable".
+      # Zigbee2MQTT itself waits 25 hours before it declares a battery device unavailable
+      # (concept section 5.4), so this is about a device that went silent, not a reboot.
+      unavailable_minutes: 60
+      # A room whose window pause (binary_sensor.cave_<room>_window_open) lasts this long
+      # raises "window left open". The pause only starts after the room's window delay.
+      window_open_minutes: 30
+      # A humidity sensor above this percentage raises "high humidity", a prompt to air the room.
+      humidity_above: 70
+      # The notification ends, and may come again, only once the humidity is below this.
+      # The gap keeps a reading that hovers around the limit from notifying again and again.
+      humidity_clear_below: 65
+      # A room's problem sensor (binary_sensor.cave_<room>_problem) on for this long raises
+      # "heating problem". A thermostat that is still being confirmed is no reason to say anything.
+      problem_minutes: 10
+
+      # ---- What the settings are applied to; nothing to change below ----
+      battery_entries: >-
+        {% set ns = namespace(found={}) %}
+        {% for s in states.sensor
+           | selectattr('attributes.device_class', 'eq', 'battery')
+           | selectattr('state', 'is_number') %}
+        {% if s.state | float(100) <= battery_below %}
+        {% set ns.found = dict(ns.found, **{s.entity_id:
+             s.name ~ ' is at ' ~ s.state ~ ' ' ~ (s.attributes.unit_of_measurement or '%')}) %}
+        {% endif %}
+        {% endfor %}
+        {% for s in states.binary_sensor
+           | selectattr('attributes.device_class', 'eq', 'battery')
+           | selectattr('state', 'eq', 'on') %}
+        {% set ns.found = dict(ns.found, **{s.entity_id: s.name ~ ' reports a low battery'}) %}
+        {% endfor %}
+        {{ ns.found }}
+      unavailable_entries: >-
+        {% set ns = namespace(found={}, seen=[]) %}
+        {% for s in states | selectattr('state', 'eq', 'unavailable') %}
+        {% set device = device_id(s.entity_id) %}
+        {% if device and device not in ns.seen %}
+        {% set ns.seen = ns.seen + [device] %}
+        {% set own = expand(device_entities(device)) %}
+        {% set name = device_attr(device, 'name_by_user') or device_attr(device, 'name') %}
+        {% if name and own | rejectattr('state', 'eq', 'unavailable') | list | count == 0
+           and (now() - (own | map(attribute='last_changed') | max)).total_seconds()
+               >= unavailable_minutes * 60 %}
+        {% set ns.found = dict(ns.found, **{device: name ~ ' has been unavailable for more than '
+             ~ unavailable_minutes ~ ' minutes'}) %}
+        {% endif %}
+        {% endif %}
+        {% endfor %}
+        {{ ns.found }}
+      window_entries: >-
+        {% set ns = namespace(found={}) %}
+        {% for s in states.binary_sensor
+           | selectattr('entity_id', 'search', '^binary_sensor[.]cave_.+_window_open$')
+           | selectattr('state', 'eq', 'on') %}
+        {% if (now() - s.last_changed).total_seconds() >= window_open_minutes * 60 %}
+        {% set ns.found = dict(ns.found, **{s.entity_id: (area_name(s.entity_id) or s.name)
+             ~ ': the heating has been paused for more than ' ~ window_open_minutes
+             ~ ' minutes because a window is open'}) %}
+        {% endif %}
+        {% endfor %}
+        {{ ns.found }}
+      problem_entries: >-
+        {% set ns = namespace(found={}) %}
+        {% for s in states.binary_sensor
+           | selectattr('entity_id', 'search', '^binary_sensor[.]cave_.+_problem$')
+           | selectattr('state', 'eq', 'on') %}
+        {% if (now() - s.last_changed).total_seconds() >= problem_minutes * 60 %}
+        {% set messages = s.attributes.messages or [] %}
+        {% set ns.found = dict(ns.found, **{s.entity_id: (area_name(s.entity_id) or s.name)
+             ~ ': ' ~ (messages | join('; ') if messages else 'something needs attention')}) %}
+        {% endif %}
+        {% endfor %}
+        {{ ns.found }}
+    sensor:
+      - name: Cave attention battery
+        unique_id: cave_attention_battery
+        icon: mdi:battery-alert
+        state: "{{ battery_entries | count }}"
+        attributes:
+          entries: "{{ battery_entries }}"
+
+      - name: Cave attention unavailable
+        unique_id: cave_attention_unavailable
+        icon: mdi:lan-disconnect
+        state: "{{ unavailable_entries | count }}"
+        attributes:
+          entries: "{{ unavailable_entries }}"
+
+      - name: Cave attention windows
+        unique_id: cave_attention_windows
+        icon: mdi:window-open-variant
+        state: "{{ window_entries | count }}"
+        attributes:
+          entries: "{{ window_entries }}"
+
+      - name: Cave attention humidity
+        unique_id: cave_attention_humidity
+        icon: mdi:water-percent-alert
+        # The state counts the sensors above the limit right now.
+        state: >-
+          {{ states.sensor
+             | selectattr('attributes.device_class', 'eq', 'humidity')
+             | selectattr('state', 'is_number')
+             | map(attribute='state') | map('float') | select('>', humidity_above)
+             | list | count }}
+        attributes:
+          # This one remembers what it reported before (`this`), so that an entry stays until
+          # the humidity is clearly down, not merely back below the limit.
+          entries: >-
+            {% set before = this.attributes.entries
+               if this is not none and this.attributes.entries is mapping else {} %}
+            {% set ns = namespace(found={}) %}
+            {% for s in states.sensor
+               | selectattr('attributes.device_class', 'eq', 'humidity')
+               | selectattr('state', 'is_number') %}
+            {% if s.state | float(0) > humidity_above
+               or (s.entity_id in before and s.state | float(0) >= humidity_clear_below) %}
+            {% set ns.found = dict(ns.found, **{s.entity_id: (area_name(s.entity_id) or s.name)
+                 ~ ': humidity is ' ~ s.state ~ ' %, time to air the room'}) %}
+            {% endif %}
+            {% endfor %}
+            {{ ns.found }}
+
+      - name: Cave attention problems
+        unique_id: cave_attention_problems
+        icon: mdi:alert-circle
+        state: "{{ problem_entries | count }}"
+        attributes:
+          entries: "{{ problem_entries }}"
+
+# ---- The helper that says where to send a copy ---------------------------------------------
+# No `initial`: Home Assistant keeps what the person typed across restarts.
+input_text:
+  cave_notify_service:
+    name: Notify service
+    icon: mdi:bell-ring
+    mode: text
+    max: 255
+
+# ---- The one way to notify -----------------------------------------------------------------
+script:
+  cave_notify:
+    alias: "Cave: notify"
+    icon: mdi:bell
+    description: >-
+      Creates a persistent notification and, when input_text.cave_notify_service names a notify
+      service, sends the same message there. A notification_id replaces an earlier notification
+      with the same id.
+    mode: queued
+    max: 20
+    fields:
+      title:
+        description: Headline of the notification.
+        example: Low battery
+        required: true
+        selector:
+          text:
+      message:
+        description: What happened.
+        example: Hall contact is at 12 %
+        required: true
+        selector:
+          text:
+      notification_id:
+        description: Optional. A later call with the same id replaces the earlier notification.
+        example: cave_battery_hall
+        required: false
+        selector:
+          text:
+    sequence:
+      - choose:
+          - conditions: "{{ notification_id is defined and notification_id | string | length > 0 }}"
+            sequence:
+              - action: persistent_notification.create
+                data:
+                  title: "{{ title | default('Cave', true) }}"
+                  message: "{{ message | default('', true) }}"
+                  notification_id: "{{ notification_id }}"
+        default:
+          - action: persistent_notification.create
+            data:
+              title: "{{ title | default('Cave', true) }}"
+              message: "{{ message | default('', true) }}"
+      # The copy is not sent from here but by the automation below, started through an event.
+      # Home Assistant stops a script at a service that does not exist, and no option turns that
+      # off, so a wrong name in the helper would otherwise fail this script after the persistent
+      # notification is already there. The event keeps the failure with the automation, which
+      # logs it, and the caller of this script never sees it.
+      - event: cave_notify_copy
+        event_data:
+          title: "{{ title | default('Cave', true) }}"
+          message: "{{ message | default('', true) }}"
+
+# ---- The automations -----------------------------------------------------------------------
+automation:
+  # Sends the copy of a notification to the service named in input_text.cave_notify_service.
+  - id: cave_notify_copy
+    alias: "Cave: send a notification copy"
+    description: Internal. Started by script.cave_notify; use that script instead.
+    mode: queued
+    max: 20
+    triggers:
+      - trigger: event
+        event_type: cave_notify_copy
+    variables:
+      service: >-
+        {% set name = states('input_text.cave_notify_service') | trim %}
+        {% if name in ['', 'unknown', 'unavailable'] %}{% elif '.' in name %}{{ name }}
+        {% else %}notify.{{ name }}{% endif %}
+    conditions:
+      - condition: template
+        value_template: "{{ service | trim != '' }}"
+    actions:
+      - action: "{{ service | trim }}"
+        data:
+          title: "{{ trigger.event.data.title }}"
+          message: "{{ trigger.event.data.message }}"
+
+  # Turns the "Cave attention" sensors into notifications: one when an entry appears, and the
+  # same one dismissed when it disappears. A notification the person dismissed stays dismissed.
+  - id: cave_notifications
+    alias: "Cave: notify about what needs attention"
+    mode: queued
+    max: 50
+    triggers:
+      - trigger: state
+        entity_id: sensor.cave_attention_battery
+        attribute: entries
+        id: battery
+      - trigger: state
+        entity_id: sensor.cave_attention_unavailable
+        attribute: entries
+        id: unavailable
+      - trigger: state
+        entity_id: sensor.cave_attention_windows
+        attribute: entries
+        id: windows
+      - trigger: state
+        entity_id: sensor.cave_attention_humidity
+        attribute: entries
+        id: humidity
+      - trigger: state
+        entity_id: sensor.cave_attention_problems
+        attribute: entries
+        id: problems
+    variables:
+      titles:
+        battery: Low battery
+        unavailable: Device unavailable
+        windows: Window left open
+        humidity: High humidity
+        problems: Heating problem
+      before: >-
+        {{ trigger.from_state.attributes.entries
+           if trigger.from_state is not none and trigger.from_state.attributes.entries is mapping
+           else {} }}
+      after: >-
+        {{ trigger.to_state.attributes.entries
+           if trigger.to_state is not none and trigger.to_state.attributes.entries is mapping
+           else {} }}
+      appeared: "{{ after.keys() | reject('in', before.keys() | list) | list }}"
+      disappeared: "{{ before.keys() | reject('in', after.keys() | list) | list }}"
+    actions:
+      - repeat:
+          for_each: "{{ appeared }}"
+          sequence:
+            - action: script.cave_notify
+              data:
+                title: "{{ titles[trigger.id] }}"
+                message: "{{ after[repeat.item] }}"
+                notification_id: "cave_{{ trigger.id }}_{{ repeat.item }}"
+      - repeat:
+          for_each: "{{ disappeared }}"
+          sequence:
+            - action: persistent_notification.dismiss
+              data:
+                notification_id: "cave_{{ trigger.id }}_{{ repeat.item }}"
