@@ -210,6 +210,7 @@ class PahoTransport:
 
         self._dispatch = dispatch
         self._on_connected = on_connected
+        self._stopping = False
         self._handlers: list[tuple[str, MessageHandler]] = []
         self._lock = threading.Lock()
         self.connected = threading.Event()
@@ -233,6 +234,7 @@ class PahoTransport:
 
     def stop(self, farewell: tuple[str, str] | None = None) -> None:
         """Publish ``farewell`` (topic, payload; retained) if connected, then disconnect."""
+        self._stopping = True
         if farewell is not None and self.connected.is_set():
             info = self._client.publish(farewell[0], farewell[1], qos=1, retain=True)
             info.wait_for_publish(timeout=2)
@@ -269,7 +271,8 @@ class PahoTransport:
 
     def _on_disconnect(self, *_args: Any) -> None:
         self.connected.clear()
-        _LOGGER.warning("Disconnected from MQTT broker; paho reconnects")
+        if not self._stopping:
+            _LOGGER.warning("Disconnected from MQTT broker; paho reconnects")
 
     def _on_message(self, _client: Any, _userdata: Any, message: Any) -> None:
         topic: str = message.topic

@@ -313,20 +313,63 @@ async def test_demo_home_entity_ids(hass: HomeAssistant, simulated_home: Any) ->
     await simulated_home(DEMO_HOME)
     # Not yet written, so unknown until the controller feeds it; it must exist all the same.
     assert hass.states.get("number.schlafzimmer_heizung_remote_temperature") is not None
-    for entity_id in (
-        "climate.wohnzimmer_heizung_fenster",
-        "number.wohnzimmer_heizung_fenster_external_temperature_input",
-        "select.wohnzimmer_heizung_fenster_temperature_sensor_select",
-        "switch.wohnzimmer_heizung_fenster_open_window",
-        "climate.wohnzimmer_heizung_tuer",
-        "sensor.wohnzimmer_temperature",
-        "sensor.wohnzimmer_humidity",
-        "binary_sensor.wohnzimmer_fenster_contact",
-        "climate.schlafzimmer_heizung",
-        "switch.schlafzimmer_heizung_window_detection",
-        "climate.bad_heizung",
-        "sensor.bad_humidity",
-    ):
+    for entity_id in DEMO_ENTITIES:
         state = hass.states.get(entity_id)
         assert state is not None, entity_id
         assert state.state not in ("unknown", STATE_UNAVAILABLE), entity_id
+
+
+# The table "The demo home and its entity IDs" in sim/README.md, without the remote temperature.
+DEMO_ENTITIES = (
+    *(
+        entity
+        for name in ("wohnzimmer_heizung_fenster", "wohnzimmer_heizung_tuer")
+        for entity in (
+            f"climate.{name}",
+            f"number.{name}_external_temperature_input",
+            f"select.{name}_temperature_sensor_select",
+            f"switch.{name}_open_window",
+            f"sensor.{name}_battery",
+        )
+    ),
+    *(
+        f"{kind}.{name}_{what}"
+        for name in ("wohnzimmer", "schlafzimmer", "bad")
+        for kind, what in (("sensor", "temperature"), ("sensor", "humidity"), ("sensor", "battery"))
+    ),
+    *(
+        f"{kind}.{name}_{what}"
+        for name in ("wohnzimmer_fenster", "schlafzimmer_fenster")
+        for kind, what in (
+            ("binary_sensor", "contact"),
+            ("sensor", "battery"),
+            ("binary_sensor", "battery_low"),
+        )
+    ),
+    "climate.schlafzimmer_heizung",
+    "switch.schlafzimmer_heizung_window_detection",
+    "select.schlafzimmer_heizung_operating_mode",
+    "sensor.schlafzimmer_heizung_battery",
+    "binary_sensor.schlafzimmer_heizung_battery_low",
+    "climate.bad_heizung",
+    "sensor.bad_heizung_temperature",
+    "sensor.bad_heizung_battery",
+    "binary_sensor.bad_heizung_summer_mode",
+    "binary_sensor.bad_heizung_holiday_mode",
+    "binary_sensor.bad_heizung_button_lock_via_ui",
+    "binary_sensor.bad_heizung_button_lock_on_device",
+    "binary_sensor.bad_heizung_open_window_detected",
+)
+
+
+async def test_the_example_in_the_readme(
+    hass: HomeAssistant, simulated_home: Any, freezer: Any
+) -> None:
+    """The usage example of sim/README.md works as written."""
+    sim = await simulated_home(DEMO_HOME)
+    sim.home.set_window("wohnzimmer_fenster", True)
+    await hass.async_block_till_done()
+    assert hass.states.get("binary_sensor.wohnzimmer_fenster_contact").state == "on"
+    await async_advance(hass, freezer, 3600)
+    assert sim.home.rooms["living_room"].temperature < 15
+    assert float(hass.states.get("sensor.wohnzimmer_temperature").state) < 15
