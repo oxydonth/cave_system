@@ -9,7 +9,7 @@ before changing anything. Do not edit either to make your work fit; describe a m
 | Command | Does |
 |---|---|
 | `make setup` | Install Python 3.14 and all dependencies from `uv.lock` (uv only; no Homebrew, pip or system packages) |
-| `make check` | Everything the pipeline runs: `lint`, `typecheck`, `test`. Run it before every push |
+| `make check` | Everything that can run locally: `lint`, `typecheck`, `test`. Run it before every push |
 | `make lint` | Ruff check and format check, yamllint, ShellCheck, actionlint |
 | `make format` | Apply Ruff fixes and formatting |
 | `make typecheck` | mypy `--strict` on `custom_components`, `sim` and `tools` (the ones that exist) |
@@ -21,6 +21,8 @@ hassfest needs Docker and runs only in the pipeline. Run any tool by hand with `
 
 - One branch `wp/<number>-<slug>` from the current `main` per work package, one pull request, squash merge.
   Nobody merges their own work. No direct pushes to `main`.
+- Branch protection is not available on this private repository (the GitHub API refuses it without a paid
+  plan). These rules, and the `ci-ok` check being green, are conventions the agents follow; GitHub does not enforce them.
 - The pull request description states what was built, how it was verified, and every deviation.
   A change to a contract (names in concept sections 4.1, 4.4, 5.1, 5.2) updates the concept in the same pull request.
 - Done means: acceptance criteria demonstrated, pipeline green (`ci-ok`), review verdict `VERDICT: APPROVE`.

@@ -23,6 +23,11 @@ updates:
     directories: ["/**/*"]
     schedule:
       interval: weekly
+    # The Home Assistant image tag must always equal the homeassistant version pinned through
+    # pytest-homeassistant-custom-component, and both are bumped together in one pull request
+    # by hand. A check for this arrives with the runtime stack work package.
+    ignore:
+      - dependency-name: ghcr.io/home-assistant/home-assistant
     groups:
       compose-images:
         patterns: ["*"]
