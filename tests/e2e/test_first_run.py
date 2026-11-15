@@ -8,6 +8,7 @@ Home Assistant that is restarting.
 
 from __future__ import annotations
 
+import contextlib
 import os
 import shutil
 import stat
@@ -17,7 +18,8 @@ from typing import Any
 
 import pytest
 
-from tools.bootstrap import DEFAULT_WEEK, TOKEN_NAME
+from cave_ops.ha import HAError
+from tools.bootstrap import DEFAULT_WEEK, TOKEN_NAME, BootstrapError
 
 HEATING = Path(__file__).with_name("first_run_heating.yaml")
 ROOM_SCHEDULES = {
@@ -233,7 +235,13 @@ def test_a_deleted_token_file_is_replaced_and_the_lost_token_deleted(
 
 def test_a_token_revoked_in_the_ui_is_replaced(first_run: Any, stack: Any) -> None:
     (tokens,) = stack.ws(("auth/refresh_tokens", {}))
-    stack.ws(("auth/delete_refresh_token", {"refresh_token_id": tokens[0]["id"]}))
+    # As the UI does it. Home Assistant closes the connection of the token it deletes, before
+    # it answers.
+    with contextlib.suppress(BootstrapError):
+        stack.ws(("auth/delete_refresh_token", {"refresh_token_id": tokens[0]["id"]}))
+    with pytest.raises(HAError) as rejected:
+        stack.api().config()
+    assert rejected.value.status == 401
 
     run = stack.cave("bootstrap")
 
