@@ -18,6 +18,7 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import TYPE_CHECKING
 
+from .container import run_in_homeassistant
 from .paths import CONTAINER_CONFIG
 
 if TYPE_CHECKING:
@@ -36,6 +37,8 @@ class ApplyResult:
     """What the validator said: the errors naming room and field, or empty."""
     changed: bool = False
     """The applied copy now differs from what it was."""
+    applied_path: Path | None = None
+    """The applied copy on the host (``ctx.paths.heating_applied``), set when ``ok``."""
 
 
 def store_applied(ctx: Context, source: Path) -> bool:
@@ -77,19 +80,8 @@ def validate(ctx: Context, source: Path | None = None) -> tuple[bool, tuple[str,
         staged.write_bytes(source.read_bytes())
         container_file = f"{CONTAINER_CONFIG}/cave/{staged.name}"
     try:
-        result = ctx.compose(
-            "run",
-            "--rm",
-            "--no-deps",
-            "-T",
-            "--workdir",
-            CONTAINER_CONFIG,
-            "--entrypoint",
-            "python3",
-            "homeassistant",
-            "-m",
-            VALIDATOR_MODULE,
-            container_file,
+        result = run_in_homeassistant(
+            ctx, ["-m", VALIDATOR_MODULE, container_file], workdir=CONTAINER_CONFIG
         )
     finally:
         if staged is not None:
@@ -107,4 +99,5 @@ def validate_and_store(ctx: Context, source: Path | None = None) -> ApplyResult:
     ok, messages = validate(ctx, source)
     if not ok:
         return ApplyResult(False, messages)
-    return ApplyResult(True, messages, store_applied(ctx, source))
+    changed = store_applied(ctx, source)
+    return ApplyResult(True, messages, changed, ctx.paths.heating_applied)

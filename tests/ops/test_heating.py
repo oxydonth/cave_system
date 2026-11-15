@@ -32,6 +32,7 @@ def test_valid_file_is_stored_as_the_applied_copy(ctx, home, fake_runner):
 
     assert result.ok
     assert result.changed
+    assert result.applied_path == home.heating_applied
     assert home.heating_applied.read_text() == VALID + "# edited\n"
 
 
@@ -72,6 +73,7 @@ def test_invalid_file_changes_nothing_and_the_messages_are_returned(ctx, home, f
 
     assert not result.ok
     assert not result.changed
+    assert result.applied_path is None
     assert result.messages == ("rooms[0] (x): field 'name' is required",)
     assert home.heating_applied.read_bytes() == before
     assert home.heating_applied.stat().st_mtime_ns == mtime

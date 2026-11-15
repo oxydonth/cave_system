@@ -10,6 +10,7 @@ from pathlib import Path
 
 import pytest
 
+from cave_ops.container import run_in_homeassistant
 from cave_ops.errors import CaveError
 from cave_ops.ha import HAClient, HAError, HAUnreachable, read_token
 from cave_ops.health import check_health, parse_compose_ps, wait_healthy
@@ -352,3 +353,56 @@ def test_ctx_lock_uses_the_lock_file_of_the_contract(ctx):
         assert ctx.paths.lock_file.read_text().startswith("`cave update`")
         with pytest.raises(LockBusy):
             ctx.lock("restore").acquire()
+
+
+# ------------------------------------------------------------------------------------ container
+
+
+def test_one_off_container_command_uses_the_service_mounts_and_returns_the_result(ctx, fake_runner):
+    fake_runner.on(["docker", "compose", "run"], out="done\n")
+
+    result = run_in_homeassistant(ctx, ["/cave/tools/bootstrap.py", "--once"])
+
+    assert result.stdout == "done\n"
+    (call,) = fake_runner.matching("docker", "compose", "run")
+    assert call.args == (
+        "docker",
+        "compose",
+        "run",
+        "--rm",
+        "--no-deps",
+        "-T",
+        "--entrypoint",
+        "python3",
+        "homeassistant",
+        "/cave/tools/bootstrap.py",
+        "--once",
+    )
+    assert call.cwd == ctx.paths.root
+
+
+def test_one_off_container_command_with_working_directory_and_entrypoint(ctx, fake_runner):
+    fake_runner.on(["docker", "compose", "run"])
+
+    run_in_homeassistant(ctx, ["--version"], entrypoint="hass", workdir="/config", capture=False)
+
+    (call,) = fake_runner.matching("docker", "compose", "run")
+    assert call.args[5:10] == ("-T", "--workdir", "/config", "--entrypoint", "hass")
+    assert not call.capture
+
+
+def test_compose_files_of_the_context_come_before_the_subcommand(ctx, fake_runner):
+    fake_runner.on(["docker", "compose"])
+    ctx.compose_files = ("compose.yaml", "compose.sim.yaml")
+
+    ctx.compose("ps")
+
+    assert fake_runner.calls[0].args == (
+        "docker",
+        "compose",
+        "-f",
+        "compose.yaml",
+        "-f",
+        "compose.sim.yaml",
+        "ps",
+    )

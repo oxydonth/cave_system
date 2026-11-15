@@ -116,8 +116,10 @@ jobs:
           # says why it is harmless. Anything else that Home Assistant logs as ERROR or
           # CRITICAL fails the job. Do not add an entry without a reason.
           allowed=(
-            # (none yet: add the entries the first boot on a runner shows, each with its reason)
-            '^$'
+            # A GitHub runner has no Bluetooth adapter, and the container is not given the
+            # NET_ADMIN and NET_RAW capabilities that Bluetooth adapter recovery would need.
+            # Nothing in this stack uses Bluetooth; `default_config` loads the integration anyway.
+            '\[habluetooth\.manager\] Missing required permissions for Bluetooth management'
           )
 
           # Log lines look like: 2026-11-15 12:00:00.000 ERROR (MainThread) [logger] message

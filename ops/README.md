@@ -23,6 +23,7 @@ each part (`tests/ops/conftest.py`).
 | `ha.py` | `read_token(paths)` and `HAClient`: `config()`, `get_state()`, `services()`, `has_service()`, `call_service()`. Failures are `HAError` (with `status`) and `HAUnreachable`. The transport is replaceable. |
 | `health.py` | `check_health(ctx)` and `wait_healthy(ctx, timeout=, interval=)`: "Healthy" as defined in concept section 4.5, returning `Health(healthy, problems)`. |
 | `notify.py` | `notify(ctx, title, message)`: the notification contract of concept section 4.5 (`script.cave_notify` called with the fields `title` and `message`, else `persistent_notification.create`, always also the journal). Never raises. |
+| `container.py` | `run_in_homeassistant(ctx, command, entrypoint=, workdir=, capture=)`: a one-off command in the pinned Home Assistant image with the service's mounts (`/config`, `/cave/tools`); for everything that needs Home Assistant's own Python packages. |
 | `heating.py` | `validate_and_store(ctx, source=None) -> ApplyResult`: runs the validator in a one-off container, and only if it passes stores the applied copy. Also `validate()` and `store_applied()`. |
 | `lock.py` | `Lock(path, command)` and `ctx.lock(command)`: the one lock of concept section 4.5, `with ctx.lock("update"): ...`. Raises `LockBusy` naming the holder. |
 | `mosquitto.py` | `password_line(user, password)`: a line of the broker's password file. |
@@ -68,6 +69,38 @@ Rules for commands:
 * Whatever needs Home Assistant's own Python packages runs in a one-off container, as
   `heating.validate()` does, never by importing Home Assistant here.
 * Document the command in `docs/` where a user would look.
+
+## Recipes
+
+```python
+# Validate a heating.yaml and store it as the applied copy (apply, demo). An invalid file
+# changes nothing; the messages name the room and field and can be printed as they are.
+result = validate_and_store(ctx, source)  # source=None: the edited cave/heating.yaml
+if not result.ok:
+    for line in result.messages:
+        ctx.warn(line)
+    return 1
+# result.changed, result.applied_path (ctx.paths.heating_applied)
+
+# Home Assistant's API; None means "no script token yet" (before `cave bootstrap`).
+client = ctx.ha()
+if client is None:
+    ctx.say("Home Assistant has to be restarted instead.")
+else:
+    client.call_service("cave_heating", "reload")  # HAError / HAUnreachable are CaveErrors
+
+# A one-off command in the Home Assistant image, with /config and /cave/tools mounted.
+result = run_in_homeassistant(
+    ctx, ["/cave/tools/render_dashboard.py", "/config/cave/.applied/heating.yaml"]
+)
+
+# Tell the owner, and the journal, without ever raising.
+notify(ctx, "cave update", "Installed v2026.11.15.1")
+
+# Hold the lock for the whole operation.
+with ctx.lock("update"):
+    health = wait_healthy(ctx, timeout=300)
+```
 
 ## Testing a command
 
