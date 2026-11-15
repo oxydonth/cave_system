@@ -28,6 +28,7 @@ jobs:
           # Placeholders: `config` only resolves them.
           CAVE_DATA: /tmp/cave-validation
           CAVE_MQTT_PASSWORD: validation-only
+          CAVE_Z2M_FRONTEND_TOKEN: validation-only
           CAVE_FRITZ_PASSWORD: validation-only
         run: |
           for profile in "" zigbee; do
