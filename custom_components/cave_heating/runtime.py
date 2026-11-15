@@ -253,8 +253,8 @@ class HeatingRuntime:
         self.rooms: dict[str, RoomRuntime] = {}
         self.drivers: dict[str, ThermostatDriver] = {}
         self._roles: dict[str, list[Callable[[State | None, datetime], None]]] = {}
-        self._sensor_devices: dict[str, set[str]] = {}  # room sensor -> its device's entities
-        self._sensors_without_device: set[str] = set()
+        # Room sensor -> the other entities of its device, as last looked up.
+        self._sensor_devices: dict[str, set[str]] = {}
         self._resubscribe = False
         self._listeners: list[CALLBACK_TYPE] = []
         self._room_adders: list[Callable[[list[RoomRuntime]], None]] = []
@@ -358,10 +358,11 @@ class HeatingRuntime:
             windows.paused = previous.windows.paused
             room.decision = previous.decision
             room.refused_settings = dict(previous.refused_settings)
+            # Owed settings are kept only while the file still lists them for that thermostat.
             room.pending_settings = {
                 entity: trv
                 for entity, trv in previous.pending_settings.items()
-                if trv in room.thermostats
+                if trv in room.thermostats and entity in room.thermostats[trv].settings
             }
             room.settings_due = {
                 trv: due for trv, due in previous.settings_due.items() if trv in room.thermostats
@@ -560,14 +561,9 @@ class HeatingRuntime:
             for room in self.rooms.values()
             if room.config.temperature_sensor
         }
-        self._sensor_devices = {}
-        self._sensors_without_device = set()
-        for sensor in sensors:
-            siblings = self._device_entities(sensor)
-            if siblings is None:
-                self._sensors_without_device.add(sensor)
-            else:
-                self._sensor_devices[sensor] = siblings
+        self._sensor_devices = {
+            sensor: self._device_entities(sensor) or set() for sensor in sensors
+        }
         reporters = sensors | {item for items in self._sensor_devices.values() for item in items}
         if reporters:
             self._unsub_events.append(
@@ -627,9 +623,6 @@ class HeatingRuntime:
                 room.missing[entity_id] = field_name
             else:
                 room.missing.pop(entity_id, None)
-            if state is not None and entity_id in self._sensors_without_device:
-                # The sensor appeared after the subscriptions were made: find its device now.
-                self._resubscribe = True
 
         return role
 
@@ -740,6 +733,8 @@ class HeatingRuntime:
                 self._again = False
                 now = dt_util.utcnow()
                 self._evaluate_once(now)
+            if self._resubscribe:
+                self._subscribe()
             self._save_if_changed()
             self._sync_issues(now)
             for listener in list(self._listeners):
@@ -865,8 +860,14 @@ class HeatingRuntime:
         Home Assistant does not record a repeated identical value as a new report, so a steady
         temperature alone would look like silence (concept section 5.4).
         """
+        # Looked up each time: a device paired after the file named its sensor gains entities
+        # one by one. The subscriptions follow when the set changes.
+        siblings = self._device_entities(sensor) or set()
+        if siblings != self._sensor_devices.get(sensor, set()):
+            self._sensor_devices[sensor] = siblings
+            self._resubscribe = True
         times = []
-        for entity_id in {sensor, *self._sensor_devices.get(sensor, ())}:
+        for entity_id in {sensor, *siblings}:
             state = self.hass.states.get(entity_id)
             if state is not None and state.state not in UNAVAILABLE_STATES:
                 times.append(state.last_reported)
@@ -994,7 +995,10 @@ class HeatingRuntime:
                 continue
             assert state is not None  # noqa: S101  (checked by _writable)
             del room.pending_settings[entity_id]
-            wanted = room.thermostats[trv_entity].settings[entity_id]
+            trv = room.thermostats.get(trv_entity)
+            if trv is None or entity_id not in trv.settings:
+                continue
+            wanted = trv.settings[entity_id]
             if setting_matches(entity_id, wanted, state.state):
                 room.refused_settings.pop(entity_id, None)
                 continue

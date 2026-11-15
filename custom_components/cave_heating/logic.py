@@ -214,7 +214,7 @@ class WindowPause:
 
     A pause restored after a restart (``paused`` set before any contact is known) ends by the
     same rule once the contacts report: a contact not heard from yet keeps it, and one that is
-    first heard from as unavailable is treated as silent while open.
+    first heard from as unavailable, or does not exist yet, is treated as silent while open.
     """
 
     def __init__(
@@ -243,8 +243,10 @@ class WindowPause:
         )
         previous_closed = previous.closed_since if previous is not None else None
         open_since = previous.open_since if was_open and previous is not None else None
-        if previous is None and state is Contact.SILENT and self.paused:
-            # First heard from as unavailable while a restored pause is in effect.
+        if previous is None and state in (Contact.SILENT, Contact.MISSING) and self.paused:
+            # First heard from as unavailable, or not existing yet, while a restored pause is
+            # in effect: like a contact that went silent while open.
+            state = Contact.SILENT
             was_open, open_since = True, changed
         if state is Contact.OPEN:
             track = _ContactTrack(state, changed, open_since or changed, None, False)

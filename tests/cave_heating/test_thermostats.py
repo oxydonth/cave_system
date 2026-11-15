@@ -986,17 +986,22 @@ async def test_hand_change_still_settling_when_a_window_pause_starts_is_not_adop
 async def test_reports_do_not_send_into_an_unresponsive_thermostat(
     hass: HomeAssistant, home: FakeHome, freezer: FrozenDateTimeFactory
 ) -> None:
-    """S8: once unresponsive, only retry_interval tries it again, whatever it reports."""
-    trv = await home.thermostat("climate.deaf", target=18.0)
+    """S8: once unresponsive, only retry_interval tries it again, whatever it reports.
+
+    The reports differ from what is wanted without being hand changes (a mode flipping, an
+    unchanged target, new readings) and without reporting the command still queued.
+    """
+    trv = await home.thermostat("climate.deaf", target=18.0, modes=("heat", "auto", "off"))
     trv.deaf = True
     await start(home, "climate.deaf")
     await home.advance(freezer, 21 * MIN, step=MIN)
     assert statuses(home) == {"climate.deaf": "unresponsive"}
     sends = len(trv.commands)
     for minute in range(10):
-        trv.report(current=19.0 + minute / 10, target=17.0 + minute / 2)
+        trv.report(mode=("auto", "heat")[minute % 2], current=19.0 + minute / 10)
         await home.advance(freezer, MIN)
-    assert len(trv.commands) == sends, "neither readings nor new targets resend"
+    assert len(trv.commands) == sends, "no report sends into it"
+    assert statuses(home) == {"climate.deaf": "unresponsive"}
 
 
 async def test_a_thermostat_that_keeps_changing_back_becomes_unresponsive_with_a_notice(

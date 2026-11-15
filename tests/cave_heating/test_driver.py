@@ -190,12 +190,20 @@ def test_no_hand_change_for_one_confirmation_timeout_after_each_moment(moment: s
     assert after.hand_target == 23.5
 
 
-def test_a_slow_thermostat_is_exempt_for_its_own_confirmation_timeout() -> None:
-    """confirm_timeout_slow for slow thermostats."""
+@pytest.mark.parametrize("moment", ["start", "return"])
+def test_a_slow_thermostat_is_exempt_for_confirm_timeout_too(moment: str) -> None:
+    """P10 as decided: confirm_timeout for every thermostat, not confirm_timeout_slow."""
     driver = ThermostatDriver("climate.t", TIMING, slow=True, now=T0)
     driver.set_want(Want(heat=True, target=21.0), T0)
     driver.on_report(report(21.0), T0)
-    assert driver.on_report(report(23.0), T0 + 19 * MIN, adopt=True).hand_target is None
+    if moment == "return":
+        driver.on_report(None, T0)
+        driver.on_report(report(21.0), T0)
+    inside = driver.on_report(report(23.0), T0 + TIMING.confirm_timeout - SEC, adopt=True)
+    assert inside.hand_target is None
+    driver.on_report(report(21.0), T0 + TIMING.confirm_timeout)
+    after = driver.on_report(report(22.5), T0 + TIMING.confirm_timeout + MIN, adopt=True)
+    assert after.hand_target == 22.5, "a dial turned six minutes after a short outage counts"
 
 
 # --- Blocked (P5), budget (P6), refusals (O3), modes in flight (O1) -----------------------------

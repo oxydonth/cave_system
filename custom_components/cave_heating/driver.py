@@ -150,9 +150,9 @@ class ThermostatDriver:
         # Targets sent and not yet reported back, oldest first (concept section 5.5).
         self.queue: list[float] = []
         self.last_confirmed: float | None = None
-        # No report is a hand change before this time: one confirmation timeout after a start,
-        # a return from being unavailable, or the end of a hold.
-        self.exempt_until: datetime | None = now + self.confirm_timeout
+        # No report is a hand change before this time: confirm_timeout after a start, a return
+        # from being unavailable, or the end of a hold, for slow thermostats too.
+        self.exempt_until: datetime | None = now + self.timing.confirm_timeout
         # The mode the thermostat will be in once the commands in flight have arrived.
         self.expected_mode: str | None = None
         self.hold_until: datetime | None = None
@@ -212,10 +212,10 @@ class ThermostatDriver:
         target = self.wanted_target()
         assert target is not None  # noqa: S101  (heat, or off by the minimum target)
         data: dict[str, Any] = {"temperature": target}
-        # With commands in flight the report is older than they are: decide on the mode the
-        # thermostat will be in once they have arrived.
-        mode = self.expected_mode if self.expected_mode is not None else report.mode
-        if mode != report.heat_mode:
+        # Decided from what the thermostat reports. An off still in flight can only add the
+        # mode: once it arrives the thermostat would be off, and the target alone would leave
+        # it there. A lost command or a mode changed at the device never removes the mode.
+        if report.mode != report.heat_mode or self.expected_mode == OFF:
             # Together with the target: setting heat alone makes a FRITZ! thermostat apply the
             # FRITZ!Box's own temperatures.
             data["hvac_mode"] = report.heat_mode
@@ -281,9 +281,11 @@ class ThermostatDriver:
         previous, self.report = self.report, report
         if returned:
             self._lost()
-            self.exempt_until = now + self.confirm_timeout
+            self.exempt_until = now + self.timing.confirm_timeout
         target_changed = previous is None or not same(previous.target, report.target)
         reported_back = target_changed and self._consume(report.target)
+        # The report of the last command in flight: nothing is waiting any more.
+        emptied = reported_back and not self.queue
         if self.held(now) or self.want is None:
             return ReportOutcome(returned=returned)
         if self.matches():
@@ -306,6 +308,12 @@ class ThermostatDriver:
             and self._is_hand_change(previous, report)
         ):
             return ReportOutcome(returned=returned, hand_target=report.target)
+        if emptied and self.phase in (Phase.PENDING, Phase.UNRESPONSIVE):
+            # It reported the last target sent and still differs: correct it at once rather
+            # than at the confirmation timeout.
+            self.phase = Phase.OK
+            self.attempts = 0
+            self.deadline = None
         if self.phase is Phase.OK:
             self._request_send(now)
         return ReportOutcome(returned=returned)
@@ -481,7 +489,7 @@ class ThermostatDriver:
             return
         self.hold_until = None
         self._lost()
-        self.exempt_until = now + self.confirm_timeout
+        self.exempt_until = now + self.timing.confirm_timeout
         self.reconcile(now)
 
     # --- Status --------------------------------------------------------------------------------
