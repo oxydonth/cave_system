@@ -683,3 +683,86 @@ async def test_a_reload_does_not_restart_the_away_delay(
     await home.reload(file)
     await home.advance(freezer, 10 * MIN)
     assert home.state("binary_sensor.cave_home_occupied").state == "off"
+
+
+async def test_boost_and_override_are_written_to_the_state_file(
+    hass: HomeAssistant,
+    home: FakeHome,
+    freezer: FrozenDateTimeFactory,
+    hass_storage: dict[str, Any],
+) -> None:
+    """S8: what restore reads is what the running integration writes, window pause included."""
+    await two_thermostats(home)
+    home.set("binary_sensor.bath_window", "off")
+    home.set("person.max", "not_home")
+    entry = await home.start(
+        config(
+            room("living_room", "climate.living_trv"),
+            room("bathroom", "climate.bath_trv", windows=["binary_sensor.bath_window"]),
+            presence="person.max",
+        )
+    )
+    await hass.services.async_call(
+        "climate",
+        "set_temperature",
+        {"entity_id": "climate.cave_living_room", "temperature": 23},
+        blocking=True,
+    )
+    await hass.services.async_call(
+        DOMAIN, "boost", {"entity_id": "climate.cave_bathroom"}, blocking=True
+    )
+    home.set("binary_sensor.bath_window", "on")
+    await home.advance(freezer, 2 * MIN)
+    assert await hass.config_entries.async_unload(entry.entry_id)
+    saved = hass_storage[STORAGE_KEY]["data"]
+    override = saved["rooms"]["living_room"]["hand"]
+    assert (override["kind"], override["target"]) == ("override", 23.0)
+    boost = saved["rooms"]["bathroom"]["hand"]
+    assert (boost["kind"], boost["temperature"]) == ("boost", 25.0)
+    assert saved["rooms"]["bathroom"]["window_paused"] is True
+    assert saved["rooms"]["living_room"]["window_paused"] is False
+    assert saved["home"]["nobody_home_since"] is not None
+    assert saved["home"]["presence"] == {"person.max": "not_home"}
+
+
+async def test_a_reload_keeps_pending_commands_holds_and_the_window_pause(
+    hass: HomeAssistant, home: FakeHome, freezer: FrozenDateTimeFactory
+) -> None:
+    """S8: a reload is not a restart; nothing in flight or in effect is forgotten."""
+    slow = await home.thermostat("climate.slow", target=18.0, delay=10 * MIN)
+    held = await home.thermostat("climate.held", target=21.0)
+    paused = await home.thermostat("climate.paused", target=21.0)
+    home.set("binary_sensor.window", "off")
+    file = config(
+        room("living_room", {"entity": "climate.slow", "slow": True}, "climate.held"),
+        room("bathroom", "climate.paused", windows=["binary_sensor.window"]),
+    )
+    await home.start(file)
+    await hass.services.async_call(
+        DOMAIN, "hold", {"entity_id": "climate.held", "duration": "01:00:00"}, blocking=True
+    )
+    home.set("binary_sensor.window", "on")
+    await home.advance(freezer, 2 * MIN)
+    assert slow.commands == [("set_temperature", {"temperature": 21.0})]
+    assert paused.commands == [("set_hvac_mode", {"hvac_mode": "off"})]
+    await home.reload(file)
+    await home.advance(freezer, 3 * SEC)
+    problem = "binary_sensor.cave_living_room_problem"
+    assert home.state(problem).attributes["thermostats"] == {
+        "climate.slow": "pending",
+        "climate.held": "held",
+    }
+    assert home.state("binary_sensor.cave_bathroom_window_open").state == "on"
+    await hass.services.async_call(
+        "number",
+        "set_value",
+        {"entity_id": "number.cave_living_room_comfort_temperature", "value": 22},
+        blocking=True,
+    )
+    await home.advance(freezer, 30 * MIN, step=MIN)
+    assert slow.commands == [
+        ("set_temperature", {"temperature": 21.0}),
+        ("set_temperature", {"temperature": 22.0}),
+    ], "the command in flight was neither forgotten nor sent again"
+    assert held.commands == [], "still held"
+    assert paused.commands == [("set_hvac_mode", {"hvac_mode": "off"})], "still paused"

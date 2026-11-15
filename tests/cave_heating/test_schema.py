@@ -129,11 +129,13 @@ def test_timing_block_overrides_each_value() -> None:
                 "retry_interval": "00:00:30",
                 "manual_settle": 3,
                 "command_budget_per_hour": 100,
+                "budget_exhausted_hours": 2,
                 "feed_threshold": 0.5,
                 "feed_min_interval": 10,
                 "feed_max_interval": 25,
                 "sensor_stale": 180,
                 "window_unavailable_grace": 30,
+                "presence_unavailable_grace": 60,
             },
         }
     ).timing
@@ -145,11 +147,13 @@ def test_timing_block_overrides_each_value() -> None:
         retry_interval=timedelta(seconds=30),
         manual_settle=timedelta(seconds=3),
         command_budget_per_hour=100,
+        budget_exhausted_hours=2,
         feed_threshold=0.5,
         feed_min_interval=timedelta(seconds=10),
         feed_max_interval=timedelta(seconds=25),
         sensor_stale=timedelta(seconds=180),
         window_unavailable_grace=timedelta(seconds=30),
+        presence_unavailable_grace=timedelta(seconds=60),
     )
 
 
@@ -450,3 +454,67 @@ def test_file_problems(tmp_path: Path) -> None:
         load_file(twice)
     assert "found the key 'version' twice" in duplicate.value.errors[0]
     assert "(line 2, column 1)" in duplicate.value.errors[0]
+
+
+def test_new_timing_keys_have_their_defaults_and_limits() -> None:
+    """budget_exhausted_hours (P6) and presence_unavailable_grace (P7)."""
+    assert Timing().budget_exhausted_hours == 3
+    assert Timing().presence_unavailable_grace == timedelta(minutes=30)
+    assert _errors({"version": 1, "timing": {"budget_exhausted_hours": 0}}) == [
+        'Field "timing.budget_exhausted_hours": must be a whole number of at least 1, but is 0.'
+    ]
+    assert parse(
+        {"version": 1, "timing": {"presence_unavailable_grace": 0}}
+    ).timing.presence_unavailable_grace == timedelta(0)
+
+
+def test_a_room_thermostat_cannot_be_a_radiator_thermostat() -> None:
+    """O5: climate.cave_<room> is what cave_heating creates."""
+    assert _errors(
+        {
+            "version": 1,
+            "rooms": [
+                _room(trvs=[{"entity": "climate.cave_bath"}]),
+                _room(id="bath", trvs=[{"entity": "climate.b"}]),
+            ],
+        }
+    ) == [
+        'Room "living_room" (rooms[0]), field "trvs[0].entity": "climate.cave_bath" is the room '
+        'thermostat of room "bath" that cave_heating creates, not a radiator thermostat.'
+    ]
+
+
+@pytest.mark.parametrize(
+    ("text", "message"),
+    [
+        (
+            "version: 1\naway_delay: 99999999999999999999\n",
+            'Field "away_delay": is too long to be a duration: 99999999999999999999.',
+        ),
+        (
+            "version: 1\naway_temperature: " + "9" * 400 + "\n",
+            'Field "away_temperature": must be a temperature in °C, but is ' + "9" * 400 + ".",
+        ),
+        (
+            "version: 1\ntiming:\n  feed_threshold: " + "9" * 400 + "\n",
+            'Field "timing.feed_threshold": must be a temperature difference above 0 K, but is '
+            + "9" * 400
+            + ".",
+        ),
+        ("version: 1\nrooms: " + "[" * 3000 + "\n", "The file is nested too deeply to be read."),
+        (
+            "version: 1\naway_delay: " + "9" * 5000 + "\n",
+            "The file contains a value that cannot be read: ",
+        ),
+    ],
+    ids=["huge_duration", "huge_temperature", "huge_threshold", "deep_nesting", "huge_integer"],
+)
+def test_values_the_loader_cannot_digest_are_validation_errors(
+    tmp_path: Path, text: str, message: str
+) -> None:
+    """S6: never an exception, always a message."""
+    path = tmp_path / "heating.yaml"
+    path.write_text(text)
+    with pytest.raises(ConfigError) as caught:
+        load_file(path)
+    assert caught.value.errors[0].startswith(message)

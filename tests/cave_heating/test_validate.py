@@ -95,7 +95,13 @@ def test_invalid_file_exits_1_with_one_sentence_per_problem_on_standard_error(
         (None, "The file cave/heating.yaml does not exist."),
         ("version: 1\nrooms: [\n", "The file is not valid YAML: "),
         ("", 'The file is empty; it needs at least "version: 1".'),
+        ("version: 1\nrooms: " + "[" * 3000 + "\n", "The file is nested too deeply to be read."),
+        (
+            "version: 1\naway_delay: 99999999999999999999\n",
+            'Field "away_delay": is too long to be a duration',
+        ),
     ],
+    ids=["missing", "not_yaml", "empty", "deep_nesting", "huge_number"],
 )
 def test_missing_broken_or_empty_file_exits_1(
     config_dir: Path, content: str | None, message: str
@@ -105,6 +111,7 @@ def test_missing_broken_or_empty_file_exits_1(
         (config_dir / "cave" / "heating.yaml").write_text(content)
     result = run(config_dir, "cave/heating.yaml")
     assert result.returncode == 1
+    assert "Traceback" not in result.stderr
     first, problem = result.stderr.splitlines()
     assert first == "cave/heating.yaml is not valid (1 problem):"
     assert problem.startswith(message)

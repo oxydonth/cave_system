@@ -14,6 +14,10 @@ from freezegun.api import FrozenDateTimeFactory
 from homeassistant.core import HomeAssistant
 from homeassistant.exceptions import ServiceValidationError
 from homeassistant.helpers import area_registry as ar
+from homeassistant.helpers import device_registry as dr
+from homeassistant.helpers import entity_registry as er
+from probatio import MultipleInvalid
+from pytest_homeassistant_custom_component.common import MockConfigEntry
 
 from custom_components.cave_heating.const import DOMAIN
 from tests.cave_heating.fakes import FakeHome, FakeThermostat, config, room
@@ -612,3 +616,126 @@ async def test_hvac_action_follows_the_thermostats(hass: HomeAssistant, home: Fa
     trv.report(action="heating")
     await home.settle()
     assert home.state(LIVING).attributes["hvac_action"] == "heating"
+
+
+# --- Review additions ----------------------------------------------------------------------------
+
+
+@pytest.mark.parametrize("action", ["temperature", "preset", "boost", "resume", "room_off"])
+async def test_an_action_in_the_ui_discards_a_dial_change_still_settling(
+    hass: HomeAssistant, home: FakeHome, freezer: FrozenDateTimeFactory, action: str
+) -> None:
+    """S8 and P9: the latest hand action wins; switching the room off discards it too."""
+    trv = await living_room(home)
+    await home.advance(freezer, 5 * MIN)
+    trv.turn_dial(24.0)
+    await home.advance(freezer, 10 * SEC)
+    if action == "temperature":
+        await call(hass, "climate", "set_temperature", entity_id=LIVING, temperature=19)
+    elif action == "preset":
+        await call(hass, "climate", "set_preset_mode", entity_id=LIVING, preset_mode="eco")
+    elif action == "boost":
+        await call(hass, DOMAIN, "boost", entity_id=LIVING)
+    elif action == "resume":
+        await call(hass, DOMAIN, "resume_schedule", entity_id=LIVING)
+    else:
+        await call(hass, "climate", "turn_off", entity_id=LIVING)
+        await call(hass, "climate", "turn_on", entity_id=LIVING)
+    await home.advance(freezer, 2 * MIN)
+    expected = {
+        "temperature": 19.0,
+        "preset": 17.5,
+        "boost": 25.0,
+        "resume": 21.0,
+        "room_off": 21.0,
+    }[action]
+    assert shown(home)[0] == expected, "the dial's 24 was not adopted"
+    assert home.state("climate.trv").attributes["temperature"] == expected, "and corrected"
+
+
+async def test_boost_and_resume_refuse_a_target_that_is_not_a_room_thermostat(
+    hass: HomeAssistant, home: FakeHome
+) -> None:
+    """M7: a mistaken target is refused with a message, not ignored."""
+    await living_room(home)
+    with pytest.raises(ServiceValidationError) as named:
+        await call(hass, DOMAIN, "boost", entity_id=[LIVING, "climate.trv"])
+    assert str(named.value).startswith("climate.trv is not a room thermostat of Cave Heating")
+    assert shown(home)[2] == "comfort", "nothing was boosted"
+    home.set("sensor.elsewhere", "1")
+    area = ar.async_get(hass).async_get_or_create("Garage")
+    with pytest.raises(ServiceValidationError) as empty:
+        await call(hass, DOMAIN, "resume_schedule", area_id=area.id)
+    assert "contains no room thermostat" in str(empty.value)
+    with pytest.raises(MultipleInvalid):
+        await call(hass, DOMAIN, "boost", rooms=["living_room"])
+
+
+async def test_boost_by_device(hass: HomeAssistant, home: FakeHome) -> None:
+    """A room can be named by its device."""
+    await living_room(home)
+    device = dr.async_get(hass).async_get_device_by_identifier(
+        (DOMAIN, "room_living_room"), config_entry_id=home.runtime().entry.entry_id
+    )
+    assert device is not None
+    await call(hass, DOMAIN, "boost", device_id=device.id)
+    assert shown(home)[2] == "boost"
+
+
+def _sensor_device(hass: HomeAssistant) -> tuple[str, str]:
+    """A room sensor with a humidity entity on the same device, as Zigbee2MQTT makes it."""
+    entry = MockConfigEntry(domain="fake_trv")
+    entry.add_to_hass(hass)
+    device = dr.async_get(hass).async_get_or_create(
+        config_entry_id=entry.entry_id, identifiers={("fake_trv", "snzb02p")}
+    )
+    registry = er.async_get(hass)
+    temperature = registry.async_get_or_create(
+        "sensor", "fake_trv", "t", suggested_object_id="room_t", device_id=device.id
+    ).entity_id
+    humidity = registry.async_get_or_create(
+        "sensor", "fake_trv", "h", suggested_object_id="room_h", device_id=device.id
+    ).entity_id
+    return temperature, humidity
+
+
+@pytest.mark.parametrize("device_reports", [True, False])
+async def test_a_room_sensor_is_stale_only_when_its_whole_device_is_silent(
+    hass: HomeAssistant, home: FakeHome, freezer: FrozenDateTimeFactory, device_reports: bool
+) -> None:
+    """P1: a steady temperature with a humidity that changes is fresh; a silent device is not."""
+    temperature, humidity = _sensor_device(hass)
+    await home.thermostat("climate.a", target=21.0, current=23.0)
+    home.set(temperature, "20.4")
+    home.set(humidity, "50")
+    await home.start(config(room("living_room", "climate.a", temperature_sensor=temperature)))
+    for step in range(8):
+        await home.advance(freezer, 30 * MIN)
+        if device_reports:
+            home.set(humidity, str(51 + step))
+    expected = 20.4 if device_reports else 23.0
+    assert home.state(LIVING).attributes["current_temperature"] == expected
+    if not device_reports:
+        home.set(humidity, "60")
+        await home.settle()
+        assert home.state(LIVING).attributes["current_temperature"] == 20.4, "fresh again"
+
+
+async def test_a_tracker_that_is_unavailable_briefly_keeps_the_home_away(
+    hass: HomeAssistant, home: FakeHome, freezer: FrozenDateTimeFactory
+) -> None:
+    """P7: a router reboot while everybody is away; after the grace it counts as home."""
+    trv = await living_room(home, presence=["device_tracker.phone"], away_delay="00:10:00")
+    home.set("device_tracker.phone", "not_home")
+    await home.advance(freezer, 15 * MIN)
+    assert shown(home)[2] == "away"
+    sent = len(trv.commands)
+    home.set("device_tracker.phone", "unavailable")
+    await home.advance(freezer, 29 * MIN)
+    assert shown(home)[2] == "away"
+    home.set("device_tracker.phone", "not_home")
+    await home.advance(freezer, 5 * MIN)
+    assert len(trv.commands) == sent, "the outage cost nothing"
+    home.set("device_tracker.phone", "unavailable")
+    await home.advance(freezer, 30 * MIN)
+    assert shown(home)[2] == "comfort", "after the grace it counts as home"

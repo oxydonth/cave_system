@@ -1187,6 +1187,15 @@ class HeatingRuntime:
 
     # --- Actions from entities and services ------------------------------------------------------
 
+    def _discard_settle(self, room: RoomRuntime) -> None:
+        """Drop hand changes still settling, and bring the room's thermostats back in line."""
+        if room.settle is None:
+            return
+        room.settle = None
+        now = dt_util.utcnow()
+        for driver in room.drivers:
+            driver.reconcile(now)
+
     def refuse_if_off(self, room: RoomRuntime) -> None:
         """Hand actions are refused while the radiators are off by mode (section 5.3)."""
         if self.home_mode is HomeMode.OFF:
@@ -1215,7 +1224,7 @@ class HeatingRuntime:
             target=target,
             schedule=room.schedule.last,
         )
-        room.settle = None
+        self._discard_settle(room)
         self._evaluate()
 
     @callback
@@ -1235,7 +1244,7 @@ class HeatingRuntime:
                 preset=preset,
                 schedule=room.schedule.last,
             )
-        room.settle = None
+        self._discard_settle(room)
         self._evaluate()
 
     @callback
@@ -1249,14 +1258,14 @@ class HeatingRuntime:
             duration or room.config.boost_duration,
             temperature if temperature is not None else room.config.boost_temperature,
         )
-        room.settle = None
+        self._discard_settle(room)
         self._evaluate()
 
     @callback
     def resume_schedule(self, room: RoomRuntime) -> None:
         """The button or ``cave_heating.resume_schedule``: end a boost or override."""
         room.state.resume()
-        room.settle = None
+        self._discard_settle(room)
         self._evaluate()
 
     @callback
@@ -1264,7 +1273,7 @@ class HeatingRuntime:
         """Switch a room on (``heat``) or off; off discards hand changes still settling."""
         room.state.set_mode(mode)
         if mode is RoomMode.OFF:
-            room.settle = None
+            self._discard_settle(room)
         self._evaluate()
 
     @callback
@@ -1286,7 +1295,7 @@ class HeatingRuntime:
             for room in self.rooms.values():
                 room.state.on_home_mode_by_hand(mode)
                 if mode in (HomeMode.AWAY, HomeMode.OFF):
-                    room.settle = None
+                    self._discard_settle(room)
         self.home_mode = mode
         self._evaluate()
 
@@ -1313,7 +1322,7 @@ class HeatingRuntime:
         self.driver_for_service(entity_id).hold(dt_util.utcnow(), duration)
         for room in self.rooms.values():
             if room.settle is not None and room.settle.entity_id == entity_id:
-                room.settle = None
+                self._discard_settle(room)
         self._evaluate()
 
     @callback

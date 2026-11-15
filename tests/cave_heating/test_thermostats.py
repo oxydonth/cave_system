@@ -978,3 +978,102 @@ async def test_hand_change_still_settling_when_a_window_pause_starts_is_not_adop
     assert home.state(LIVING).attributes["reason"] == "window"
     assert home.state(LIVING).attributes["temperature"] == 21.0
     assert trv.commands == [OFF]
+
+
+# --- Review additions ----------------------------------------------------------------------------
+
+
+async def test_reports_do_not_send_into_an_unresponsive_thermostat(
+    hass: HomeAssistant, home: FakeHome, freezer: FrozenDateTimeFactory
+) -> None:
+    """S8: once unresponsive, only retry_interval tries it again, whatever it reports."""
+    trv = await home.thermostat("climate.deaf", target=18.0)
+    trv.deaf = True
+    await start(home, "climate.deaf")
+    await home.advance(freezer, 21 * MIN, step=MIN)
+    assert statuses(home) == {"climate.deaf": "unresponsive"}
+    sends = len(trv.commands)
+    for minute in range(10):
+        trv.report(current=19.0 + minute / 10, target=17.0 + minute / 2)
+        await home.advance(freezer, MIN)
+    assert len(trv.commands) == sends, "neither readings nor new targets resend"
+
+
+async def test_a_thermostat_that_keeps_changing_back_becomes_unresponsive_with_a_notice(
+    hass: HomeAssistant, home: FakeHome, freezer: FrozenDateTimeFactory
+) -> None:
+    """P6: the budget used up budget_exhausted_hours in a row; then only retry_interval."""
+    trv = await home.thermostat("climate.stubborn", target=21.0, modes=("heat", "auto", "off"))
+    await start(home, "climate.stubborn", timing={"budget_exhausted_hours": 2})
+    await past_start_window(home, freezer)
+
+    def fall_back(_entity: Any = None) -> None:
+        trv.report(mode="auto")
+
+    for _ in range(12 * 60):
+        fall_back()
+        await home.advance(freezer, 15 * SEC)
+        if statuses(home)["climate.stubborn"] == "unresponsive":
+            break
+    assert statuses(home) == {"climate.stubborn": "unresponsive"}
+    sent = len(trv.commands)
+    assert 40 <= sent <= 61, "about 20 an hour for two hours"
+    issue = ir.async_get(hass).async_get_issue(DOMAIN, "unresponsive_climate.stubborn")
+    assert issue is not None
+    assert issue.translation_key == "disagreeing"
+    for _ in range(4 * 60):
+        fall_back()
+        await home.advance(freezer, 15 * SEC)
+    assert len(trv.commands) - sent <= 2 * 60 // 30 + 1, "one command per retry_interval"
+
+
+async def test_a_hold_of_zero_is_refused(hass: HomeAssistant, home: FakeHome) -> None:
+    """O4 and O8: a duration of zero holds nothing and is refused."""
+    await home.thermostat("climate.zero", target=21.0)
+    await start(home, "climate.zero")
+    with pytest.raises(MultipleInvalid):
+        await _hold(hass, "climate.zero", "00:00:00")
+    assert statuses(home) == {"climate.zero": "ok"}
+
+
+async def test_feed_and_settings_are_written_to_entities_that_have_no_value_yet(
+    hass: HomeAssistant, home: FakeHome, freezer: FrozenDateTimeFactory
+) -> None:
+    """P2: an entity without a value is writable and differs from every configured value."""
+    await home.thermostat("climate.new", target=21.0)
+    feed_input = FakeNumber("number.new_external", None)
+    switch = FakeSwitch("switch.new_window", False)
+    switch._attr_is_on = None
+    await home.add(feed_input, switch)
+    assert home.state("number.new_external").state == "unknown"
+    assert home.state("switch.new_window").state == "unknown"
+    home.set("sensor.room", "20.4")
+    await start(
+        home,
+        {
+            "entity": "climate.new",
+            "external_temperature": "number.new_external",
+            "settings": {"switch.new_window": "off"},
+        },
+        temperature_sensor="sensor.room",
+    )
+    await home.settle()
+    assert feed_input.writes == [20.4]
+    assert switch.commands == [("turn_off", {})]
+
+
+async def test_a_setting_skipped_while_its_thermostat_was_held_is_written_at_release(
+    hass: HomeAssistant, home: FakeHome, freezer: FrozenDateTimeFactory
+) -> None:
+    """O6: the thermostat returns during a hold; its settings follow the release."""
+    trv, select, _switch, _feed = await _settings_room(home, select="external", switch=False)
+    await home.settle()
+    await _hold(hass, "climate.trv")
+    trv.set_available(False)
+    select.change("internal")
+    trv.set_available(True)
+    await home.advance(freezer, 5 * MIN)
+    assert select.commands == []
+    await hass.services.async_call(DOMAIN, "release", {"entity_id": "climate.trv"}, blocking=True)
+    await home.settle()
+    assert select.commands == [("select_option", {"option": "external"})]
