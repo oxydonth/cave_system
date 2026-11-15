@@ -160,16 +160,41 @@ def test_a_failed_backup_leaves_no_partial_archive(
     assert run_cave("backup").code == 0
     before = [p.name for p in backups.iterdir()]
 
-    def broken(source, target):
-        raise sqlite3.DatabaseError("database disk image is malformed")
+    real_add = _archives.add_file
+    added = []
 
-    monkeypatch.setattr(_archives, "online_copy", broken)
+    def disk_full(archive, name, source, info):
+        added.append(name)
+        if len(added) == 5:
+            raise OSError(28, "No space left on device")
+        real_add(archive, name, source, info)
+
+    monkeypatch.setattr(_archives, "add_file", disk_full)
 
     result = run_cave("backup")
 
     assert result.code == 1
     assert [p.name for p in backups.iterdir()] == before
-    assert "The backup failed: database disk image is malformed" in notifications()[-1]
+    assert "The backup failed: [Errno 28] No space left on device" in notifications()[-1]
+
+
+def test_a_damaged_database_is_archived_as_it_is_and_named(
+    server, run_cave, backups, notifications
+):
+    damaged = "homeassistant/home-assistant_v2.db.corrupt.2026-11-15T03:00:00"
+    (server.data / damaged).write_bytes(b"SQLite format 3\x00" + b"garbage" * 100)
+    make_database(server.data / DB)
+
+    result = run_cave("backup")
+
+    assert result.code == 0
+    [archive] = archives(backups)
+    with tarfile.open(archive) as tar:
+        manifest = json.loads(tar.extractfile("manifest.json").read())
+        assert tar.extractfile(f"data/{damaged}").read() == (server.data / damaged).read_bytes()
+    assert manifest["databases"] == [DB]
+    assert manifest["unreadable_databases"] == [damaged]
+    assert f"WARNING: {damaged} could not be read" in notifications()[-1]
 
 
 def test_backup_and_update_never_overlap(server, run_cave, backups, ctx, notifications):

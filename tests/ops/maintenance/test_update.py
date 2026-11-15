@@ -28,7 +28,10 @@ def test_no_new_release_changes_nothing_and_notifies_nobody(
     assert server.stack.ops == []
     assert notifications() == []
     assert any("Up to date" in line for line in journal)
-    assert any(call.args[:3] == ("git", "fetch", "--tags") for call in fake_runner.calls)
+    assert any(
+        call.args == ("git", "fetch", "--prune", "--prune-tags", "--force", "--tags", "origin")
+        for call in fake_runner.calls
+    )
     assert server.record()["last_check"]["message"].startswith("Up to date")
 
 
@@ -94,7 +97,7 @@ def test_the_checks_use_the_exported_release_and_a_project_of_their_own(server, 
     assert exported.endswith(".cave/ops/tmp/release/compose.yaml")
     assert all(call.env["CAVE_DATA"] == str(server.data) for call in checks)
     validate = [call for call in checks if "custom_components.cave_heating.validate" in call.args]
-    assert validate[0].args[-1].startswith("/config/cave/.validating-")
+    assert validate[0].args[-1] == "/config/cave/.applied/heating.yaml"
 
 
 def test_only_the_last_two_snapshots_are_kept(server, run_cave):
@@ -178,7 +181,8 @@ def test_too_little_space_for_the_snapshot_is_refused(server, run_cave, monkeypa
     result = run_cave("update")
 
     assert result.code == 1
-    assert server.stack.ops == []
+    # Measured after the pull, which fills the same disk; nothing was stopped.
+    assert server.stack.names() == ["pull"]
     assert "MiB are free" in result.err
 
 
@@ -298,11 +302,13 @@ def test_when_the_previous_release_cannot_be_checked_out_it_says_so(
 ):
     server.release(NEW)
     server.stack.unhealthy.add(NEW)
+    # The rollback's checkout and its fallback, reset --hard, both fail.
     server.runner.git_before["checkout"] = lambda argv: (
         server.runner.git_fail.setdefault("checkout", [(1, "fatal: index.lock exists\n")])
         if "--force" in argv
         else None
     )
+    server.runner.git_fail["reset"] = [(128, "fatal: unable to write new index file\n")]
 
     result = run_cave("update")
 

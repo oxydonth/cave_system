@@ -17,11 +17,12 @@ owned by someone else.
 from __future__ import annotations
 
 import os
+import posixpath
 import pwd
 import shutil
 import stat
 import tarfile
-from collections.abc import Iterator
+from collections.abc import Callable, Iterator
 from pathlib import Path, PurePosixPath
 
 from ..context import Context
@@ -98,6 +99,43 @@ def git(ctx: Context, *args: str, timeout: float | None = 120.0) -> Result:
     if is_root() and owner != 0:
         prefix = ["runuser", "-u", pwd.getpwuid(owner).pw_name, "--"]
     return ctx.runner.run([*prefix, "git", *args], cwd=ctx.paths.root, timeout=timeout)
+
+
+def remove_stale_git_locks(ctx: Context) -> None:
+    """Remove lock files that a killed Git left in the checkout. Safe only while holding the cave
+    lock, because on the server Git runs only through ``update`` and ``restore``."""
+    git_dir = ctx.paths.root / ".git"
+    for name in ("index.lock", "HEAD.lock"):
+        lock = git_dir / name
+        if lock.exists():
+            ctx.warn(f"Removing {lock}, left by an interrupted Git.")
+            lock.unlink()
+
+
+def check_out_exactly(ctx: Context, commit: str, other: str) -> str | None:
+    """Make the checkout exactly ``commit``, whatever an interrupted checkout of ``other`` left:
+    Git's lock files, HEAD where it was, files of both in the working tree. Returns ``None``, or
+    what failed.
+    """
+    remove_stale_git_locks(ctx)
+    done = git(ctx, "checkout", "--force", "--detach", commit)
+    if not done.ok:
+        done = git(ctx, "reset", "--hard", commit)
+    if not done.ok:
+        return done.output.strip()[-300:] or f"exit status {done.returncode}"
+    # Files that only ``other`` has are untracked now; remove exactly those, nothing else.
+    added = git(ctx, "diff", "--name-only", "--diff-filter=A", "-z", commit, other)
+    if not added.ok:
+        return f"the files {other} added could not be listed: {added.output.strip()[-300:]}"
+    for name in filter(None, added.stdout.split("\0")):
+        path = ctx.paths.root / name
+        if os.path.lexists(path) and not path.is_dir():
+            path.unlink()
+            parent = path.parent
+            while parent != ctx.paths.root and not any(parent.iterdir()):
+                parent.rmdir()
+                parent = parent.parent
+    return None
 
 
 def give_to_checkout_owner(ctx: Context, path: Path) -> None:
@@ -181,10 +219,15 @@ def sync() -> None:
 
 
 def write_atomic(path: Path, data: bytes, mode: int = 0o644) -> None:
-    """Replace ``path`` with ``data`` so that a reader, or a power cut, sees old or new only."""
+    """Replace ``path`` with ``data`` so that a reader, or a power cut, sees old or new only.
+
+    The temporary file is created fresh and never through a symbolic link, because this runs as
+    root in directories that other users can write.
+    """
     path.parent.mkdir(parents=True, exist_ok=True)
     tmp = path.with_name(f".{path.name}.tmp")
-    fd = os.open(tmp, os.O_WRONLY | os.O_CREAT | os.O_TRUNC, mode)
+    tmp.unlink(missing_ok=True)
+    fd = os.open(tmp, os.O_WRONLY | os.O_CREAT | os.O_EXCL | os.O_NOFOLLOW, mode)
     try:
         with os.fdopen(fd, "wb") as handle:
             handle.write(data)
@@ -210,13 +253,20 @@ class UnsafeArchive(CaveError):
         super().__init__(f"refusing archive member {member!r}: {why}")
 
 
-def check_member(member: tarfile.TarInfo, prefix: str = "") -> PurePosixPath:
-    """The path of ``member`` below ``prefix``, refusing anything that could escape the target.
+def _escapes(relative: str) -> bool:
+    """Whether a normalised relative path leaves its root."""
+    return relative == ".." or relative.startswith("../") or relative.startswith("/")
 
-    Only directories, regular files and symbolic links that stay inside are accepted.
+
+def check_member(member: tarfile.TarInfo, prefix: str = "") -> PurePosixPath:
+    """The path of ``member`` below ``prefix``, refusing what could escape the target by itself.
+
+    Only directories, regular files and symbolic links are accepted. A link must be relative and
+    its target, taken from the link's own directory, must stay inside. ``check_members`` adds
+    the checks that need the whole archive.
     """
     path = PurePosixPath(member.name)
-    if path.is_absolute() or ".." in path.parts:
+    if path.is_absolute() or ".." in path.parts or not path.parts:
         raise UnsafeArchive(member.name, "the path leaves the target directory")
     if prefix:
         try:
@@ -226,42 +276,102 @@ def check_member(member: tarfile.TarInfo, prefix: str = "") -> PurePosixPath:
     if not (member.isdir() or member.isreg() or member.issym()):
         raise UnsafeArchive(member.name, "only directories, files and symbolic links are allowed")
     if member.issym():
-        link = PurePosixPath(member.linkname)
-        depth = len(path.parts) - 1
-        if link.is_absolute() or link.parts.count("..") > depth:
+        if not member.linkname or member.linkname.startswith("/"):
+            raise UnsafeArchive(member.name, f"the link to {member.linkname!r} leaves the target")
+        resolved = posixpath.normpath(posixpath.join(str(path.parent), member.linkname))
+        if _escapes(resolved):
             raise UnsafeArchive(member.name, f"the link to {member.linkname} leaves the target")
     return path
 
 
-def extract(archive: tarfile.TarFile, members: list[tarfile.TarInfo], target: Path) -> None:
-    """Extract checked ``members`` (whose names are relative to ``target``) with their modes,
-    times and, as root, owners. Directories get their times after their contents."""
+def check_members(
+    members: list[tarfile.TarInfo], prefix: str = ""
+) -> list[tuple[PurePosixPath, tarfile.TarInfo]]:
+    """Check a whole archive: every member by itself, no path twice, and nothing below a path
+    that the archive makes a symbolic link (a member written through a link could land
+    anywhere)."""
+    checked = [(check_member(member, prefix), member) for member in members]
+    seen: set[PurePosixPath] = set()
+    links: set[PurePosixPath] = set()
+    for path, member in checked:
+        if path in seen and path != PurePosixPath("."):
+            raise UnsafeArchive(member.name, "the path occurs twice")
+        seen.add(path)
+        if member.issym():
+            links.add(path)
+    for path, member in checked:
+        for parent in path.parents:
+            if parent in links:
+                raise UnsafeArchive(member.name, f"it lies below the symbolic link {parent}")
+    return checked
+
+
+Owners = Callable[[tarfile.TarInfo], tuple[int, int]]
+
+
+def _inside(path: Path, root: Path) -> bool:
+    real, top = os.path.realpath(path), os.path.realpath(root)
+    return real == top or real.startswith(top + os.sep)
+
+
+def extract(
+    archive: tarfile.TarFile,
+    members: list[tarfile.TarInfo],
+    target: Path,
+    owners: Owners | None = None,
+) -> None:
+    """Extract ``members`` (whose names are relative to ``target``, an empty directory) with
+    their modes, times and, as root, owners (``owners(member)`` maps them, for example from the
+    old server's service user to this one's).
+
+    Nothing can be written outside ``target``: the archive is checked as a whole first; files
+    are created new and never through a link; every parent directory is checked to resolve
+    inside ``target``; links are created last, so nothing is written through them, and each must
+    resolve inside ``target`` as well.
+    """
+    checked = check_members(members)
+    owner_of = owners or (lambda member: (member.uid, member.gid))
     directories: list[tuple[Path, tarfile.TarInfo]] = []
-    for member in members:
-        relative = check_member(member)
+    links: list[tuple[Path, tarfile.TarInfo]] = []
+    for relative, member in checked:
         if relative == PurePosixPath("."):
             continue
         path = target / relative
+        if member.issym():
+            links.append((path, member))
+            continue
         path.parent.mkdir(parents=True, exist_ok=True)
+        if not _inside(path.parent, target):
+            raise UnsafeArchive(member.name, "its directory resolves outside the target")
         if member.isdir():
+            if path.is_symlink():
+                raise UnsafeArchive(member.name, "a symbolic link is in the way")
             path.mkdir(mode=0o700, exist_ok=True)
             directories.append((path, member))
             continue
-        if member.issym():
-            os.symlink(member.linkname, path)
-        else:
-            source = archive.extractfile(member)
-            if source is None:
-                raise UnsafeArchive(member.name, "no content")
-            with source, open(path, "wb") as handle:
-                shutil.copyfileobj(source, handle)
-            os.chmod(path, member.mode & 0o7777)
-            os.utime(path, (member.mtime, member.mtime))
+        source = archive.extractfile(member)
+        if source is None:
+            raise UnsafeArchive(member.name, "no content")
+        flags = os.O_WRONLY | os.O_CREAT | os.O_EXCL | os.O_NOFOLLOW
+        with source, os.fdopen(os.open(path, flags, 0o600), "wb") as handle:
+            shutil.copyfileobj(source, handle)
         if is_root():
-            os.lchown(path, member.uid, member.gid)
+            os.lchown(path, *owner_of(member))
+        os.chmod(path, member.mode & 0o7777)
+        os.utime(path, (member.mtime, member.mtime))
+    for path, member in links:
+        path.parent.mkdir(parents=True, exist_ok=True)
+        if not _inside(path.parent, target):
+            raise UnsafeArchive(member.name, "its directory resolves outside the target")
+        os.symlink(member.linkname, path)
+        if not _inside(path, target):
+            path.unlink()
+            raise UnsafeArchive(member.name, f"the link to {member.linkname} resolves outside")
+        if is_root():
+            os.lchown(path, *owner_of(member))
     for path, member in reversed(directories):
         if is_root():
-            os.chown(path, member.uid, member.gid)
+            os.chown(path, *owner_of(member))
         os.chmod(path, member.mode & 0o7777)
         os.utime(path, (member.mtime, member.mtime))
 

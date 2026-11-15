@@ -37,10 +37,14 @@ from ..health import wait_healthy
 from ..notify import notify
 from ..paths import Paths
 from . import _archives, _releases, _server
+from ._update_state import Switch, now
+from ._update_state import load as load_update_record
+from ._update_state import save as save_update_record
 
 HELP = "Restore the state and .env from a backup archive (also onto a new server)"
 
 TITLE = "cave restore"
+SPACE_MARGIN = 256 * 1024 * 1024
 
 
 def add_arguments(parser: argparse.ArgumentParser) -> None:
@@ -90,15 +94,33 @@ class _Archive:
             if relative == PurePosixPath("."):
                 continue
             self.data.append(_renamed(member, relative.as_posix()))
+        # The whole archive: no path twice, nothing below a link it creates. extract() checks
+        # again where each member really lands.
+        _server.check_members(self.data)
+        self.size = sum(member.size for member in self.data if member.isreg())
+        owner = self.manifest.get("owner") or {}
+        self.owner = (owner.get("uid"), owner.get("gid"))
 
-    def extract(self, target: Path) -> None:
+    def extract(self, target: Path, owners: _server.Owners) -> None:
         with tarfile.open(self.path, "r:gz") as archive:
             wanted = {f"data/{m.name}" for m in self.data}
             members = []
             for member in archive:
                 if member.name in wanted:
                     members.append(_renamed(member, member.name[len("data/") :]))
-            _server.extract(archive, members, target)
+            _server.extract(archive, members, target, owners)
+
+    def owners(self, local_uid: int, local_gid: int) -> _server.Owners:
+        """Files of the old server's service user become this server's service user's: its uid
+        depends on the order in which users were created."""
+        old_uid, old_gid = self.owner
+
+        def owner_of(member: tarfile.TarInfo) -> tuple[int, int]:
+            uid = local_uid if old_uid is not None and member.uid == old_uid else member.uid
+            gid = local_gid if old_gid is not None and member.gid == old_gid else member.gid
+            return uid, gid
+
+        return owner_of
 
 
 def _renamed(member: tarfile.TarInfo, name: str) -> tarfile.TarInfo:
@@ -139,16 +161,24 @@ def run(ctx: Context, args: argparse.Namespace) -> int:
                 f"to other users (for example {foreign[0]}), and only root can give them back "
                 "their owners. Run `sudo ./cave restore ...`. Nothing was changed."
             )
-    _check_release(ctx, archive.manifest, args.force)
-
+    # An interrupted update is superseded by the restore: the restore puts back the release from
+    # before that update with the archive's state, and forgets the update, so that its recovery
+    # can never put its snapshot back over the restored state later. So the archive is checked
+    # against that release. Checked before anything is created, and again under the lock.
+    before = load_update_record(ctx).switch
+    _check_release(ctx, archive.manifest, args.force, before.from_commit if before else "HEAD")
     _server.cave_dir(ctx).mkdir(parents=True, exist_ok=True)
     with ctx.lock("restore"):
-        return _restore(ctx, args, archive, archived_env)
+        switch = load_update_record(ctx).switch
+        if switch != before:
+            commit = switch.from_commit if switch else "HEAD"
+            _check_release(ctx, archive.manifest, args.force, commit)
+        return _restore(ctx, args, archive, archived_env, switch)
 
 
-def _check_release(ctx: Context, manifest: dict[str, Any], force: bool) -> None:
+def _check_release(ctx: Context, manifest: dict[str, Any], force: bool, commit: str) -> None:
     taken = _releases.parse_tag(manifest.get("release_tag") or "")
-    merged = _server.git(ctx, "tag", "--list", _releases.TAG_PATTERN, "--merged", "HEAD")
+    merged = _server.git(ctx, "tag", "--list", _releases.TAG_PATTERN, "--merged", commit)
     installed = _releases.newest(merged.stdout.split()) if merged.ok else None
     if taken is not None and (installed is None or installed < taken) and not force:
         raise CaveError(
@@ -160,11 +190,31 @@ def _check_release(ctx: Context, manifest: dict[str, Any], force: bool) -> None:
 
 
 def _restore(
-    ctx: Context, args: argparse.Namespace, archive: _Archive, archived_env: dict[str, str]
+    ctx: Context,
+    args: argparse.Namespace,
+    archive: _Archive,
+    archived_env: dict[str, str],
+    switch: Switch | None,
 ) -> int:
     data = ctx.paths.data
     stamp = datetime.datetime.now(datetime.UTC).strftime("%Y%m%dT%H%M%SZ")
-    if ctx.paths.env_file.is_file():
+    ops = _server.ops_dir(ctx)
+    staging = ops / "restore-staging"
+    _server.remove(staging)  # left by an interrupted restore
+
+    existing = data
+    while not existing.exists():
+        existing = existing.parent
+    needed = archive.size + SPACE_MARGIN
+    free = _server.free_bytes(existing)
+    if free < needed:
+        raise CaveError(
+            f"unpacking needs about {needed // 2**20} MiB, but only {free // 2**20} MiB are free "
+            f"on {existing}. Nothing was changed."
+        )
+
+    was_running = ctx.paths.env_file.is_file()
+    if was_running:
         ctx.say("Stopping the stack ...")
         down = ctx.compose("down", timeout=300.0)
         if not down.ok:
@@ -173,32 +223,69 @@ def _restore(
                 "restored"
             )
 
-    ops = _server.ops_dir(ctx)
-    staging = ops / "restore-staging"
+    info = ctx.paths.root.stat()
+    try:
+        if switch is not None:
+            ctx.say(f"Checking out {switch.from_label}, the release before the interrupted update")
+            failed = _server.check_out_exactly(ctx, switch.from_commit, switch.to_commit)
+            if failed is not None:
+                raise CaveError(f"{switch.from_label} could not be checked out: {failed}")
+        ctx.say(f"Unpacking into {staging} ...")
+        staging.mkdir(parents=True, mode=0o700)
+        archive.extract(staging, archive.owners(info.st_uid, info.st_gid))
+        _server.sync()
+    except (OSError, tarfile.TarError, EOFError, CaveError) as error:
+        # Nothing of the state was touched yet: clean up and start what was running.
+        _server.remove(staging)
+        again = ""
+        if was_running:
+            started = ctx.compose("up", "--detach", "--force-recreate", timeout=900.0)
+            again = (
+                " The stack was started again unchanged."
+                if started.ok
+                else f" The stack could NOT be started again: {started.output.strip()[-300:]}"
+            )
+        message = f"The restore failed while unpacking: {error}. Nothing was restored.{again}"
+        notify(ctx, TITLE, message)
+        raise CaveError(message) from error
+
     aside = ops / f"before-restore-{stamp}"
     counter = 1
     while aside.exists():  # a repeated restore in the same second keeps both
         counter += 1
         aside = ops / f"before-restore-{stamp}-{counter}"
-    ctx.say(f"Unpacking into {staging} ...")
-    _server.remove(staging)
-    staging.mkdir(parents=True, mode=0o700)
-    archive.extract(staging)
-    _server.sync()
-
     restored = _server.state_entries(staging)
     current = _server.state_entries(data)
-    if current:
-        ctx.say(f"Moving the current state aside to {aside} ...")
-        aside.mkdir(mode=0o700)
-    for entry in current:
-        (aside / entry).parent.mkdir(parents=True, exist_ok=True)
-        os.rename(data / entry, aside / entry)
-    for entry in restored:
-        (data / entry).parent.mkdir(parents=True, exist_ok=True)
-        os.rename(staging / entry, data / entry)
+    try:
+        if current:
+            ctx.say(f"Moving the current state aside to {aside} ...")
+            aside.mkdir(mode=0o700)
+        for entry in current:
+            (aside / entry).parent.mkdir(parents=True, exist_ok=True)
+            os.rename(data / entry, aside / entry)
+        for entry in restored:
+            (data / entry).parent.mkdir(parents=True, exist_ok=True)
+            os.rename(staging / entry, data / entry)
+    except OSError as error:
+        raise CaveError(
+            f"the restore stopped half-way while moving the state into place: {error}. The stack "
+            f"is stopped. Run the same restore again; the previous state is in {aside}."
+        ) from error
     _server.remove(staging)
     _server.sync()
+    abandoned = ""
+    if switch is not None:
+        record = load_update_record(ctx)
+        record.failed.setdefault(
+            switch.to_release,
+            {"time": now(), "reason": "interrupted, then superseded by a restore"},
+        )
+        record.switch = None
+        save_update_record(ctx, record)
+        abandoned = (
+            f" The interrupted update to {switch.to_release} was abandoned: {switch.from_label} "
+            "is checked out."
+        )
 
     env_file = ctx.paths.env_file
     if env_file.exists():
@@ -221,6 +308,7 @@ def _restore(
         f"Restored {archive.path.name} (taken {archive.manifest.get('created')} with "
         f"{archive.manifest.get('release')}) into {data}."
     )
+    done += abandoned
     if current:
         done += f" The state before the restore is kept in {aside}; remove it when all is well."
     if args.no_start:

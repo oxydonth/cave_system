@@ -87,7 +87,9 @@ def write_archive(ctx: Context, target: Path) -> dict[str, Any]:
     data = ctx.paths.data
     release, release_tag = _release(ctx)
     databases: list[str] = []
+    unreadable: list[str] = []
     env_info = ctx.paths.env_file.stat()
+    owner = ctx.paths.root.stat()
     with (
         _archives.spool_dir(target.parent) as spool_name,
         tarfile.open(target, "w:gz", format=tarfile.PAX_FORMAT) as archive,
@@ -96,7 +98,7 @@ def write_archive(ctx: Context, target: Path) -> dict[str, Any]:
         _archives.add_file(archive, "env", ctx.paths.env_file, env_info)
         entries = _server.state_entries(data)
         count = _archives.add_tree(
-            archive, data, _server.walk_entries(data, entries), spool, databases
+            archive, data, _server.walk_entries(data, entries), spool, databases, unreadable
         )
         manifest: dict[str, Any] = {
             "format": _archives.FORMAT,
@@ -104,7 +106,10 @@ def write_archive(ctx: Context, target: Path) -> dict[str, Any]:
             "release": release,
             "release_tag": release_tag,
             "data": str(data),
+            # The service user's ids here; restore maps them to the new server's.
+            "owner": {"uid": owner.st_uid, "gid": owner.st_gid},
             "databases": databases,
+            "unreadable_databases": unreadable,
             "entries": count,
         }
         manifest_file = spool / "manifest.json"
@@ -128,7 +133,7 @@ def _backup(ctx: Context, directory: Path, keep: int, copy_to: Path | None) -> i
         archive = directory / name
         os.replace(partial, archive)
         partial = None
-        removed = _archives.prune(directory, keep)
+        removed = _archives.prune(directory, keep, protect=name)
     except (OSError, sqlite3.Error, tarfile.TarError, CaveError) as error:
         if partial is not None:
             partial.unlink(missing_ok=True)
@@ -142,6 +147,11 @@ def _backup(ctx: Context, directory: Path, keep: int, copy_to: Path | None) -> i
         f"Backup {name} written to {directory} ({size / 2**20:.1f} MiB, "
         f"{len(manifest['databases'])} database(s) copied online)"
     )
+    if manifest["unreadable_databases"]:
+        message += (
+            f"; WARNING: {', '.join(manifest['unreadable_databases'])} could not be read as a "
+            "SQLite database (damaged?) and was archived as it is"
+        )
     if removed:
         message += f"; {len(removed)} older archive(s) removed, {keep} kept"
     status = 0
@@ -155,7 +165,7 @@ def _backup(ctx: Context, directory: Path, keep: int, copy_to: Path | None) -> i
         else:
             try:
                 _archives.copy_archive(archive, copy_to)
-                _archives.prune(copy_to, keep)
+                _archives.prune(copy_to, keep, protect=name)
                 message += f"; copied to {copy_to}"
             except OSError as error:
                 status = 1

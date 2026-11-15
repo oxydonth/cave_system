@@ -12,8 +12,13 @@ restoring one never turns back this record:
     ``data/`` (a copy of the state entries taken with the stack stopped) and ``snapshot.json``.
     A snapshot is written as ``<name>.partial`` and renamed when complete and on disk, so a
     directory without the suffix is always whole. The last ``KEEP_SNAPSHOTS`` are kept.
-``restoring/``, ``discard/``
-    Staging while a snapshot is put back; removed afterwards, and at the start of a repeat.
+``discard/``
+    Where the current state entries go while a snapshot is put back; removed afterwards.
+
+A snapshot is put back by renaming, not by copying, so a rollback needs no free space: the
+current entries are moved to ``discard/`` and the snapshot's entries into their place, one entry
+at a time, each step repeatable after an interruption. The snapshot is used up by that;
+``Switch.restored`` records that it was put back.
 """
 
 from __future__ import annotations
@@ -58,6 +63,8 @@ class Switch:
     to_commit: str
     snapshot: str | None = None
     started: str = field(default_factory=now)
+    restored: bool = False
+    """The snapshot has been put back (and so used up)."""
 
 
 @dataclass
@@ -88,11 +95,16 @@ def load(ctx: Context) -> UpdateRecord:
         return UpdateRecord(problem=f"{path} could not be read ({error}); starting afresh")
     switch = raw.get("switch")
     return UpdateRecord(
-        switch=Switch(**switch) if isinstance(switch, dict) else None,
+        switch=_switch(switch) if isinstance(switch, dict) else None,
         failed=dict(raw.get("failed") or {}),
         last_result=raw.get("last_result"),
         last_check=raw.get("last_check"),
     )
+
+
+def _switch(raw: dict[str, Any]) -> Switch:
+    known = {name: raw[name] for name in Switch.__dataclass_fields__ if name in raw}
+    return Switch(**known)
 
 
 def save(ctx: Context, record: UpdateRecord) -> None:
@@ -169,34 +181,43 @@ def take_snapshot(ctx: Context, label: str) -> str:
 
 
 def restore_snapshot(ctx: Context, name: str) -> None:
-    """Put the state entries of snapshot ``name`` back in place of the current ones.
+    """Put the state entries of snapshot ``name`` back in place of the current ones, by renaming.
 
-    The snapshot itself is only read, so this can be repeated after an interruption: it starts
-    again from a fresh copy. The stack must be stopped.
+    Needs no free space. Entry by entry: the current one goes to ``discard/``, the snapshot's
+    takes its place. An entry the snapshot no longer holds was put back by an earlier, interrupted
+    run and stays. Entries that only the new release created go to ``discard/`` too. So this can
+    be repeated after an interruption until it completes. The stack must be stopped.
     """
     source = snapshots_dir(ctx) / name
     entries = json.loads((source / "snapshot.json").read_text(encoding="utf-8"))["entries"]
-    ops = _server.ops_dir(ctx)
-    staging, discard = ops / "restoring", ops / "discard"
-    _server.remove(staging)
-    _server.remove(discard)
-    staging.mkdir(parents=True, mode=0o700)
-    for entry in entries:
-        target = staging / entry
-        target.parent.mkdir(parents=True, exist_ok=True)
-        _server.copy_entry(source / "data" / entry, target)
-    _server.sync()
-    discard.mkdir(mode=0o700)
+    discard = _server.ops_dir(ctx) / "discard"
+    discard.mkdir(parents=True, exist_ok=True, mode=0o700)
     data = ctx.paths.data
-    for entry in _server.state_entries(data):
-        (discard / entry).parent.mkdir(parents=True, exist_ok=True)
-        os.rename(data / entry, discard / entry)
+
+    def set_aside(entry: str) -> None:
+        target = discard / entry
+        _server.remove(target)
+        target.parent.mkdir(parents=True, exist_ok=True)
+        os.rename(data / entry, target)
+
     for entry in entries:
+        saved = source / "data" / entry
+        if not os.path.lexists(saved):
+            continue  # already put back
+        if os.path.lexists(data / entry):
+            set_aside(entry)
         (data / entry).parent.mkdir(parents=True, exist_ok=True)
-        os.rename(staging / entry, data / entry)
+        os.rename(saved, data / entry)
+    for entry in _server.state_entries(data):
+        if entry not in entries:
+            set_aside(entry)
     _server.sync()
-    _server.remove(discard)
-    _server.remove(staging)
+
+
+def discard_after_restore(ctx: Context, name: str) -> None:
+    """Remove what ``restore_snapshot`` set aside, and the used-up snapshot."""
+    _server.remove(_server.ops_dir(ctx) / "discard")
+    _server.remove(snapshots_dir(ctx) / name)
 
 
 def prune_snapshots(ctx: Context, keep: int = KEEP_SNAPSHOTS) -> list[str]:

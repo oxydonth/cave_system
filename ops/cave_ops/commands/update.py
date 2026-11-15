@@ -29,6 +29,7 @@ from __future__ import annotations
 
 import argparse
 import dataclasses
+import os
 import signal
 import tarfile
 from collections.abc import Iterator
@@ -41,7 +42,7 @@ from ..context import Context
 from ..errors import CaveError
 from ..ha import read_token
 from ..health import Health, check_health, wait_healthy
-from ..heating import validate
+from ..heating import VALIDATOR_MODULE
 from ..lock import Lock, LockBusy
 from ..notify import notify
 from ..paths import CONTAINER_CONFIG
@@ -66,6 +67,14 @@ RECOVER_WAIT = 4 * 3600.0
 """How long ``--recover`` waits for the lock (a backup may hold it at boot)."""
 DISK_MARGIN = 256 * 1024 * 1024
 OPERATIONS = "docs/operations.md"
+MAIN = "refs/remotes/origin/main"
+DOCKER_TIMEOUT = 120.0
+COULD_NOT_RUN = {
+    124: "it timed out",
+    125: "Docker could not run the container",
+    126: "the command could not be executed",
+    127: "the command was not found",
+}
 
 
 def add_arguments(parser: argparse.ArgumentParser) -> None:
@@ -113,6 +122,25 @@ def _terminate_as_exit() -> Iterator[None]:
         yield
     finally:
         signal.signal(signal.SIGTERM, previous)
+
+
+@contextmanager
+def _shielded() -> Iterator[None]:
+    """Ignore Ctrl-C and SIGTERM while the way back runs: interrupting it would leave the stack
+    stopped. systemd's TimeoutStopSec still ends it by SIGKILL, and ExecStopPost then repeats it."""
+    try:
+        previous = {
+            number: signal.signal(number, signal.SIG_IGN)
+            for number in (signal.SIGINT, signal.SIGTERM)
+        }
+    except ValueError:  # not the main thread
+        yield
+        return
+    try:
+        yield
+    finally:
+        for number, handler in previous.items():
+            signal.signal(number, handler)
 
 
 def run(ctx: Context, args: argparse.Namespace) -> int:
@@ -174,7 +202,18 @@ class _Update:
             return self.no_op("Automatic updates are off (CAVE_AUTO_UPDATE=0); nothing was done.")
         self.clean_leftovers()
 
-        fetched = _server.git(ctx, "fetch", "--tags", "origin", timeout=FETCH_TIMEOUT)
+        # --force and --prune-tags: the server's tags follow GitHub's, so a tag that was moved
+        # or deleted there (a withdrawn release) neither blocks the fetch nor stays installable.
+        fetched = _server.git(
+            ctx,
+            "fetch",
+            "--prune",
+            "--prune-tags",
+            "--force",
+            "--tags",
+            "origin",
+            timeout=FETCH_TIMEOUT,
+        )
         if not fetched.ok:
             return self.not_updated(
                 None,
@@ -183,10 +222,10 @@ class _Update:
                 "tries again.",
             )
         try:
-            newest = _releases.newest(self.git_lines("tag", "--list", _releases.TAG_PATTERN))
             installed = _releases.newest(
                 self.git_lines("tag", "--list", _releases.TAG_PATTERN, "--merged", "HEAD")
             )
+            newest = self.newest_on_main(installed)
         except CaveError as error:
             return self.not_updated(None, "fetch-failed", f"Could not list the releases: {error}.")
         if newest is None or (installed is not None and newest <= installed):
@@ -200,6 +239,26 @@ class _Update:
                 "until a newer release appears or `sudo ./cave update --force` is run."
             )
         return self.install(newest.tag)
+
+    def newest_on_main(self, installed: _releases.Version | None) -> _releases.Version | None:
+        """The newest release tag newer than ``installed`` whose commit is on ``origin/main``.
+
+        Only the pipeline creates release tags, and only for commits on ``main``; a tag that
+        matches the pattern on any other commit (pushed by hand, on a branch) is ignored.
+        """
+        candidates = _releases.releases(self.git_lines("tag", "--list", _releases.TAG_PATTERN))
+        for version in reversed(candidates):
+            if installed is not None and version <= installed:
+                return None
+            on_main = _server.git(
+                self.ctx, "merge-base", "--is-ancestor", f"{version.tag}^{{commit}}", MAIN
+            )
+            if on_main.returncode == 0:
+                return version
+            if on_main.returncode != 1:
+                raise CaveError(f"cannot tell whether {version} is on main: {_tail(on_main)}")
+            self.ctx.say(f"Ignoring {version}: its commit is not on main.")
+        return None
 
     # ---------------------------------------------------------------- before anything is touched
     def install(self, tag: str) -> int:
@@ -250,18 +309,6 @@ class _Update:
                 f"({detail}). Nothing was changed. See {OPERATIONS}, 'Local changes'.",
             )
 
-        entries = _server.state_entries(ctx.paths.data)
-        needed = int(sum(_server.tree_size(ctx.paths.data / e) for e in entries) * 1.1)
-        needed += DISK_MARGIN
-        free = _server.free_bytes(ctx.paths.data)
-        if free < needed:
-            return self.not_updated(
-                tag,
-                "refused",
-                f"Not updating to {tag}: the snapshot needs about {needed // 2**20} MiB, but "
-                f"only {free // 2**20} MiB are free on {ctx.paths.data}. Nothing was changed.",
-            )
-
         work = _server.ops_dir(ctx) / "tmp"
         try:
             failure = self.check_release(tag, to_commit, work)
@@ -294,21 +341,35 @@ class _Update:
                 tag, "check-failed", f"Not updating to {tag}: exporting it failed: {error}."
             )
 
-        # Compose with the release's own files: COMPOSE_FILE names them, so neither the checkout's
-        # compose.yaml nor its compose.override.yaml is read, and the bind mounts are resolved in
-        # the export. The values of .env come through the environment, because Compose looks for
-        # .env next to the Compose file. A project name of its own keeps the home's containers
-        # out of reach.
+        # Compose with the release's own files: COMPOSE_FILE names them (and the local
+        # compose.override.yaml, which the real start will use too), so the checkout's
+        # compose.yaml is not read and the bind mounts are resolved in the export. The values of
+        # .env come through the environment, because Compose looks for .env next to the Compose
+        # file. A project name of its own keeps the home's containers out of reach.
+        files = [str(release_dir / "compose.yaml")]
+        override = ctx.paths.root / "compose.override.yaml"
+        if override.is_file():
+            files.append(str(override))
         release_ctx = dataclasses.replace(
             ctx,
             compose_files=(),
             compose_env={
                 **ctx.compose_env,
                 **ctx.env,
-                "COMPOSE_FILE": str(release_dir / "compose.yaml"),
+                "COMPOSE_FILE": os.pathsep.join(files),
                 "COMPOSE_PROJECT_NAME": UPDATE_PROJECT,
             },
         )
+        configured = release_ctx.compose("config", "--quiet", timeout=DOCKER_TIMEOUT)
+        if not configured.ok:
+            return self.not_updated(
+                tag,
+                "check-failed",
+                f"Not updating to {tag}: its Compose file does not accept this server's .env and "
+                f"compose.override.yaml: {_tail(configured)}. Nothing was changed. Run "
+                "`sudo -u cave ./cave init` (it adds variables a release needs), check "
+                "compose.override.yaml, then `sudo ./cave update`.",
+            )
         ctx.say(f"Pulling the images of {tag} ...")
         pulled = release_ctx.compose("pull", timeout=PULL_TIMEOUT)
         if not pulled.ok:
@@ -319,36 +380,82 @@ class _Update:
                 "changed; the next run tries again.",
             )
 
+        # Measured after the pull, which usually fills the same disk. The snapshot needs a copy
+        # of the state; putting it back is done by renaming and needs nothing more.
+        entries = _server.state_entries(ctx.paths.data)
+        needed = int(sum(_server.tree_size(ctx.paths.data / e) for e in entries) * 1.1)
+        needed += DISK_MARGIN
+        free = _server.free_bytes(ctx.paths.data)
+        if free < needed:
+            return self.not_updated(
+                tag,
+                "refused",
+                f"Not updating to {tag}: the snapshot needs about {needed // 2**20} MiB, but "
+                f"only {free // 2**20} MiB are free on {ctx.paths.data}. Nothing was changed.",
+            )
+
         ctx.say(f"Checking the Home Assistant configuration with {tag} ...")
         checked = run_in_homeassistant(
             release_ctx,
             ["-m", "homeassistant", "--script", "check_config", "--config", CONTAINER_CONFIG],
         )
         if not checked.ok:
-            return self.not_updated(
-                tag,
-                "check-failed",
-                f"Not updating to {tag}: its Home Assistant rejects the configuration: "
-                f"{_tail(checked)}. Nothing was changed. {tag} is skipped until a newer release "
-                "appears or `sudo ./cave update --force` is run.",
-                remember=True,
+            return self.check_failed(
+                tag, checked, "its Home Assistant rejects the configuration", "check_config"
             )
 
         ctx.say(f"Validating the applied heating.yaml with {tag} ...")
-        try:
-            valid, messages = validate(release_ctx, ctx.paths.heating_applied)
-        except OSError as error:
-            valid, messages = False, (f"cannot read {ctx.paths.heating_applied}: {error}",)
-        if not valid:
+        applied = ctx.paths.container_path(ctx.paths.heating_applied)
+        if not ctx.paths.heating_applied.is_file() or applied is None:
             return self.not_updated(
                 tag,
-                "check-failed",
-                f"Not updating to {tag}: it does not accept the applied heating.yaml: "
-                f"{' / '.join(messages) or 'no message'}. Nothing was changed. Adapt "
-                "cave/heating.yaml, run `./cave apply`, then `sudo ./cave update --force`.",
-                remember=True,
+                "refused",
+                f"Not updating to {tag}: {ctx.paths.heating_applied} does not exist. Run "
+                "`sudo -u cave ./cave apply`. Nothing was changed.",
+            )
+        validated = run_in_homeassistant(
+            release_ctx, ["-m", VALIDATOR_MODULE, applied], workdir=CONTAINER_CONFIG
+        )
+        if not validated.ok:
+            return self.check_failed(
+                tag, validated, "it does not accept the applied heating.yaml", "validator"
             )
         return None
+
+    def check_failed(self, tag: str, result: Result, rejected: str, what: str) -> int:
+        """A check in the new image failed: a rejection (exit 1 from a check that ran) is
+        remembered; a check that could not run at all (Docker, a timeout, a missing module) is
+        not, and the next night tries again."""
+        output = result.output
+        could_not_run = (
+            result.returncode != 1 or "No module named" in output or "Traceback" in output
+        )
+        if could_not_run:
+            reason = COULD_NOT_RUN.get(result.returncode, f"exit status {result.returncode}")
+            if "No module named" in output:
+                reason = f"the {what} is not in this release"
+            return self.not_updated(
+                tag,
+                "check-could-not-run",
+                f"Not updating to {tag}: the {what} could not run ({reason}: {_tail(result)}). "
+                "This says nothing about your configuration. Nothing was changed; the next run "
+                "tries again.",
+            )
+        lines = [line.strip() for line in output.splitlines() if line.strip()]
+        detail = " / ".join(lines[-10:]) or "no message"
+        if what == "validator":
+            advice = (
+                "Adapt cave/heating.yaml as the messages say, run `sudo -u cave ./cave apply`, "
+                "then `sudo ./cave update --force`."
+            )
+        else:
+            advice = f"{tag} is skipped until a newer release appears or `--force` is given."
+        return self.not_updated(
+            tag,
+            "check-failed",
+            f"Not updating to {tag}: {rejected}: {detail}. Nothing was changed. {advice}",
+            remember=True,
+        )
 
     # ------------------------------------------------------------------------------ the switch
     def switch(self, tag: str, to_commit: str, from_commit: str, from_label: str) -> int:
@@ -367,10 +474,6 @@ class _Update:
             return self.roll_back(reason)
 
         record.failed.pop(tag, None)
-        try:
-            state.prune_snapshots(ctx)
-        except OSError as error:
-            ctx.warn(f"Old snapshots could not be removed: {error}")
         return self.conclude(
             tag,
             "installed",
@@ -397,6 +500,7 @@ class _Update:
         state.save(ctx, self.record)
 
         ctx.say(f"Checking out {tag} ...")
+        self.remove_stale_git_locks()
         checked_out = _server.git(ctx, "checkout", "--detach", switch.to_commit)
         if not checked_out.ok:
             return f"{tag} could not be checked out: {_tail(checked_out)}"
@@ -416,6 +520,10 @@ class _Update:
     def restart_previous(self, reason: str) -> int:
         """Nothing changed yet (the snapshot is incomplete or not taken): start the previous
         release again."""
+        with _shielded():
+            return self._restart_previous(reason)
+
+    def _restart_previous(self, reason: str) -> int:
         ctx, switch = self.ctx, self._switch()
         ctx.warn(f"Update to {switch.to_release} stopped: {reason}. Starting {switch.from_label}.")
         try:
@@ -433,19 +541,25 @@ class _Update:
                 f"{head} Nothing was changed: the previous release {switch.from_label} is running "
                 "again and healthy. The next run tries again.",
             )
-        return self.broken(head, started, health, problems)
+        return self.broken(head, started, health, problems, retry=not started)
 
     def roll_back(self, reason: str) -> int:
         """Stop, put back the snapshot and the previous release, start it and wait."""
+        with _shielded():
+            return self._roll_back(reason)
+
+    def _roll_back(self, reason: str) -> int:
         ctx, record, switch = self.ctx, self.record, self._switch()
         ctx.warn(f"Update to {switch.to_release} failed: {reason}. Rolling back.")
         switch.phase = state.ROLLING_BACK
-        record.failed[switch.to_release] = {"time": state.now(), "reason": reason}
+        if switch.to_release not in record.failed:
+            record.failed[switch.to_release] = {"time": state.now(), "reason": reason}
         self.save_quietly()
 
         problems: list[str] = []
         down = ctx.compose("down", timeout=DOWN_TIMEOUT)
         if not down.ok:
+            ctx.sleep(10)  # Docker may still be starting (after a power cut)
             down = ctx.compose("down", timeout=DOWN_TIMEOUT)
         if not down.ok:
             problems.append(
@@ -454,7 +568,7 @@ class _Update:
             )
         elif switch.snapshot is None:
             problems.append("there is no snapshot to put back")
-        else:
+        elif not switch.restored:
             ctx.say(f"Putting back the snapshot {switch.snapshot} ...")
             try:
                 state.restore_snapshot(ctx, switch.snapshot)
@@ -463,8 +577,19 @@ class _Update:
                     f"the snapshot {switch.snapshot} could not be put back ({error}); the state "
                     f"is what {switch.to_release} left behind"
                 )
+            else:
+                switch.restored = True
+                self.save_quietly()
+                try:
+                    state.discard_after_restore(ctx, switch.snapshot)
+                except OSError as error:
+                    ctx.warn(f"What the snapshot replaced could not be removed: {error}")
         problems += self.check_out_previous()
         started, health = self.start()
+        # Keep the update in flight, so that the next run (boot, ExecStopPost, the next night,
+        # `--recover`) tries the way back again, when the snapshot is still to be put back or
+        # nothing runs.
+        retry = not started or (switch.snapshot is not None and not switch.restored)
         head = f"Update to {switch.to_release} failed: {reason}."
         if started and health.healthy and not problems:
             return self.conclude(
@@ -476,7 +601,7 @@ class _Update:
                 f"{switch.to_release} is skipped until a newer release appears or "
                 "`sudo ./cave update --force` is run.",
             )
-        return self.broken(head, started, health, problems)
+        return self.broken(head, started, health, problems, retry=retry)
 
     def finish_interrupted(self) -> int:
         switch = self._switch()
@@ -491,17 +616,19 @@ class _Update:
         return self.roll_back("it was interrupted (killed or a power cut) during the switch")
 
     def check_out_previous(self) -> list[str]:
-        # Always, and by force: a checkout that failed half-way leaves HEAD where it was but
-        # files of the new release in the working tree.
+        """Check out exactly the previous release, whatever an interrupted checkout left."""
         switch = self._switch()
         self.ctx.say(f"Checking out {switch.from_label} ...")
-        done = _server.git(self.ctx, "checkout", "--force", "--detach", switch.from_commit)
-        if done.ok:
+        error = _server.check_out_exactly(self.ctx, switch.from_commit, switch.to_commit)
+        if error is None:
             return []
         return [
-            f"the previous release {switch.from_label} could not be checked out "
-            f"({_tail(done)}); whatever is checked out was started"
+            f"the previous release {switch.from_label} could not be checked out ({error}); "
+            "whatever is checked out was started"
         ]
+
+    def remove_stale_git_locks(self) -> None:
+        _server.remove_stale_git_locks(self.ctx)
 
     def start(self) -> tuple[bool, Health]:
         """Start the checkout (one retry) and wait until healthy."""
@@ -516,8 +643,17 @@ class _Update:
         ctx.say("Waiting until healthy ...")
         return True, wait_healthy(ctx, timeout=self.args.timeout)
 
-    def broken(self, head: str, started: bool, health: Health, problems: list[str]) -> int:
-        """The loud ending: the previous release is not back healthy, or nothing runs."""
+    def broken(
+        self,
+        head: str,
+        started: bool,
+        health: Health,
+        problems: list[str],
+        retry: bool = False,
+    ) -> int:
+        """The loud ending: the previous release is not back healthy, or nothing runs.
+
+        ``retry`` keeps the update in flight, so that the way back is tried again."""
         switch = self._switch()
         listed = "; ".join(problems)
         also = f" Also: {listed}." if problems else ""
@@ -539,7 +675,13 @@ class _Update:
                 f"{head} The previous release {switch.from_label} is running and healthy, but the "
                 f"way back was not clean: {listed}. See {OPERATIONS}, 'The way back was not clean'."
             )
-        return self.conclude(switch.to_release, "broken", BROKEN, message)
+        if retry:
+            message += (
+                " The way back is tried again at the next start of the server, after the next "
+                "update run, or now with `sudo ./cave update --recover`; until then no backup is "
+                "made."
+            )
+        return self.conclude(switch.to_release, "broken", BROKEN, message, keep_switch=retry)
 
     # ---------------------------------------------------------------------------- reporting
     def save_quietly(self) -> bool:
@@ -556,9 +698,16 @@ class _Update:
             raise CaveError("internal error: no update in flight")
         return self.record.switch
 
-    def conclude(self, tag: str | None, outcome: str, status: int, message: str) -> int:
+    def conclude(
+        self, tag: str | None, outcome: str, status: int, message: str, keep_switch: bool = False
+    ) -> int:
         record = self.record
-        record.switch = None
+        if not keep_switch:
+            record.switch = None
+        try:
+            state.prune_snapshots(self.ctx)  # after every outcome, the newest two are kept
+        except OSError as error:
+            self.ctx.warn(f"Old snapshots could not be removed: {error}")
         record.last_result = {
             "time": state.now(),
             "outcome": outcome,
@@ -593,7 +742,7 @@ class _Update:
     # ---------------------------------------------------------------------------------- helpers
     def clean_leftovers(self) -> None:
         state.remove_partial_snapshots(self.ctx)
-        for name in ("tmp", "restoring", "discard"):
+        for name in ("tmp", "discard"):
             _server.remove(_server.ops_dir(self.ctx) / name)
 
     def git_lines(self, *args: str) -> list[str]:

@@ -56,21 +56,38 @@ def archive_name(directory: Path, when: datetime.datetime | None = None) -> str:
 
 
 def archives(directory: Path) -> list[str]:
-    """The archives in ``directory``, oldest first."""
+    """The archives in ``directory``, oldest first by the time they were written.
+
+    Not by the time in the name: one archive named by a clock that was once ahead (a Raspberry
+    Pi without a clock before its first time sync, or archives copied in from elsewhere) would
+    otherwise always count as the newest.
+    """
     try:
         names = os.listdir(directory)
     except FileNotFoundError:
         return []
-    found = [(match, name) for name in names if (match := _NAME.match(name))]
-    # By time, then by the counter that a second archive in the same second gets ("-2").
-    found.sort(key=lambda item: (item[0].group(1), int(item[0].group(2) or 1)))
-    return [name for _match, name in found]
+    found = []
+    for name in names:
+        match = _NAME.match(name)
+        if match is None:
+            continue
+        try:
+            written = (directory / name).stat().st_mtime
+        except OSError:
+            continue
+        found.append(((written, match.group(1), int(match.group(2) or 1)), name))
+    found.sort()
+    return [name for _key, name in found]
 
 
-def prune(directory: Path, keep: int) -> list[str]:
-    """Remove all but the newest ``keep`` archives, and unfinished ones; return what went."""
-    names = archives(directory)
-    removed = names[:-keep] if keep > 0 else names
+def prune(directory: Path, keep: int, protect: str | None = None) -> list[str]:
+    """Remove all but the newest ``keep`` archives, and unfinished ones; return what went.
+
+    ``protect`` (the archive just written) is never removed, whatever the others say.
+    """
+    names = [name for name in archives(directory) if name != protect]
+    kept = keep - 1 if protect is not None else keep
+    removed = names[:-kept] if kept > 0 else names
     for name in removed:
         (directory / name).unlink()
     for name in os.listdir(directory):
@@ -152,12 +169,20 @@ def add_file(archive: tarfile.TarFile, name: str, source: Path, info: os.stat_re
 
 
 def add_tree(
-    archive: tarfile.TarFile, data: Path, paths: Any, spool: Path, databases: list[str]
+    archive: tarfile.TarFile,
+    data: Path,
+    paths: Any,
+    spool: Path,
+    databases: list[str],
+    unreadable: list[str],
 ) -> int:
     """Add every path of ``paths`` (below ``data``) as ``data/<relative>``; return the count.
 
     A file is first copied to ``spool``, so that one which grows or shrinks while it is read
-    (a log) cannot break the archive. A file that disappears meanwhile is left out.
+    (a log) cannot break the archive. A file that disappears meanwhile is left out. A SQLite
+    database that cannot be copied online (a damaged one, such as the
+    ``home-assistant_v2.db.corrupt.*`` Home Assistant keeps) is archived as it is and listed in
+    ``unreadable``, so that it cannot stop the backup of everything else.
     """
     count = 0
     for path in paths:
@@ -177,8 +202,13 @@ def add_tree(
                 copy = spool / "file"
                 if is_sqlite(path):
                     copy.unlink(missing_ok=True)
-                    online_copy(path, copy)
-                    databases.append(relative)
+                    try:
+                        online_copy(path, copy)
+                        databases.append(relative)
+                    except (sqlite3.Error, CaveError):
+                        copy.unlink(missing_ok=True)
+                        shutil.copyfile(path, copy)
+                        unreadable.append(relative)
                 else:
                     shutil.copyfile(path, copy)
                 add_file(archive, name, copy, info)
