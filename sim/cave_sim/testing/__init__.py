@@ -206,7 +206,7 @@ class SimulatedHomeHandle:
         if self.fritz_entry is None:
             raise RuntimeError("the fritzbox integration is not set up")
         await self.fritz_entry.runtime_data.async_refresh()
-        await self.hass.async_block_till_done()
+        await self.hass.async_block_till_done(wait_background_tasks=True)
 
     async def async_flush_subscriptions(self) -> None:
         """Let Home Assistant send the MQTT subscriptions it has queued, and wait for the replies.
@@ -314,5 +314,5 @@ async def async_advance(
         delta = min(step, remaining)
         freezer.tick(timedelta(seconds=delta))
         async_fire_time_changed(hass)
-        await hass.async_block_till_done()
+        await hass.async_block_till_done(wait_background_tasks=True)
         remaining -= delta
