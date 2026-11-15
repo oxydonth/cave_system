@@ -44,6 +44,7 @@ jobs:
       - run: make setup
       - run: make lint
       - run: make typecheck
+      - run: make versions
 
   test:
     name: test
@@ -61,6 +62,8 @@ jobs:
           cache-python: true
       - run: make setup
       - run: make test
+      # The `cave` command must also run on the oldest Python it supports, without Home Assistant.
+      - run: make test-py311
 
   hassfest:
     name: hassfest
@@ -70,9 +73,9 @@ jobs:
     # whose action.yml uses the untagged :latest image: a new Home Assistant release could
     # then turn this job red with no change here. The Home Assistant version appears in
     # three places that move together, in one pull request: `homeassistant` in uv.lock
-    # (through pytest-homeassistant-custom-component), the tag of this image, and later the
-    # image tag in compose.yaml. The runtime stack work package adds the check that enforces
-    # it. The digest is the registry's Docker-Content-Digest for the tag.
+    # (through pytest-homeassistant-custom-component), the tag of this image, and the image
+    # tag in compose.yaml. `make versions` (job lint) enforces it. The digest is the registry's
+    # Docker-Content-Digest for the tag.
     env:
       HASSFEST_IMAGE: ghcr.io/home-assistant/hassfest:2026.10.4@sha256:e5828f7e305518506d8b4e8346411357d68358531b761bd118fe6a1631feff44
     steps:
@@ -82,12 +85,16 @@ jobs:
       - name: hassfest
         run: docker run --rm -v "${GITHUB_WORKSPACE}:/github/workspace" "${HASSFEST_IMAGE}"
 
+  stack:
+    name: stack
+    uses: ./.github/workflows/stack.yml
+
   ci-ok:
     name: ci-ok
     # Fails when any job it depends on failed, was cancelled or was skipped, so it can be the
     # one check to wait for. The list of jobs is `needs`; it is the only place to edit.
     if: always()
-    needs: [lint, test, hassfest]
+    needs: [lint, test, hassfest, stack]
     runs-on: ubuntu-24.04
     timeout-minutes: 5
     env:

@@ -1,0 +1,164 @@
+name: Stack
+
+# The runtime stack from a clean checkout, with no interaction: the Compose file and the Home
+# Assistant configuration are valid, the stack boots healthy in the pinned images, the broker
+# lets in exactly those who know the generated password, and Home Assistant set up
+# `cave_heating` without logging errors. Called from ci.yml; its jobs count towards `ci-ok`
+# through the one calling job.
+
+on:
+  workflow_call:
+
+permissions:
+  contents: read
+
+jobs:
+  stack:
+    name: stack
+    runs-on: ubuntu-24.04
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - name: Initialise
+        run: ./cave init
+
+      - name: Nothing secret is tracked or left to be committed
+        run: |
+          status=$(git status --porcelain)
+          if [ -n "${status}" ]; then
+            echo "::error::init left files that Git does not ignore:"
+            echo "${status}"
+            exit 1
+          fi
+          test "$(stat -c '%a' .env)" = 600
+
+      - name: A second init changes nothing
+        run: |
+          snapshot() { find .env data -printf '%p %y %m %s %T@\n' | sort; }
+          snapshot > "${RUNNER_TEMP}/before"
+          sleep 2
+          ./cave init
+          snapshot > "${RUNNER_TEMP}/after"
+          diff "${RUNNER_TEMP}/before" "${RUNNER_TEMP}/after"
+
+      - name: The Compose file is valid with and without the zigbee profile
+        run: |
+          docker compose config --quiet
+          docker compose --profile zigbee config --quiet
+          test "$(docker compose config --services | sort | tr '\n' ' ')" = "homeassistant mosquitto "
+          test "$(docker compose --profile zigbee config --services | sort | tr '\n' ' ')" = \
+            "homeassistant mosquitto zigbee2mqtt "
+
+      - name: The Zigbee2MQTT image has the tool its health check uses
+        run: |
+          image=$(docker compose --profile zigbee config --images | grep zigbee2mqtt)
+          docker run --rm --entrypoint sh "${image}" -c 'command -v wget'
+
+      - name: Check the Compose file and the Home Assistant configuration
+        run: ./cave check
+
+      - name: Start the stack and wait until it is healthy
+        run: ./cave up --timeout 420
+
+      - name: Show the containers
+        run: ./cave ps
+
+      - name: The broker accepts the generated credentials and nobody else
+        run: |
+          set -a
+          # shellcheck disable=SC1091
+          . ./.env
+          set +a
+          subscribe() {
+            docker compose exec -T mosquitto mosquitto_sub -h 127.0.0.1 -p 1883 \
+              -t '$SYS/broker/version' -C 1 -W 5 "$@"
+          }
+          must_fail() {
+            if "$@" > /dev/null 2>&1; then
+              echo "::error::the broker accepted: $*"
+              exit 1
+            fi
+          }
+          echo "with the generated credentials:"
+          subscribe -u "${CAVE_MQTT_USER}" -P "${CAVE_MQTT_PASSWORD}"
+          echo "without credentials, with a wrong password, with an unknown user:"
+          must_fail subscribe
+          must_fail subscribe -u "${CAVE_MQTT_USER}" -P "not-the-password"
+          must_fail subscribe -u "nobody" -P "${CAVE_MQTT_PASSWORD}"
+          echo "the port is published on the host (Home Assistant reaches it there):"
+          timeout 5 bash -c '</dev/tcp/127.0.0.1/1883'
+
+      - name: Home Assistant finished starting
+        run: |
+          for _ in $(seq 1 90); do
+            if docker compose logs --no-color --no-log-prefix homeassistant | grep -q 'Home Assistant initialized'; then
+              exit 0
+            fi
+            sleep 2
+          done
+          echo "::error::Home Assistant did not report that it finished starting"
+          exit 1
+
+      - name: Home Assistant set up cave_heating and logged no unexpected errors
+        run: |
+          # Give integrations that start in the background a moment to report.
+          sleep 15
+          docker compose logs --no-color --no-log-prefix homeassistant > "${RUNNER_TEMP}/ha.log" 2>&1
+          grep -E 'Setting up cave_heating$' "${RUNNER_TEMP}/ha.log"
+
+          # Errors that are expected on a GitHub runner or in a stack without devices. Every
+          # entry is an extended regular expression matched against the whole log line, and
+          # says why it is harmless. Anything else that Home Assistant logs as ERROR or
+          # CRITICAL fails the job. Do not add an entry without a reason.
+          allowed=(
+            # (none yet: add the entries the first boot on a runner shows, each with its reason)
+            '^$'
+          )
+
+          # Log lines look like: 2026-11-15 12:00:00.000 ERROR (MainThread) [logger] message
+          grep -E '^[0-9-]+ [0-9:.]+ (ERROR|CRITICAL) ' "${RUNNER_TEMP}/ha.log" > "${RUNNER_TEMP}/errors.log" || true
+          for pattern in "${allowed[@]}"; do
+            grep -vE "${pattern}" "${RUNNER_TEMP}/errors.log" > "${RUNNER_TEMP}/errors.next" || true
+            mv "${RUNNER_TEMP}/errors.next" "${RUNNER_TEMP}/errors.log"
+          done
+          if [ -s "${RUNNER_TEMP}/errors.log" ]; then
+            echo "::error::Home Assistant logged errors that are not on the allow-list:"
+            cat "${RUNNER_TEMP}/errors.log"
+            exit 1
+          fi
+          echo "no unexpected errors in $(wc -l < "${RUNNER_TEMP}/ha.log") log lines"
+
+      - name: Logs of every service, when something failed
+        if: failure()
+        run: ./cave logs --tail all || true
+
+      - name: Stop the stack
+        if: always()
+        run: ./cave down
+
+  provision-dry-run:
+    name: provision-host dry run
+    runs-on: ubuntu-24.04
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - name: Dry run prints the plan and changes nothing
+        run: |
+          before=$(getent passwd | cut -d: -f1 | sort | tr '\n' ' ')
+          ./scripts/provision-host.sh --dry-run | tee "${RUNNER_TEMP}/plan.txt"
+          grep -q 'Dry run finished: nothing was changed.' "${RUNNER_TEMP}/plan.txt"
+          grep -q 'docker-ce' "${RUNNER_TEMP}/plan.txt"
+          test "$(getent passwd | cut -d: -f1 | sort | tr '\n' ' ')" = "${before}"
+          if getent passwd cave; then
+            echo "::error::the dry run created the service user"
+            exit 1
+          fi
+          test ! -e /etc/apt/sources.list.d/docker.sources
+          test ! -e /var/lib/cave
+          test ! -e /opt/cave

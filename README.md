@@ -9,7 +9,7 @@ Home Assistant runs everything on a small box at home. This repository holds the
 - [What to buy](docs/hardware.md): the shopping list, in the order to buy it.
 - [Phone, presence and remote access](docs/phone-and-remote.md): the apps, notifications, presence and the FRITZ!Box VPN.
 
-Status: concept stage. Nothing here is deployable yet (parts 2 and 3 of the phone guide apply once the system is installed).
+Status: the runtime stack can be installed ([docs/install.md](docs/install.md)); the heating logic and the rest are still being built (parts 2 and 3 of the phone guide apply once the system is installed).
 
 ## Development
 
@@ -25,10 +25,12 @@ make check   # lint, type check and tests: everything that can run locally
 | `make setup` | `uv sync --locked`: create `.venv` from `uv.lock` |
 | `make lint` | Ruff (lint and format check), yamllint, ShellCheck, actionlint |
 | `make format` | Apply Ruff fixes and formatting |
-| `make typecheck` | mypy `--strict` on `custom_components`, `sim` and `tools` |
+| `make typecheck` | mypy `--strict` on `custom_components`, `sim` and `tools`; `ops` and `cave` against Python 3.11 |
 | `make test` | pytest with coverage |
-| `make check` | `lint`, `typecheck` and `test`: everything that can run locally |
+| `make test-py311` | The tests of the `cave` command (`tests/ops`) on Python 3.11, without Home Assistant |
+| `make versions` | Home Assistant's version in `uv.lock`, `compose.yaml` and `ci.yml`, and its client libraries, agree |
+| `make check` | `lint`, `typecheck`, `test`, `test-py311` and `versions`: everything that can run locally |
 
-Configuration lives in `pyproject.toml` (dependencies, pytest, Ruff, mypy) and `.yamllint`. The pipeline is `.github/workflows/ci.yml`; the one check to wait for is `ci-ok`. hassfest, Home Assistant's validator for integrations, runs only in the pipeline because it needs Docker, so a green `make check` does not replace a green pipeline. After editing dependencies in `pyproject.toml`, run `uv lock`.
+Configuration lives in `pyproject.toml` (dependencies, pytest, Ruff, mypy) and `.yamllint`. The pipeline is `.github/workflows/ci.yml`; the one check to wait for is `ci-ok`. The stack itself (`./cave init`, `./cave up`, [docs/install.md](docs/install.md)) and the `cave` command ([ops/README.md](ops/README.md)) need Docker; hassfest, Home Assistant's validator for integrations, and the `stack` job run only in the pipeline, so a green `make check` does not replace a green pipeline. After editing dependencies in `pyproject.toml`, run `uv lock`.
 
 Contributors and coding agents: see [CLAUDE.md](CLAUDE.md) for the delivery rules; the concept and work packages linked above say what is being built and how.
