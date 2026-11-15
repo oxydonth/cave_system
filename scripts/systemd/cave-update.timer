@@ -1,0 +1,13 @@
+# Installed and enabled by scripts/provision-host.sh. See docs/operations.md.
+[Unit]
+Description=cave_system: nightly update
+
+[Timer]
+# At night, after the backup (cave-backup.timer, 02:30). A run missed while the server was off
+# is not made up during the day.
+OnCalendar=*-*-* 03:30
+RandomizedDelaySec=15min
+Persistent=false
+
+[Install]
+WantedBy=timers.target

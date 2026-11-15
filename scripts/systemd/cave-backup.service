@@ -1,0 +1,15 @@
+# Installed by scripts/provision-host.sh; started by cave-backup.timer. See docs/operations.md.
+[Unit]
+Description=cave_system: archive the state and .env (cave backup)
+Documentation=https://github.com/oxydonth/cave_system/blob/main/docs/operations.md
+After=docker.service
+# Nothing to do before `./cave init` has run.
+ConditionPathExists=/opt/cave/.env
+
+[Service]
+Type=oneshot
+# Root: only root can read every file the containers own in the state directory.
+User=root
+WorkingDirectory=/opt/cave
+ExecStart=/opt/cave/cave backup
+TimeoutStartSec=2h

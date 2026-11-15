@@ -369,3 +369,23 @@ def test_restore_and_update_never_overlap(server, run_cave, backups, ctx):
     assert result.code == 1
     assert "`cave update`" in result.err
     assert server.stack.ops == []
+
+
+def test_no_backup_of_a_state_left_by_an_interrupted_update(
+    server, run_cave, backups, killed, notifications
+):
+    server.release("v2026.11.15.1")
+
+    def kill(release):
+        if release == "v2026.11.15.1":
+            raise killed
+
+    server.stack.before["up"] = kill
+    with pytest.raises(killed):
+        run_cave("update")
+
+    result = run_cave("backup")
+
+    assert result.code == 1
+    assert not backups.exists() or archives(backups) == []
+    assert "`sudo ./cave update --recover` finishes it" in result.err

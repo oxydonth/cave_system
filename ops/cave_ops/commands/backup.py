@@ -26,6 +26,7 @@ from ..lock import LockBusy
 from ..notify import notify
 from . import _archives, _releases, _server
 from ._common import require_initialised
+from ._update_state import load as load_update_record
 
 HELP = "Archive the state and .env without stopping anything (SQLite online backup)"
 
@@ -54,6 +55,18 @@ def run(ctx: Context, args: argparse.Namespace) -> int:
     _server.require_state_access(ctx, "backup")
     try:
         with ctx.lock("backup"):
+            switch = load_update_record(ctx).switch
+            if switch is not None:
+                # The state may be half switched or half put back: archiving it now would keep a
+                # broken state and, through the retention, push out a good one.
+                message = (
+                    f"No backup was made: the update to {switch.to_release} was interrupted "
+                    f"({switch.phase}) and the state may be incomplete. `sudo ./cave update "
+                    "--recover` finishes it; the next backup then runs as usual."
+                )
+                ctx.warn(message)
+                notify(ctx, TITLE, message)
+                return 1
             return _backup(ctx, directory, keep, copy_to)
     except LockBusy as busy:
         message = f"No backup was made: {busy}."
