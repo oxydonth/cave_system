@@ -15,12 +15,28 @@ dev = [
     "pytest-homeassistant-custom-component==0.13.375",
     "ruff",
     "mypy",
+    "types-PyYAML",
     "yamllint",
     # Read by the tests of the tracked YAML files in tests/ops, which also run without Home Assistant.
     "pyyaml",
     # Pre-built ShellCheck and actionlint binaries, so no system packages are needed.
     "shellcheck-py",
     "actionlint-py",
+    # The client libraries of Home Assistant's MQTT and FRITZ!SmartHome integrations, pinned to
+    # exactly the versions their manifests ask for (homeassistant/components/mqtt/manifest.json and
+    # homeassistant/components/fritzbox/manifest.json in Home Assistant 2026.10.4). The test library
+    # does not install integration requirements, and the simulator tests drive the real clients.
+    # Bump together with Home Assistant; Dependabot ignores them.
+    "paho-mqtt==2.1.0",
+    "pyfritzhome==0.6.21",
+    { include-group = "sim" },
+]
+# What the simulator image (sim/Dockerfile) installs, from uv.lock. All three are pinned by
+# Home Assistant itself, so they move only together with Home Assistant.
+sim = [
+    "aiohttp",
+    "paho-mqtt",
+    "pyyaml",
 ]
 
 [tool.uv]
@@ -30,7 +46,8 @@ package = false
 [tool.pytest.ini_options]
 # custom_components must be importable from the repository root, and cave_ops from ops/. Do not add
 # custom_components/__init__.py: Home Assistant's loader needs a namespace package.
-pythonpath = [".", "ops"]
+# ops/ and sim/ hold the importable packages cave_ops and cave_sim.
+pythonpath = [".", "ops", "sim"]
 testpaths = ["tests"]
 # importlib: test files in different directories may share a basename.
 addopts = "-ra --strict-markers --strict-config --import-mode=importlib"
@@ -105,7 +122,8 @@ strict = true
 warn_unreachable = true
 # custom_components has no __init__.py (see above), so name modules from the repository root.
 explicit_package_bases = true
-mypy_path = "."
+# sim/ is the base of the package cave_sim (concept section 4.3).
+mypy_path = ".:sim"
 # The paths to check are passed by `make typecheck`, which skips directories that
 # do not exist yet (sim/ and tools/ arrive in later work packages) and checks ops/ separately.
 exclude = ["^\\.venv/", "^\\.claude/", "^data/"]
@@ -115,3 +133,13 @@ exclude = ["^\\.venv/", "^\\.claude/", "^data/"]
 [[tool.mypy.overrides]]
 module = ["homeassistant.*"]
 implicit_reexport = true
+
+# paho-mqtt re-exports its enums without __all__; the test library ships no type information.
+[[tool.mypy.overrides]]
+module = ["paho.*"]
+implicit_reexport = true
+
+[[tool.mypy.overrides]]
+module = ["pytest_homeassistant_custom_component.*"]
+ignore_missing_imports = true
+follow_untyped_imports = true
