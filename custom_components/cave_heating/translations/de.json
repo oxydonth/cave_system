@@ -114,10 +114,10 @@
   },
   "exceptions": {
     "no_room": {
-      "message": "Das Ziel enthält kein Raumthermostat von Cave Heating. Wähle eine Entität climate.cave_<raum> oder das Gerät oder den Bereich eines Raums."
+      "message": "Das Ziel enthält kein Raumthermostat von Cave Heating. Wähle ein Raumthermostat (climate.cave_ gefolgt von der Raum-ID) oder das Gerät oder den Bereich eines Raums."
     },
     "not_a_room": {
-      "message": "{entity} ist kein Raumthermostat von Cave Heating. Wähle eine Entität climate.cave_<raum> oder das Gerät oder den Bereich eines Raums."
+      "message": "{entity} ist kein Raumthermostat von Cave Heating. Wähle ein Raumthermostat (climate.cave_ gefolgt von der Raum-ID) oder das Gerät oder den Bereich eines Raums."
     },
     "not_loaded": {
       "message": "Cave Heating ist nicht geladen."

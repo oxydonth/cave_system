@@ -114,10 +114,10 @@
   },
   "exceptions": {
     "no_room": {
-      "message": "The target contains no room thermostat of Cave Heating. Choose a climate.cave_<room> entity, or the device or area of a room."
+      "message": "The target contains no room thermostat of Cave Heating. Choose a room thermostat (climate.cave_ followed by the room id), or the device or area of a room."
     },
     "not_a_room": {
-      "message": "{entity} is not a room thermostat of Cave Heating. Choose a climate.cave_<room> entity, or the device or area of a room."
+      "message": "{entity} is not a room thermostat of Cave Heating. Choose a room thermostat (climate.cave_ followed by the room id), or the device or area of a room."
     },
     "not_loaded": {
       "message": "Cave Heating is not loaded."
