@@ -1,0 +1,109 @@
+# The production stack (concept section 4.1). Start it with `./cave up`, never by hand: that wraps
+# `docker compose up` and waits until every service is healthy.
+#
+# Code is mounted read-only from this checkout; state lives in ${CAVE_DATA} (concept section 4.2).
+# CAVE_DATA, TZ and the credentials come from `.env`, which `./cave init` creates.
+#
+# The Home Assistant image tag must equal the `homeassistant` version locked in uv.lock and the
+# hassfest image tag in .github/workflows/ci.yml. They are bumped together, by hand, in one pull
+# request; `make versions` enforces it and Dependabot ignores the image.
+name: cave
+
+x-logging: &logging
+  driver: json-file
+  options:
+    max-size: 10m
+    max-file: "3"
+
+services:
+  homeassistant:
+    image: ghcr.io/home-assistant/home-assistant:2026.10.4
+    restart: unless-stopped
+    # Host network: LAN discovery and the phone apps work, and 8123 is on the LAN. It reaches the
+    # broker through 127.0.0.1, never by service name.
+    network_mode: host
+    environment:
+      TZ: ${TZ:-Europe/Berlin}
+    volumes:
+      - ${CAVE_DATA:?run ./cave init first}/homeassistant:/config
+      - ./homeassistant/configuration.yaml:/config/configuration.yaml:ro
+      - ./homeassistant/packages:/config/packages:ro
+      - ./custom_components/cave_heating:/config/custom_components/cave_heating:ro
+      - ./tools:/cave/tools:ro
+    depends_on:
+      mosquitto:
+        condition: service_healthy
+    healthcheck:
+      # The frontend answers without a login once Home Assistant has finished starting.
+      test: ["CMD", "curl", "--fail", "--silent", "--output", "/dev/null", "http://127.0.0.1:8123/manifest.json"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      # A Raspberry Pi needs minutes for the first start. Until then, probe often so that
+      # `cave up` notices as soon as it is ready.
+      start_period: 180s
+      start_interval: 5s
+    logging: *logging
+
+  mosquitto:
+    image: eclipse-mosquitto:2.0.22
+    restart: unless-stopped
+    environment:
+      # Only for the health check below, which logs in like every other client.
+      CAVE_MQTT_USER: ${CAVE_MQTT_USER:-cave}
+      CAVE_MQTT_PASSWORD: ${CAVE_MQTT_PASSWORD:?run ./cave init first}
+    ports:
+      # Localhost only (Home Assistant is on the host network); other containers use the
+      # Compose network. Nothing is published to the LAN.
+      - 127.0.0.1:1883:1883
+    volumes:
+      - ./mosquitto:/mosquitto/config:ro
+      # Persistence and the password file written by `./cave init`. The image's entrypoint
+      # makes this directory the broker's own, which lets it read the file whoever created it.
+      - ${CAVE_DATA:?run ./cave init first}/mosquitto:/mosquitto/data
+    healthcheck:
+      # A login with the real credentials and one message read: the broker is up and
+      # authentication works. `$$` is Compose's escape for a literal `$`.
+      test:
+        - CMD-SHELL
+        - >-
+          mosquitto_sub -h 127.0.0.1 -p 1883 -u "$$CAVE_MQTT_USER" -P "$$CAVE_MQTT_PASSWORD"
+          -t '$$SYS/broker/version' -C 1 -W 5
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 20s
+      start_interval: 2s
+    logging: *logging
+
+  zigbee2mqtt:
+    image: ghcr.io/koenkk/zigbee2mqtt:2.14.3
+    # Only with a coordinator: set COMPOSE_PROFILES=zigbee in .env once it is connected.
+    profiles: [zigbee]
+    restart: unless-stopped
+    environment:
+      TZ: ${TZ:-Europe/Berlin}
+      # Overrides of the settings in configuration.yaml (Zigbee2MQTT's ZIGBEE2MQTT_CONFIG_* scheme),
+      # so that no secret is written into a file.
+      ZIGBEE2MQTT_CONFIG_MQTT_SERVER: mqtt://mosquitto:1883
+      ZIGBEE2MQTT_CONFIG_MQTT_USER: ${CAVE_MQTT_USER:-cave}
+      ZIGBEE2MQTT_CONFIG_MQTT_PASSWORD: ${CAVE_MQTT_PASSWORD:?run ./cave init first}
+      ZIGBEE2MQTT_CONFIG_SERIAL_PORT: ${CAVE_Z2M_SERIAL_PORT:-}
+      ZIGBEE2MQTT_CONFIG_SERIAL_ADAPTER: ${CAVE_Z2M_ADAPTER:-ember}
+      ZIGBEE2MQTT_CONFIG_FRONTEND_AUTH_TOKEN: ${CAVE_Z2M_FRONTEND_TOKEN:?run ./cave init first}
+    ports:
+      # The web UI, on the LAN, protected by the token.
+      - 8080:8080
+    volumes:
+      - ${CAVE_DATA:?run ./cave init first}/zigbee2mqtt:/app/data
+    depends_on:
+      mosquitto:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD-SHELL", "wget --quiet --spider http://127.0.0.1:8080/ || exit 1"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 60s
+      start_interval: 5s
+    logging: *logging

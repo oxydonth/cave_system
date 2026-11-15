@@ -1,0 +1,55 @@
+# Home Assistant's configuration for cave_system (concept sections 4.2, 4.5 and 6).
+#
+# Mounted read-only at /config/configuration.yaml; /config itself is the state directory. Settings
+# that a person changes (areas, schedules, users, integrations) live in the UI and in the state
+# directory, never here.
+
+homeassistant:
+  name: Cave
+  unit_system: metric
+  currency: EUR
+  country: DE
+  # The container's TZ comes from .env, so the two cannot disagree.
+  time_zone: !env_var TZ Europe/Berlin
+  # Every file in packages/ adds entities and scripts (notifications, helpers). The directory is
+  # tracked, mounted read-only and may be empty.
+  packages: !include_dir_named packages
+
+# The standard set: frontend, history, logbook, the phone apps' API, discovery, person and zone.
+default_config:
+
+# Keep the database small and its writes rare, which matters on an SSD or SD card. Heating
+# graphs need weeks, not years.
+recorder:
+  purge_keep_days: 30
+  commit_interval: 30
+
+# Only warnings and errors, plus two kinds of line that the pipeline's stack job reads:
+# "Setting up <integration>" (to see that `cave_heating` was loaded) and "Home Assistant
+# initialized" (to know that start-up is over before it looks for errors).
+logger:
+  default: warning
+  logs:
+    homeassistant.setup: info
+    homeassistant.bootstrap: info
+
+# The heating integration. The empty entry is on purpose: it reads its own configuration from
+# the applied copy of cave/heating.yaml (concept sections 4.5 and 5.1), and Home Assistant
+# creates its config entry on first start.
+cave_heating:
+
+# The heating dashboard, in YAML mode, generated from the applied heating.yaml by `./cave apply`
+# (concept sections 4.5 and 6). `./cave init` writes a placeholder until then.
+lovelace:
+  dashboards:
+    cave-heating:
+      mode: yaml
+      title: Heizung
+      icon: mdi:radiator
+      show_in_sidebar: true
+      filename: dashboards/heating.yaml
+
+# The files the UI edits. Home Assistant does not create them, so `./cave init` does.
+automation: !include automations.yaml
+script: !include scripts.yaml
+scene: !include scenes.yaml

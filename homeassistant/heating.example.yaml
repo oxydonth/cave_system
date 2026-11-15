@@ -1,0 +1,45 @@
+# The description of the home for cave_heating (concept section 5.1).
+#
+# `./cave init` copies this starter to cave/heating.yaml in the state directory. Edit that copy,
+# then run `./cave apply`: it validates the file completely and only then makes it the version
+# Home Assistant loads, so a typo can never stop Home Assistant. This tracked file only changes
+# what new installations start with.
+version: 1
+
+# Someone is home if any of these says so. A person or device tracker counts when it is `home`,
+# a zone when its count is above zero, anything else when it is `on`. Without this, the home is
+# always occupied. Example: device_tracker.max_phone
+# presence:
+#   - device_tracker.max_phone
+
+away_delay: "00:30:00"
+# The temperatures here are only first-start values. After that the value set in the UI wins.
+away_temperature: 16.0
+
+# Used by every room that does not set its own.
+defaults:
+  comfort_temperature: 21.0
+  eco_temperature: 17.5
+  boost_temperature: 25.0
+  boost_duration: "00:30:00"
+  override_max: "06:00:00"
+  window_open_delay: "00:01:00"
+  window_close_delay: "00:02:00"
+
+# The rooms. None yet: the integration loads without rooms and the dashboard shows a placeholder.
+# Per room only `id`, `name` and one thermostat are required. A complete room looks like this:
+#
+#   - id: living_room                      # ASCII slug, fixes the entity IDs
+#     name: Wohnzimmer                     # display name, also the Home Assistant area
+#     trvs:
+#       - entity: climate.wohnzimmer_heizung_fenster
+#         external_temperature: number.wohnzimmer_heizung_fenster_external_temperature_input
+#         settings:                        # device settings the controller sets
+#           select.wohnzimmer_heizung_fenster_temperature_sensor_select: remote_temperature
+#           switch.wohnzimmer_heizung_fenster_open_window: "off"
+#     temperature_sensor: sensor.wohnzimmer_temperature
+#     humidity_sensor: sensor.wohnzimmer_humidity
+#     windows:
+#       - binary_sensor.wohnzimmer_fenster_contact
+#     schedule: schedule.living_room_heating
+rooms: []
