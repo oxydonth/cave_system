@@ -1,0 +1,4 @@
+# These tests also run on Python 3.11 (see py311.ini), so Ruff must not rewrite them to newer
+# syntax or formatting.
+extend = "../../pyproject.toml"
+target-version = "py311"

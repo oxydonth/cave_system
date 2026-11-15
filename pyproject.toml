@@ -16,6 +16,8 @@ dev = [
     "ruff",
     "mypy",
     "yamllint",
+    # Read by the tests of the tracked YAML files in tests/ops, which also run without Home Assistant.
+    "pyyaml",
     # Pre-built ShellCheck and actionlint binaries, so no system packages are needed.
     "shellcheck-py",
     "actionlint-py",
@@ -26,21 +28,20 @@ dev = [
 package = false
 
 [tool.pytest.ini_options]
-# custom_components must be importable from the repository root. Do not add
+# custom_components must be importable from the repository root, and cave_ops from ops/. Do not add
 # custom_components/__init__.py: Home Assistant's loader needs a namespace package.
-pythonpath = ["."]
+pythonpath = [".", "ops"]
 testpaths = ["tests"]
 # importlib: test files in different directories may share a basename.
 addopts = "-ra --strict-markers --strict-config --import-mode=importlib"
 asyncio_mode = "auto"
-# Tests that must also run on Python 3.11 (the planned ops/ package, standard library only) cannot
-# use this file: the project does not install there, and --strict-config rejects asyncio_mode
-# without pytest-asyncio. They run with a separate ini file and --confcutdir=tests/ops, for
-# example `uv run --isolated --no-project --python 3.11 --with pytest pytest -c tests/ops/py311.ini
-# --confcutdir=tests/ops tests/ops`. Do not name that file pytest.ini: pytest would find it on its
-# own and silently use it instead of this configuration. That is why the root tests/conftest.py must not import
-# Home Assistant: Home Assistant fixtures live in tests/cave_heating/conftest.py (and the
-# integration test directories of later work packages).
+# The tests in tests/ops must also run on Python 3.11 (the `cave` command, standard library only),
+# where the project does not install and --strict-config rejects asyncio_mode without
+# pytest-asyncio. They run with their own ini file and --confcutdir=tests/ops: `make test-py311`.
+# Do not name that file pytest.ini: pytest would find it on its own and silently use it instead
+# of this configuration. That is why the root tests/conftest.py must not import Home Assistant:
+# Home Assistant fixtures live in tests/cave_heating/conftest.py (and the integration test
+# directories of later work packages).
 
 [tool.coverage.run]
 branch = true
@@ -49,17 +50,18 @@ branch = true
 show_missing = true
 skip_empty = true
 
-# Everything targets Python 3.14, except the planned ops/ package (the `cave` command-line tool),
-# which must run on the server's system Python, 3.11 or newer, with the standard library only.
-# When it arrives it gets its own ops/ruff.toml (`extend = "../pyproject.toml"` and
-# `target-version = "py311"`; Ruff uses the closest config file) and a separate
-# `mypy --python-version 3.11 ops` run in `make typecheck`. Nothing below is specific to 3.14
-# apart from these two settings.
+# Everything targets Python 3.14, except ops/ (the `cave` command-line tool) and tests/ops, which
+# must run on the server's own Python, 3.11 or newer: their ruff.toml files extend this one and
+# set `target-version = "py311"` (Ruff uses the closest config file). ops/ and `cave` also get
+# their own `mypy --python-version 3.11` run in `make typecheck`. Nothing below is specific to
+# 3.14 apart from these settings.
 [tool.ruff]
 target-version = "py314"
 line-length = 100
 # Anchored to the repository root: a bare "data" would also skip sim/cave_sim/data/ and the like.
 extend-exclude = ["./.claude", "./data"]
+# The `cave` entry point has no .py extension.
+extend-include = ["cave"]
 
 [tool.ruff.lint]
 select = [
@@ -88,12 +90,11 @@ ignore = ["RUF012"]
 # listing the directory names alone would classify them as third-party.
 known-first-party = ["custom_components", "cave_sim", "cave_ops", "sim", "tools"]
 
-# Shared per-directory ignores. The ops/ entries can instead live in ops/ruff.toml, which also
-# sets the older target version (see above).
+# Shared per-directory ignores, also valid for ops/ and tests/ops, whose ruff.toml extends this file.
 [tool.ruff.lint.per-file-ignores]
 # assert is how pytest tests state expectations; the others are fixtures, fake credentials and
 # scratch paths in test code.
-"tests/**" = ["S101", "S105", "S106", "S107", "S311"]
+"tests/**" = ["S101", "S105", "S106", "S107", "S311", "S603", "S607"]
 "sim/**" = ["S104", "S311"]  # control API binds 0.0.0.0 in its container; random sensor noise
 "ops/**" = ["T201", "S603", "S607", "S310"]  # CLI prints, runs docker and git, uses urllib
 "tools/**" = ["T201"]
@@ -106,7 +107,7 @@ warn_unreachable = true
 explicit_package_bases = true
 mypy_path = "."
 # The paths to check are passed by `make typecheck`, which skips directories that
-# do not exist yet (sim/ and tools/ arrive in later work packages).
+# do not exist yet (sim/ and tools/ arrive in later work packages) and checks ops/ separately.
 exclude = ["^\\.venv/", "^\\.claude/", "^data/"]
 
 # Home Assistant's modules do not re-export names explicitly, yet every integration imports

@@ -1,0 +1,31 @@
+#!/usr/bin/env python3
+"""Entry point of the ``cave`` command. The work is in ops/cave_ops/ (standard library only)."""
+
+import sys
+
+MIN_PYTHON = (3, 11)
+
+
+def _main() -> int:
+    # This part must stay valid for old interpreters, so that it can say what is wrong.
+    if sys.version_info < MIN_PYTHON:
+        wanted = f"{MIN_PYTHON[0]}.{MIN_PYTHON[1]}"
+        found = f"{sys.version_info[0]}.{sys.version_info[1]}"
+        sys.stderr.write(
+            f"cave needs Python {wanted} or newer, but this is Python {found} ({sys.executable}).\n"
+            "Debian 13 and Raspberry Pi OS 64-bit ship a suitable python3; on another system "
+            f"install Python {wanted} or newer and run cave with it.\n"
+        )
+        return 1
+
+    from pathlib import Path
+
+    root = Path(__file__).resolve().parent
+    sys.path.insert(0, str(root / "ops"))
+    from cave_ops.cli import main
+
+    return main(root=root)
+
+
+if __name__ == "__main__":
+    sys.exit(_main())
