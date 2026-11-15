@@ -1,6 +1,12 @@
 # Weekly update proposals, one grouped pull request per ecosystem. Each goes through the
 # normal pipeline and review. The docker and docker-compose entries match every directory,
 # so the Compose files and the sim/ Dockerfile are covered when later work packages add them.
+#
+# Home Assistant is never bumped by Dependabot. Its version appears in three places that move
+# together, by hand, in one pull request: `homeassistant` in uv.lock (through
+# pytest-homeassistant-custom-component), the hassfest image tag in ci.yml, and the image tag
+# in compose.yaml. The check that enforces it arrives with the runtime stack work package.
+# The image is listed under every name it can be written with, in both container ecosystems.
 version: 2
 updates:
   - package-ecosystem: github-actions
@@ -15,6 +21,9 @@ updates:
     directory: /
     schedule:
       interval: weekly
+    ignore:
+      - dependency-name: pytest-homeassistant-custom-component
+      - dependency-name: homeassistant
     groups:
       python:
         patterns: ["*"]
@@ -23,11 +32,10 @@ updates:
     directories: ["/**/*"]
     schedule:
       interval: weekly
-    # The Home Assistant image tag must always equal the homeassistant version pinned through
-    # pytest-homeassistant-custom-component, and both are bumped together in one pull request
-    # by hand. A check for this arrives with the runtime stack work package.
     ignore:
       - dependency-name: ghcr.io/home-assistant/home-assistant
+      - dependency-name: homeassistant/home-assistant
+      - dependency-name: home-assistant/home-assistant
     groups:
       compose-images:
         patterns: ["*"]
@@ -36,6 +44,10 @@ updates:
     directories: ["/**/*"]
     schedule:
       interval: weekly
+    ignore:
+      - dependency-name: ghcr.io/home-assistant/home-assistant
+      - dependency-name: homeassistant/home-assistant
+      - dependency-name: home-assistant/home-assistant
     groups:
       dockerfiles:
         patterns: ["*"]
