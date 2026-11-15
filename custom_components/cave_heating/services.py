@@ -9,7 +9,7 @@ import probatio as vol
 from homeassistant.components.climate import DOMAIN as CLIMATE_DOMAIN
 from homeassistant.const import ATTR_ENTITY_ID, ATTR_TEMPERATURE
 from homeassistant.core import HomeAssistant, ServiceCall, callback
-from homeassistant.exceptions import HomeAssistantError, ServiceValidationError
+from homeassistant.exceptions import ServiceValidationError
 from homeassistant.helpers import config_validation as cv
 from homeassistant.helpers import service
 
@@ -71,12 +71,15 @@ def async_setup_services(hass: HomeAssistant) -> None:
     """
 
     async def reload(call: ServiceCall) -> None:
+        # An invalid file fails the call, so `cave apply` can tell the user the new
+        # configuration was not taken. As a validation error it reaches a REST caller as a 400
+        # with this message, and Home Assistant does not log it as an error.
         result = await _runtime(hass).async_reload()
         if result.config is None:
-            raise HomeAssistantError(
+            raise ServiceValidationError(
                 translation_domain=DOMAIN,
                 translation_key="reload_failed",
-                translation_placeholders={"errors": "; ".join(result.errors)},
+                translation_placeholders={"errors": " ".join(result.errors)},
             )
 
     async def hold(call: ServiceCall) -> None:

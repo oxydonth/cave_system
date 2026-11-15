@@ -4,9 +4,11 @@ Usage, with Home Assistant's configuration directory as the working directory::
 
     python -m custom_components.cave_heating.validate cave/heating.yaml
 
-Exit status 0 means the file is valid. 1 means it is not, or cannot be read; every problem is
-written to standard error, one line each, naming the room and the field. 2 means the command was
-called wrongly. The rules are the ones the integration applies when it loads the applied copy.
+Exit status 0 means the file is valid; one line on standard output says so. Exit status 1 means
+it is not valid or cannot be read: standard error gets one line saying so, followed by every
+problem found, one complete sentence per line, each naming the room and the field. Exit status 2
+means the command was called wrongly. The rules are the ones the integration applies when it
+loads the applied copy.
 """
 
 from __future__ import annotations
@@ -21,7 +23,7 @@ EXIT_VALID = 0
 EXIT_INVALID = 1
 EXIT_USAGE = 2
 
-USAGE = "usage: python -m custom_components.cave_heating.validate <heating.yaml>\n"
+USAGE = "Usage: python -m custom_components.cave_heating.validate <heating.yaml>\n"
 
 
 def main(argv: Sequence[str]) -> int:
@@ -33,9 +35,10 @@ def main(argv: Sequence[str]) -> int:
     try:
         config = load_file(path)
     except ConfigError as err:
-        sys.stderr.write(f"{path} is not valid:\n")
+        count = len(err.errors)
+        sys.stderr.write(f"{path} is not valid ({count} problem{'s' if count != 1 else ''}):\n")
         for error in err.errors:
-            sys.stderr.write(f"  {error}\n")
+            sys.stderr.write(f"{error}\n")
         return EXIT_INVALID
     thermostats = sum(len(room.trvs) for room in config.rooms)
     sys.stdout.write(

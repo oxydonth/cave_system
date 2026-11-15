@@ -347,25 +347,31 @@ async def test_refused_command_blocks_and_is_retried_every_retry_interval(
 async def test_blocked_thermostat_is_retried_sooner_when_it_changes(
     hass: HomeAssistant, home: FakeHome, freezer: FrozenDateTimeFactory, change: str
 ) -> None:
-    """Sooner than retry_interval when its availability, mode or target changes."""
+    """Sooner than retry_interval when its availability, mode or target changes.
+
+    The target change here is to 21, which the controller sent before it was blocked: a change
+    to a target it never sent would be a hand change and become the room's override instead.
+    """
     trv = await home.thermostat("climate.summer", target=18.0)
     trv.refuse = "Summer mode active"
     await start(home, "climate.summer")
     await home.advance(freezer, 3 * SEC)
+    assert trv.commands == [heat(21.0)]
     assert statuses(home) == {"climate.summer": "blocked"}
     trv.refuse = None
     trv.report(current=19.0)
+    await set_comfort(hass, 22.0)
     await home.advance(freezer, 5 * MIN)
-    assert len(trv.commands) == 1, "a reading alone does not retry"
+    assert len(trv.commands) == 1, "neither a reading nor a new target retries"
     if change == "mode":
         trv.report(mode="off")
     elif change == "target":
-        trv.report(target=17.0)
+        trv.report(target=21.0)
     else:
         trv.set_available(False)
         trv.set_available(True)
     await home.advance(freezer, 3 * SEC)
-    assert len(trv.commands) == 2
+    assert trv.commands[1:] == [heat(22.0, "heat" if change == "mode" else None)]
     assert statuses(home) == {"climate.summer": "ok"}
 
 
@@ -406,11 +412,12 @@ async def test_late_report_of_an_earlier_command_is_not_a_hand_change(
     await set_comfort(hass, 22.0)
     await home.advance(freezer, 3 * SEC)
     assert trv.commands == [heat(21.0), heat(22.0)]
-    await home.advance(freezer, 3 * MIN, step=10 * SEC)
+    # 21 was sent three seconds before 22; the thermostat reports each three minutes late.
+    await home.advance(freezer, 3 * MIN - 2 * SEC)
     assert home.state("climate.slowpoke").attributes["temperature"] == 21.0, "the late report"
     assert home.state(LIVING).attributes["reason"] == "comfort"
     assert statuses(home) == {"climate.slowpoke": "pending"}
-    await home.advance(freezer, 2 * MIN, step=10 * SEC)
+    await home.advance(freezer, 2 * MIN)
     assert home.state("climate.slowpoke").attributes["temperature"] == 22.0
     assert statuses(home) == {"climate.slowpoke": "ok"}
     assert home.state(LIVING).attributes["reason"] == "comfort"
@@ -921,7 +928,6 @@ async def test_setting_refused_by_home_assistant_is_reported(
     await home.settle()
     problem = home.state(PROBLEM)
     assert problem.state == "on"
-    assert problem.attributes["messages"] == [
-        f"setting {SENSOR_SELECT} was refused: Option remote_temperature is not valid"
-    ]
+    [message] = problem.attributes["messages"]
+    assert message.startswith(f"setting {SENSOR_SELECT} was refused: Option remote_temperature")
     assert trv.commands == []

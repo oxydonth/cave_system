@@ -109,13 +109,20 @@ class HeatingConfig:
     timing: Timing = field(default_factory=Timing)
 
 
+def _sentence(text: str) -> str:
+    """One complete sentence on one line: capitalised, single-spaced, ending with a full stop."""
+    text = " ".join(line.strip() for line in text.splitlines() if line.strip())
+    text = text[:1].upper() + text[1:]
+    return text if text.endswith((".", "!", "?")) else f"{text}."
+
+
 class ConfigError(Exception):
-    """The file cannot be used. ``errors`` lists every problem found, one line each."""
+    """The file cannot be used. ``errors`` lists every problem found, one sentence each."""
 
     def __init__(self, errors: list[str]) -> None:
         """Keep the list of problems."""
-        super().__init__("; ".join(errors))
-        self.errors = errors
+        self.errors = [_sentence(error) for error in errors]
+        super().__init__(" ".join(self.errors))
 
 
 # --- Reading the file -------------------------------------------------------------------------
@@ -179,6 +186,12 @@ def read_file(path: Path) -> object:
         raise ConfigError([f"the file {path} cannot be read: {err}"]) from err
     try:
         return yaml.load(text, Loader=_StrictLoader)  # noqa: S506  (a SafeLoader subclass)
+    except yaml.MarkedYAMLError as err:
+        where = ""
+        if err.problem_mark is not None:
+            where = f" (line {err.problem_mark.line + 1}, column {err.problem_mark.column + 1})"
+        problem = " ".join(part for part in (err.context, err.problem) if part)
+        raise ConfigError([f"the file is not valid YAML: {problem}{where}"]) from err
     except yaml.YAMLError as err:
         raise ConfigError([f"the file is not valid YAML: {err}"]) from err
 
@@ -201,7 +214,7 @@ def migrate(data: dict[str, Any]) -> dict[str, Any]:
     """Convert a file of any supported version to the current one."""
     version = data.get("version")
     if isinstance(version, bool) or not isinstance(version, int):
-        raise ConfigError([f'field "version": must be a whole number, got {version!r}'])
+        raise ConfigError([f'field "version": must be a whole number, but is {version!r}'])
     if version < 1 or version > CURRENT_VERSION:
         raise ConfigError(
             [
@@ -259,7 +272,7 @@ def _duration(err: _Collector, path: str, value: object, *, positive: bool) -> t
         err.add(
             path,
             f'must be a duration such as "00:05:00" (hours:minutes:seconds) or a number of '
-            f"seconds, got {_describe(value)}",
+            f"seconds, but is {_describe(value)}",
         )
         return None
     if positive and result <= timedelta(0):
@@ -270,16 +283,16 @@ def _duration(err: _Collector, path: str, value: object, *, positive: bool) -> t
 
 def _temperature(err: _Collector, path: str, value: object) -> float | None:
     if isinstance(value, bool) or not isinstance(value, int | float) or not math.isfinite(value):
-        err.add(path, f"must be a temperature in °C, got {_describe(value)}")
+        err.add(path, f"must be a temperature in °C, but is {_describe(value)}")
         return None
     if not MIN_TEMPERATURE <= value <= MAX_TEMPERATURE:
         err.add(
             path,
-            f"must be between {MIN_TEMPERATURE:g} and {MAX_TEMPERATURE:g} °C, got {value:g}",
+            f"must be between {MIN_TEMPERATURE:g} and {MAX_TEMPERATURE:g} °C, but is {value:g}",
         )
         return None
     if not math.isclose(value / TEMPERATURE_STEP, round(value / TEMPERATURE_STEP)):
-        err.add(path, f"must be a multiple of {TEMPERATURE_STEP:g} °C, got {value:g}")
+        err.add(path, f"must be a multiple of {TEMPERATURE_STEP:g} °C, but is {value:g}")
         return None
     return float(value)
 
@@ -288,12 +301,14 @@ def _entity(
     err: _Collector, path: str, value: object, domains: tuple[str, ...] | None
 ) -> str | None:
     if not isinstance(value, str) or not _ENTITY_ID.match(value):
-        err.add(path, f"must be an entity ID such as climate.living_room, got {_describe(value)}")
+        err.add(
+            path, f"must be an entity ID such as climate.living_room, but is {_describe(value)}"
+        )
         return None
     domain = value.split(".", 1)[0]
     if domains is not None and domain not in domains:
         allowed = " or ".join(domains)
-        err.add(path, f'must be an entity of the domain {allowed}, got "{value}"')
+        err.add(path, f'must be an entity of the domain {allowed}, but is "{value}"')
         return None
     return value
 
@@ -308,7 +323,7 @@ def _entity_list(
     elif isinstance(value, list):
         items = value
     else:
-        err.add(path, f"must be an entity ID or a list of them, got {_describe(value)}")
+        err.add(path, f"must be an entity ID or a list of them, but is {_describe(value)}")
         return ()
     result: list[str] = []
     for index, item in enumerate(items):
@@ -323,7 +338,7 @@ def _entity_list(
 
 def _mapping(err: _Collector, path: str, value: object) -> dict[str, Any] | None:
     if not isinstance(value, dict):
-        err.add(path, f"must be a mapping of keys to values, got {_describe(value)}")
+        err.add(path, f"must be a mapping of keys to values, but is {_describe(value)}")
         return None
     return value
 
@@ -353,7 +368,9 @@ def _timing(err: _Collector, value: object) -> Timing:
         if name in _TIMING_COUNTS:
             minimum = _TIMING_COUNTS[name]
             if isinstance(raw, bool) or not isinstance(raw, int) or raw < minimum:
-                err.add(path, f"must be a whole number of at least {minimum}, got {_describe(raw)}")
+                err.add(
+                    path, f"must be a whole number of at least {minimum}, but is {_describe(raw)}"
+                )
             else:
                 values[name] = raw
         elif name == "feed_threshold":
@@ -363,7 +380,9 @@ def _timing(err: _Collector, value: object) -> Timing:
                 or not math.isfinite(raw)
                 or raw <= 0
             ):
-                err.add(path, f"must be a temperature difference above 0 K, got {_describe(raw)}")
+                err.add(
+                    path, f"must be a temperature difference above 0 K, but is {_describe(raw)}"
+                )
             else:
                 values[name] = float(raw)
         else:
@@ -430,7 +449,7 @@ def _setting(err: _Collector, path: str, entity: str, value: object) -> SettingV
     domain = entity.split(".", 1)[0]
     if domain == "number":
         if isinstance(value, bool) or not isinstance(value, int | float):
-            err.add(path, f"must be a number for a number entity, got {_describe(value)}")
+            err.add(path, f"must be a number for a number entity, but is {_describe(value)}")
             return None
         return float(value)
     if isinstance(value, bool):
@@ -438,13 +457,13 @@ def _setting(err: _Collector, path: str, entity: str, value: object) -> SettingV
         return "on" if value else "off"
     if domain == "switch":
         if value not in ("on", "off"):
-            err.add(path, f'must be "on" or "off" for a switch, got {_describe(value)}')
+            err.add(path, f'must be "on" or "off" for a switch, but is {_describe(value)}')
             return None
         return str(value)
     if isinstance(value, int | float):
         return str(value)
     if not isinstance(value, str) or not value:
-        err.add(path, f"must be one of the options the entity offers, got {_describe(value)}")
+        err.add(path, f"must be one of the options the entity offers, but is {_describe(value)}")
         return None
     return value
 
@@ -480,7 +499,7 @@ def _thermostat(err: _Collector, path: str, value: object) -> ThermostatConfig |
     slow: bool | None = None
     if "slow" in data:
         if not isinstance(data["slow"], bool):
-            err.add(f"{path}.slow", f"must be true or false, got {_describe(data['slow'])}")
+            err.add(f"{path}.slow", f"must be true or false, but is {_describe(data['slow'])}")
         else:
             slow = data["slow"]
     if entity is None:
@@ -508,7 +527,7 @@ def _room(
             err.add(
                 "id",
                 "must be lower-case ASCII letters, digits and single underscores, starting and "
-                f"ending with a letter or digit, got {_describe(data['id'])}",
+                f"ending with a letter or digit, but is {_describe(data['id'])}",
             )
         else:
             room_id = data["id"]
@@ -516,7 +535,7 @@ def _room(
         if "name" not in data:
             err.add("name", "is required")
         elif not isinstance(data["name"], str) or not data["name"].strip():
-            err.add("name", f"must be a non-empty text, got {_describe(data['name'])}")
+            err.add("name", f"must be a non-empty text, but is {_describe(data['name'])}")
         else:
             name = data["name"].strip()
         trvs: list[ThermostatConfig] = []
@@ -578,7 +597,7 @@ def parse(data: object) -> HeatingConfig:
     if data is None:
         raise ConfigError(['the file is empty; it needs at least "version: 1"'])
     if not isinstance(data, dict):
-        raise ConfigError([f"the file must be a mapping of keys to values, got {data!r}"])
+        raise ConfigError([f"the file must be a mapping of keys to values, but is {data!r}"])
     data = migrate(dict(data))
     err = _Collector()
     _unknown_keys(err, "", data, _TOP_KEYS)
@@ -604,7 +623,7 @@ def parse(data: object) -> HeatingConfig:
     rooms: list[tuple[int, RoomConfig]] = []
     raw_rooms = data.get("rooms")
     if raw_rooms is not None and not isinstance(raw_rooms, list):
-        err.add("rooms", f"must be a list of rooms, got {_describe(raw_rooms)}")
+        err.add("rooms", f"must be a list of rooms, but is {_describe(raw_rooms)}")
     for index, raw in enumerate(raw_rooms if isinstance(raw_rooms, list) else []):
         room = _room(err, index, raw, defaults)
         if room is not None:

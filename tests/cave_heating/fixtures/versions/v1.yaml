@@ -1,0 +1,36 @@
+# Format version 1, as in concept section 5.1. Keep this file unchanged: it proves that a file
+# written for version 1 still loads after the format moves on. A new version adds v<N>.yaml.
+version: 1
+presence:                      # optional; someone is home if any of these says so
+  - device_tracker.max_phone
+away_delay: "00:30:00"
+away_temperature: 16.0         # first-start value, see below
+defaults:                      # for every room unless the room sets its own
+  comfort_temperature: 21.0    # first-start values, see below
+  eco_temperature: 17.5
+  boost_temperature: 25.0
+  boost_duration: "00:30:00"
+  override_max: "06:00:00"
+  window_open_delay: "00:01:00"
+  window_close_delay: "00:02:00"
+rooms:
+  - id: living_room            # ASCII slug, fixes the entity IDs
+    name: Wohnzimmer           # display name, also the Home Assistant area
+    trvs:
+      - entity: climate.wohnzimmer_heizung_fenster
+        external_temperature: number.wohnzimmer_heizung_fenster_external_temperature_input
+        settings:              # device settings the controller sets, see 5.5
+          select.wohnzimmer_heizung_fenster_temperature_sensor_select: remote_temperature
+          switch.wohnzimmer_heizung_fenster_open_window: "off"
+      - entity: climate.wohnzimmer_heizung_tuer
+        external_temperature: number.wohnzimmer_heizung_tuer_external_temperature_input
+    temperature_sensor: sensor.wohnzimmer_temperature
+    humidity_sensor: sensor.wohnzimmer_humidity
+    windows:
+      - binary_sensor.wohnzimmer_fenster_contact
+    schedule: schedule.living_room_heating
+  - id: bathroom
+    name: Bad
+    trvs:
+      - entity: climate.bad_heizung      # a FRITZ!Smart Thermo 302
+    window_open_delay: "00:05:00"

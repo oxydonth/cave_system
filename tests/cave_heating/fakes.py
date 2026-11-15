@@ -11,6 +11,7 @@ turned. Every command it receives is recorded in ``commands``.
 
 from __future__ import annotations
 
+import time
 from collections.abc import Callable, Iterable
 from datetime import datetime, timedelta
 from pathlib import Path
@@ -36,10 +37,11 @@ from homeassistant.helpers.entity import Entity
 from homeassistant.helpers.event import async_call_later
 from homeassistant.setup import async_setup_component
 from homeassistant.util import dt as dt_util
+from homeassistant.util.async_ import get_scheduled_timer_handles
 from pytest_homeassistant_custom_component.common import (
     MockModule,
     MockPlatform,
-    async_fire_time_changed,
+    async_fire_time_changed_exact,
     mock_integration,
     mock_platform,
 )
@@ -339,15 +341,37 @@ class FakeHome:
     async def advance(
         self, freezer: FrozenDateTimeFactory, delta: timedelta, step: timedelta | None = None
     ) -> None:
-        """Move time forward, firing every timer on the way (in steps of ``step``)."""
-        step = step or delta
-        remaining = delta
-        while remaining > timedelta(0):
-            tick = min(step, remaining)
+        """Move time forward by ``delta``, stopping at every timer on the way.
+
+        Time moves as it would for real: each timer fires at its own time, in order, and what
+        it schedules in turn fires too, if it falls before the end. ``step`` additionally caps
+        each move, for tests that change things between ticks.
+        """
+        end = dt_util.utcnow() + delta
+        while (now := dt_util.utcnow()) < end:
+            tick = end - now
+            if step is not None:
+                tick = min(tick, step)
+            next_timer = self._next_timer()
+            if next_timer is not None:
+                tick = min(tick, max(next_timer, timedelta(microseconds=1)))
             freezer.tick(tick)
-            async_fire_time_changed(self.hass)
+            async_fire_time_changed_exact(self.hass)
             await self.hass.async_block_till_done()
-            remaining -= tick
+
+    def _next_timer(self) -> timedelta | None:
+        """How far ahead of the simulated time the next scheduled timer is."""
+        loop = self.hass.loop
+        # The loop runs on the real monotonic clock; the simulated wall clock is ahead of the
+        # real one by everything the freezer has ticked so far.
+        ahead = dt_util.utcnow().timestamp() - time.time()
+        delays = [
+            handle.when() - loop.time() - ahead
+            for handle in get_scheduled_timer_handles(loop)
+            if not handle.cancelled()
+        ]
+        future = [delay for delay in delays if delay > 0]
+        return timedelta(seconds=min(future)) if future else None
 
     def write_applied(self, config: dict[str, Any] | str | None) -> Path:
         """Write the applied heating.yaml (``None`` removes it)."""
