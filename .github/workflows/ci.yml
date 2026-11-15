@@ -82,12 +82,19 @@ jobs:
           docker run --rm -v "${GITHUB_WORKSPACE}:/github/workspace"
           ghcr.io/home-assistant/hassfest:2026.10.4@sha256:e5828f7e305518506d8b4e8346411357d68358531b761bd118fe6a1631feff44
 
+  stack-demo:
+    name: stack-demo
+    runs-on: ubuntu-24.04
+    timeout-minutes: 5
+    steps:
+      - run: exit 1
+
   ci-ok:
     name: ci-ok
     # Fails when any job it depends on failed, was cancelled or was skipped, so it can be the
     # one check to wait for. The list of jobs is `needs`; it is the only place to edit.
     if: always()
-    needs: [lint, test, hassfest]
+    needs: [lint, test, hassfest, stack-demo]
     runs-on: ubuntu-24.04
     timeout-minutes: 5
     env:
