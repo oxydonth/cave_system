@@ -5,9 +5,13 @@ that uses the ``hass`` fixture needs them (see CLAUDE.md): the import of the int
 at import time, and the autouse ``enable_custom_integrations`` fixture.
 """
 
+from pathlib import Path
+
 import pytest
+from homeassistant.core import HomeAssistant
 
 import custom_components.cave_heating  # noqa: F401  (import-time side effect, see above)
+from tests.cave_heating.fakes import FakeHome
 
 
 @pytest.fixture(autouse=True)
@@ -23,3 +27,17 @@ def expected_lingering_timers() -> bool:
     does not cancel it when Home Assistant stops, and the test library otherwise fails the test.
     """
     return True
+
+
+@pytest.fixture
+def hass_config_dir(tmp_path: Path) -> str:
+    """A fresh Home Assistant configuration directory per test, for the applied heating.yaml."""
+    return str(tmp_path)
+
+
+@pytest.fixture
+async def home(hass: HomeAssistant) -> FakeHome:
+    """Fake thermostats and sensors, and helpers to start the real cave_heating on top of them."""
+    fake = FakeHome(hass)
+    await fake.async_setup()
+    return fake

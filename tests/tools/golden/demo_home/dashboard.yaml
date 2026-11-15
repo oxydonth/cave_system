@@ -24,11 +24,6 @@ views:
         style: buttons
     - type: tile
       entity: binary_sensor.cave_home_occupied
-    - type: entities
-      title: Who is home
-      show_header_toggle: false
-      entities:
-      - person.demo
   - type: grid
     cards:
     - type: heading
@@ -56,7 +51,6 @@ views:
       - number.cave_living_room_comfort_temperature
       - number.cave_living_room_eco_temperature
       - button.cave_living_room_resume_schedule
-      - schedule.living_room_heating
       - binary_sensor.wohnzimmer_fenster_contact
     - type: history-graph
       hours_to_show: 24
@@ -91,13 +85,13 @@ views:
       - number.cave_bedroom_comfort_temperature
       - number.cave_bedroom_eco_temperature
       - button.cave_bedroom_resume_schedule
-      - schedule.bedroom_heating
       - binary_sensor.schlafzimmer_fenster_contact
     - type: history-graph
       hours_to_show: 24
       entities:
       - climate.cave_bedroom
       - sensor.schlafzimmer_temperature
+      - sensor.schlafzimmer_humidity
   - type: grid
     cards:
     - type: heading
@@ -129,6 +123,8 @@ views:
       hours_to_show: 24
       entities:
       - climate.cave_bathroom
+      - sensor.bad_temperature
+      - sensor.bad_humidity
 - title: Maintenance
   path: maintenance
   icon: mdi:wrench

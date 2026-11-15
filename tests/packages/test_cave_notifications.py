@@ -8,19 +8,15 @@ the clock forward shows which notifications appear and which do not.
 
 from collections.abc import Callable
 from datetime import timedelta
-from pathlib import Path
 from typing import Any
 
 import pytest
 from freezegun.api import FrozenDateTimeFactory
-from homeassistant.components import persistent_notification as pn
-from homeassistant.config import merge_packages_config
 from homeassistant.core import HomeAssistant, ServiceCall, State
 from homeassistant.exceptions import HomeAssistantError
 from homeassistant.helpers import area_registry as ar
 from homeassistant.helpers import device_registry as dr
 from homeassistant.helpers import entity_registry as er
-from homeassistant.setup import async_setup_component
 from homeassistant.util.yaml import load_yaml_dict
 from pytest_homeassistant_custom_component.common import (
     MockConfigEntry,
@@ -29,53 +25,15 @@ from pytest_homeassistant_custom_component.common import (
     mock_restore_cache_with_extra_data,
 )
 
-PACKAGE = Path(__file__).parents[2] / "homeassistant" / "packages" / "cave_notifications.yaml"
+from tests.packages.helpers import PACKAGE, Shown, load_package
 
 BATTERY = {"device_class": "battery", "unit_of_measurement": "%", "friendly_name": "Hall contact"}
-
-
-class Shown:
-    """The persistent notifications that are currently shown in the Home Assistant UI."""
-
-    def __init__(self, hass: HomeAssistant) -> None:
-        self.current: dict[str, pn.Notification] = {}
-        pn.async_register_callback(hass, self._update)
-
-    def _update(self, kind: pn.UpdateType, notifications: dict[str, pn.Notification]) -> None:
-        if kind is pn.UpdateType.REMOVED:
-            for notification_id in notifications:
-                self.current.pop(notification_id, None)
-        else:
-            self.current.update(notifications)
-
-    @property
-    def titles(self) -> list[str]:
-        return sorted(n["title"] or "" for n in self.current.values())
-
-    @property
-    def messages(self) -> list[str]:
-        return sorted(n["message"] for n in self.current.values())
-
-
-def _fail(hass: HomeAssistant, name: str, config: Any, message: str, domain_config: Any) -> None:
-    raise AssertionError(f"package error: {name}: {message}")
-
-
-async def _load_package(hass: HomeAssistant) -> Shown:
-    """Merge the package into the configuration and set up what it contains."""
-    assert await async_setup_component(hass, "persistent_notification", {})
-    package = load_yaml_dict(str(PACKAGE))
-    config = await merge_packages_config(hass, {}, {"cave_notifications": package}, _fail)
-    for domain in ("input_text", "script", "template", "automation"):
-        assert await async_setup_component(hass, domain, config), domain
-    await hass.async_block_till_done()
-    return Shown(hass)
 
 
 @pytest.fixture
 async def shown(hass: HomeAssistant) -> Shown:
     """Load the package and everything it needs; return what the UI would show."""
-    return await _load_package(hass)
+    return await load_package(hass)
 
 
 @pytest.fixture
@@ -352,7 +310,7 @@ async def test_after_a_restart_what_was_already_reported_is_not_announced_again(
     hass.states.async_set("sensor.hall_contact_battery", "12", BATTERY)
     reported = {"sensor.hall_contact_battery": "Hall contact is at 12 %"}
     _restore_battery_sensor(hass, reported)
-    shown = await _load_package(hass)
+    shown = await load_package(hass)
 
     await _advance(hass, freezer, 3)
 
@@ -367,7 +325,7 @@ async def test_a_new_low_battery_after_a_restart_is_announced(
     hass.states.async_set("sensor.gate_battery", "9", {**BATTERY, "friendly_name": "Gate"})
     reported = {"sensor.hall_contact_battery": "Hall contact is at 12 %"}
     _restore_battery_sensor(hass, reported)
-    shown = await _load_package(hass)
+    shown = await load_package(hass)
 
     await _advance(hass, freezer, 3)
 

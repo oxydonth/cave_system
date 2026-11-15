@@ -19,8 +19,6 @@ dev = [
     "yamllint",
     # Read by the tests of the tracked YAML files in tests/ops, which also run without Home Assistant.
     "pyyaml",
-    # Type stubs for PyYAML, which tools/render_dashboard.py imports (Home Assistant installs PyYAML itself).
-    "types-pyyaml",
     # Pre-built ShellCheck and actionlint binaries, so no system packages are needed.
     "shellcheck-py",
     "actionlint-py",

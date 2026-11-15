@@ -9,6 +9,7 @@ Nothing here imports Home Assistant.
 
 from __future__ import annotations
 
+import json
 import subprocess
 import sys
 
@@ -269,9 +270,40 @@ def test_a_reload_that_fails_leaves_everything_else_done_and_says_to_restart(
     assert home.dashboard.read_text().startswith("# generated from")
     assert "Applied copy:    updated" in result.out
     assert "Dashboard:       regenerated" in result.out
-    assert "reload refused: Home Assistant answered 500" in result.out
+    assert "Home Assistant answered 500: Internal Server Error" in result.err
+    assert "reload refused (answer 500, shown above)" in result.out
     assert "loaded when Home Assistant restarts" in result.out
     assert "./cave restart homeassistant" in result.out
+
+
+def test_a_reload_that_refuses_the_applied_copy_shows_what_home_assistant_answered(
+    ctx, run_cave, home, fake_runner, fake_ha, write_token
+):
+    """The integration answers 400 with the problems in `message`; they reach the person."""
+    edit(home)
+    write_token()
+    containers(fake_runner, home)
+    problems = (
+        'cave/.applied/heating.yaml is not valid (2 problems): Room "office" (rooms[0]), '
+        'field "trvs": at least one thermostat is required. Room "bath" (rooms[1]), field '
+        '"humidity_sensor": "x" is not an entity ID.'
+    )
+
+    def refuse_reload(method, url, headers, body, timeout):
+        if method == "POST":
+            return 400, json.dumps({"message": problems}).encode()
+        return fake_ha(method, url, headers, body, timeout)
+
+    ctx.transport = refuse_reload
+
+    result = run_cave("apply")
+
+    assert result.code == 1
+    assert f"Home Assistant answered 400: {problems}" in result.err
+    assert "{" not in result.err  # the message, not the JSON around it
+    assert "the configuration that was running stays in effect" in result.out
+    assert "Applied copy:    updated" in result.out
+    assert "Dashboard:       regenerated" in result.out
 
 
 def test_a_home_assistant_that_is_down_loads_the_applied_copy_when_it_starts(

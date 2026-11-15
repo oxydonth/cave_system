@@ -103,8 +103,11 @@ def _reload(ctx: Context, outcome: _Outcome) -> None:
         )
         outcome.needs_attention = True
     except HAError as error:
+        # Home Assistant's own words, in full: for an invalid applied copy they are the problems.
+        ctx.warn(str(error))
         outcome.home_assistant = (
-            f"reload refused: {error}. The applied copy is stored and is loaded when Home "
+            f"reload refused (answer {error.status}, shown above); the configuration that was "
+            "running stays in effect. The applied copy is stored and is loaded when Home "
             f"Assistant restarts: `{RESTART_COMMAND}`"
         )
         outcome.needs_attention = True

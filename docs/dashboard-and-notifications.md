@@ -188,3 +188,10 @@ moves the clock, and asserts which notifications appear and which do not:
 ```sh
 uv run pytest tests/packages
 ```
+
+`tests/packages/test_real_integration.py` does the same with the real `cave_heating` on a small
+`heating.yaml`: the window and problem notifications come from the integration's own
+`binary_sensor.cave_<room>_window_open` and `_problem`, every `cave_*` entity of the generated
+dashboard exists in the integration, and the maintenance card shows the real `messages` and
+`thermostats` attributes. The pipeline's `stack` job runs `./cave apply` against the starter
+configuration with the real validator and checks that the placeholder dashboard was replaced.
