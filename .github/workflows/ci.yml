@@ -66,21 +66,21 @@ jobs:
     name: hassfest
     runs-on: ubuntu-24.04
     timeout-minutes: 10
+    # Runs the official hassfest image directly instead of through home-assistant/actions,
+    # whose action.yml uses the untagged :latest image: a new Home Assistant release could
+    # then turn this job red with no change here. The Home Assistant version appears in
+    # three places that move together, in one pull request: `homeassistant` in uv.lock
+    # (through pytest-homeassistant-custom-component), the tag of this image, and later the
+    # image tag in compose.yaml. The runtime stack work package adds the check that enforces
+    # it. The digest is the registry's Docker-Content-Digest for the tag.
+    env:
+      HASSFEST_IMAGE: ghcr.io/home-assistant/hassfest:2026.10.4@sha256:e5828f7e305518506d8b4e8346411357d68358531b761bd118fe6a1631feff44
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           persist-credentials: false
-      # Runs the official hassfest image directly instead of through home-assistant/actions,
-      # whose action.yml uses the untagged :latest image: a new Home Assistant release could
-      # then turn this job red with no change here. The Home Assistant version appears in
-      # three places that move together, in one pull request: `homeassistant` in uv.lock
-      # (through pytest-homeassistant-custom-component), this image tag, and later the image
-      # tag in compose.yaml. The runtime stack work package adds the check that enforces it.
-      # The digest is the registry's Docker-Content-Digest for the tag.
-      - name: hassfest (Home Assistant 2026.10.4, as in uv.lock)
-        run: >-
-          docker run --rm -v "${GITHUB_WORKSPACE}:/github/workspace"
-          ghcr.io/home-assistant/hassfest:2026.10.4@sha256:e5828f7e305518506d8b4e8346411357d68358531b761bd118fe6a1631feff44
+      - name: hassfest
+        run: docker run --rm -v "${GITHUB_WORKSPACE}:/github/workspace" "${HASSFEST_IMAGE}"
 
   ci-ok:
     name: ci-ok

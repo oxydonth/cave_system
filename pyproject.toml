@@ -36,8 +36,9 @@ asyncio_mode = "auto"
 # Tests that must also run on Python 3.11 (the planned ops/ package, standard library only) cannot
 # use this file: the project does not install there, and --strict-config rejects asyncio_mode
 # without pytest-asyncio. They run with a separate ini file and --confcutdir=tests/ops, for
-# example `uv run --isolated --no-project --python 3.11 --with pytest pytest -c tests/ops/pytest.ini
-# --confcutdir=tests/ops tests/ops`. That is why the root tests/conftest.py must not import
+# example `uv run --isolated --no-project --python 3.11 --with pytest pytest -c tests/ops/py311.ini
+# --confcutdir=tests/ops tests/ops`. Do not name that file pytest.ini: pytest would find it on its
+# own and silently use it instead of this configuration. That is why the root tests/conftest.py must not import
 # Home Assistant: Home Assistant fixtures live in tests/cave_heating/conftest.py (and the
 # integration test directories of later work packages).
 
@@ -92,7 +93,7 @@ known-first-party = ["custom_components", "cave_sim", "cave_ops", "sim", "tools"
 [tool.ruff.lint.per-file-ignores]
 # assert is how pytest tests state expectations; the others are fixtures, fake credentials and
 # scratch paths in test code.
-"tests/**" = ["S101", "S105", "S106", "S107", "S108", "S311"]
+"tests/**" = ["S101", "S105", "S106", "S107", "S311"]
 "sim/**" = ["S104", "S311"]  # control API binds 0.0.0.0 in its container; random sensor noise
 "ops/**" = ["T201", "S603", "S607", "S310"]  # CLI prints, runs docker and git, uses urllib
 "tools/**" = ["T201"]

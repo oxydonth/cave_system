@@ -14,8 +14,11 @@ PRUNE := -path ./.git -prune -o -path ./.venv -prune -o -path ./.claude -prune -
 TYPED_DIRS := custom_components $(wildcard sim tools)
 COV_ARGS := $(addprefix --cov=,$(TYPED_DIRS))
 YAML_FILES = $(shell find . $(PRUNE) -type f \( -name '*.yml' -o -name '*.yaml' \) -print)
+# A literal # cannot be written inside a function call in a way that make 3.81 (macOS) and 4.3
+# (Linux) agree on, so it comes from a variable.
+HASH := \#
 # Shell scripts: every *.sh, plus the `cave` entry point only if it is a shell script.
-SHELL_FILES = $(strip $(shell find . $(PRUNE) -type f -name '*.sh' -print) $(shell [ -f ./cave ] && head -n 1 ./cave | grep -qE '^\#!.*sh' && echo ./cave))
+SHELL_FILES = $(strip $(shell find . $(PRUNE) -type f -name '*.sh' -print) $(shell [ -f ./cave ] && head -n 1 ./cave | grep -qE '^[$(HASH)]!.*sh' && echo ./cave))
 
 .DEFAULT_GOAL := help
 

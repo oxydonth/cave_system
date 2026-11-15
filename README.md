@@ -29,4 +29,4 @@ make check   # lint, type check and tests: everything that can run locally
 
 Configuration lives in `pyproject.toml` (dependencies, pytest, Ruff, mypy) and `.yamllint`. The pipeline is `.github/workflows/ci.yml`; the one check to wait for is `ci-ok`. hassfest, Home Assistant's validator for integrations, runs only in the pipeline because it needs Docker, so a green `make check` does not replace a green pipeline. After editing dependencies in `pyproject.toml`, run `uv lock`.
 
-Contributors and coding agents: see [CLAUDE.md](CLAUDE.md) for the delivery rules, and the [concept](docs/concept.md) and [work packages](docs/work-packages.md) for what is being built and how.
+Contributors and coding agents: see [CLAUDE.md](CLAUDE.md) for the delivery rules; the concept and work packages linked above say what is being built and how.
