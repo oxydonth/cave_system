@@ -134,8 +134,8 @@ class ReportOutcome:
 class ThermostatDriver:
     """The controller's view of one thermostat (concept section 5.5)."""
 
-    def __init__(self, entity_id: str, timing: Timing, *, slow: bool) -> None:
-        """Start before the first report."""
+    def __init__(self, entity_id: str, timing: Timing, *, slow: bool, now: datetime) -> None:
+        """Start before the first report; ``now`` opens the exemption window of a start."""
         self.entity_id = entity_id
         self.timing = timing
         self.slow = slow
@@ -147,12 +147,23 @@ class ThermostatDriver:
         self.deadline: datetime | None = None  # confirmation timeout, or the next retry
         self.send_due: datetime | None = None  # a send waiting for the debounce or the budget
         self.resending = False
-        self.sent: list[float] = []  # targets sent since the last confirmation, oldest first
+        # Targets sent and not yet reported back, oldest first (concept section 5.5).
+        self.queue: list[float] = []
         self.last_confirmed: float | None = None
-        self.first_report = True
+        # No report is a hand change before this time: one confirmation timeout after a start,
+        # a return from being unavailable, or the end of a hold.
+        self.exempt_until: datetime | None = now + self.confirm_timeout
+        # The mode the thermostat will be in once the commands in flight have arrived.
+        self.expected_mode: str | None = None
         self.hold_until: datetime | None = None
         self.budget: deque[datetime] = deque()
-        self.budget_exhausted = False
+        self.budget_exhausted = False  # a send is being held back by the budget
+        self.budget_streak_start: datetime | None = None
+        self.budget_last_exhausted: datetime | None = None
+        # Unresponsive because it disagreed for budget_exhausted_hours: only retried, and only
+        # back to ok once it has matched for a whole retry_interval.
+        self.disagreeing = False
+        self.disagreed_since_retry = False
         self.error: str | None = None
 
     # --- What is wanted ------------------------------------------------------------------------
@@ -184,7 +195,7 @@ class ThermostatDriver:
         return None if report.has_off else report.min_temp
 
     def matches(self, report: Report | None = None) -> bool:
-        """Whether the thermostat reports what is wanted (that is: a command is confirmed)."""
+        """Whether the thermostat reports what is wanted."""
         report = report or self.report
         if self.want is None or report is None:
             return True
@@ -201,7 +212,10 @@ class ThermostatDriver:
         target = self.wanted_target()
         assert target is not None  # noqa: S101  (heat, or off by the minimum target)
         data: dict[str, Any] = {"temperature": target}
-        if report.mode != report.heat_mode:
+        # With commands in flight the report is older than they are: decide on the mode the
+        # thermostat will be in once they have arrived.
+        mode = self.expected_mode if self.expected_mode is not None else report.mode
+        if mode != report.heat_mode:
             # Together with the target: setting heat alone makes a FRITZ! thermostat apply the
             # FRITZ!Box's own temperatures.
             data["hvac_mode"] = report.heat_mode
@@ -212,10 +226,11 @@ class ThermostatDriver:
         if want == self.want:
             return
         self.want = want
-        if not self.available or self.held(now) or self.report is None:
+        if not self.available or self.held(now) or self.report is None or self.disagreeing:
             return
         if self.matches():
-            self._confirm()
+            if not self.queue:
+                self._confirm()
         elif self.phase is not Phase.BLOCKED:
             # A blocked thermostat is not sent into; it is retried on its own schedule.
             self.resending = False
@@ -226,11 +241,22 @@ class ThermostatDriver:
         if not self.available or self.held(now) or self.report is None or self.want is None:
             return
         if self.matches():
-            self._confirm()
+            if not self.queue and not self.disagreeing:
+                self._confirm()
         elif self.phase is Phase.OK:
             self._request_send(now)
 
     # --- Reports -------------------------------------------------------------------------------
+
+    def _lost(self) -> None:
+        self.phase = Phase.OK
+        self.attempts = 0
+        self.deadline = None
+        self.send_due = None
+        self.resending = False
+        self.queue.clear()
+        self.expected_mode = None
+        self.disagreeing = False
 
     def on_report(
         self,
@@ -239,52 +265,58 @@ class ThermostatDriver:
         *,
         exists: bool = True,
         adopt: bool = False,
-        initial: bool = False,
     ) -> ReportOutcome:
         """Take a report: the thermostat's new state, or None while it cannot be used.
 
         ``exists`` is False for an entity that does not exist. ``adopt`` is False while the
-        room's radiators are off, so nothing is adopted. ``initial`` marks the state found when
-        the controller starts, which is not a report that arrived: the first report after a
-        start is still to come.
+        room's radiators are off, so nothing is adopted.
         """
         if report is None:
             self.availability = Availability.UNAVAILABLE if exists else Availability.MISSING
-            self.phase = Phase.OK
-            self.attempts = 0
-            self.deadline = None
-            self.send_due = None
-            self.resending = False
-            self.first_report = True
+            self._lost()
             return ReportOutcome()
 
         returned = self.availability is not Availability.AVAILABLE
         self.availability = Availability.AVAILABLE
         previous, self.report = self.report, report
         if returned:
-            self.phase = Phase.OK
-            self.attempts = 0
-            self.deadline = None
-        first = self.first_report
-        if not initial:
-            self.first_report = False
+            self._lost()
+            self.exempt_until = now + self.confirm_timeout
+        target_changed = previous is None or not same(previous.target, report.target)
+        reported_back = target_changed and self._consume(report.target)
         if self.held(now) or self.want is None:
             return ReportOutcome(returned=returned)
         if self.matches():
-            self._confirm()
+            if not self.disagreeing and not self.queue:
+                self._confirm()
             return ReportOutcome(returned=returned)
-        if not first and adopt and self._is_hand_change(previous, report):
-            return ReportOutcome(returned=returned, hand_target=report.target)
+        if self.disagreeing:
+            self.disagreed_since_retry = True
+            return ReportOutcome(returned=returned)
         if self.phase is Phase.BLOCKED:
-            if (
-                previous is None
-                or report.mode != previous.mode
-                or not same(report.target, previous.target)
-            ):
+            # Never adopted: something else controls the thermostat. A change is the trigger
+            # to try again.
+            if previous is None or report.mode != previous.mode or target_changed:
                 self._retry_now(now)
-        elif self.phase is Phase.OK:
+            return ReportOutcome(returned=returned)
+        if (
+            not reported_back
+            and adopt
+            and (self.exempt_until is None or now >= self.exempt_until)
+            and self._is_hand_change(previous, report)
+        ):
+            return ReportOutcome(returned=returned, hand_target=report.target)
+        if self.phase is Phase.OK:
             self._request_send(now)
         return ReportOutcome(returned=returned)
+
+    def _consume(self, target: float | None) -> bool:
+        """A reported target that was sent: drop the queue up to its first occurrence."""
+        for index, queued in enumerate(self.queue):
+            if same(queued, target):
+                del self.queue[: index + 1]
+                return True
+        return False
 
     def _is_hand_change(self, previous: Report | None, report: Report) -> bool:
         """All of concept section 5.5's conditions for a change made on the thermostat."""
@@ -292,24 +324,23 @@ class ThermostatDriver:
             return False
         if previous.target is not None and same(previous.target, report.target):
             return False
-        known = [self.wanted_target(report), self.last_confirmed, *self.sent]
+        known = [self.wanted_target(report), self.last_confirmed, *self.queue]
         return not any(same(report.target, target) for target in known)
 
     def _confirm(self) -> None:
         target = self.wanted_target()
         if target is not None:
-            # Forget the targets sent before the confirmed one; keep any sent after it.
-            for index in range(len(self.sent) - 1, -1, -1):
-                if same(self.sent[index], target):
-                    del self.sent[: index + 1]
-                    break
             self.last_confirmed = target
+        self.queue.clear()
         self.phase = Phase.OK
         self.attempts = 0
         self.deadline = None
         self.send_due = None
         self.resending = False
         self.budget_exhausted = False
+        self.expected_mode = None
+        self.disagreeing = False
+        self.disagreed_since_retry = False
         self.error = None
 
     # --- Commands ------------------------------------------------------------------------------
@@ -327,11 +358,29 @@ class ThermostatDriver:
             self.budget.popleft()
         return len(self.budget) < self.timing.command_budget_per_hour
 
+    def _budget_used_up(self, now: datetime) -> None:
+        """A send is held back by the budget; for hours in a row it means disagreement."""
+        last = self.budget_last_exhausted
+        if last is None or now - last > BUDGET_WINDOW or self.budget_streak_start is None:
+            self.budget_streak_start = now
+        self.budget_last_exhausted = now
+        if now - self.budget_streak_start >= BUDGET_WINDOW * self.timing.budget_exhausted_hours:
+            self.phase = Phase.UNRESPONSIVE
+            self.disagreeing = True
+            self.disagreed_since_retry = False
+            self.budget_exhausted = False
+            self.budget_streak_start = None
+            self.send_due = None
+            self.deadline = now + self.timing.retry_interval
+        else:
+            self.budget_exhausted = True
+            self.send_due = (self.budget[0] if self.budget else now) + BUDGET_WINDOW
+
     def tick(self, now: datetime, *, may_send: bool = True) -> Command | None:
         """Advance to ``now`` and return the command to send now, if any.
 
-        ``may_send`` is False while the room is collecting hand changes; a send that falls due
-        then waits until they have settled.
+        ``may_send`` is False while the room is collecting hand changes, and while Home
+        Assistant is still starting; a send that falls due then waits.
         """
         if self.hold_until is not None and now >= self.hold_until:
             self.release(now)
@@ -339,7 +388,20 @@ class ThermostatDriver:
             return None
         if self.deadline is not None and now >= self.deadline:
             self.deadline = None
-            if self.phase is Phase.PENDING and self.attempts > self.timing.resend_attempts:
+            if self.disagreeing:
+                if self.matches() and not self.disagreed_since_retry:
+                    self._confirm()
+                    return None
+                self.disagreed_since_retry = False
+                if self.matches():
+                    self.deadline = now + self.timing.retry_interval
+                else:
+                    self.send_due = now
+            elif self.matches():
+                # Still matching when the timeout passes: no earlier command can still report.
+                self._confirm()
+                return None
+            elif self.phase is Phase.PENDING and self.attempts > self.timing.resend_attempts:
                 self.phase = Phase.UNRESPONSIVE
                 self.deadline = now + self.timing.retry_interval
             else:
@@ -349,20 +411,28 @@ class ThermostatDriver:
         if self.send_due is None or now < self.send_due:
             return None
         if self.matches():
-            self._confirm()
+            self.send_due = None
+            if not self.queue and not self.disagreeing:
+                self._confirm()
             return None
         if not may_send:
             return None
-        if not self._budget_allows(now):
-            self.budget_exhausted = True
-            self.send_due = self.budget[0] + BUDGET_WINDOW
+        # A disagreeing thermostat is tried once per retry_interval: that is its limit.
+        if not self.disagreeing and not self._budget_allows(now):
+            self._budget_used_up(now)
             return None
         self.budget_exhausted = False
         command = self.command()
         self.send_due = None
         self.budget.append(now)
-        if command.target is not None and not (self.sent and same(self.sent[-1], command.target)):
-            self.sent.append(command.target)
+        assert self.report is not None  # noqa: S101  (checked above)
+        if command.target is not None:
+            # A target the thermostat already has, or will have, is not reported back as a
+            # change, so it is not queued.
+            expected = self.queue[-1] if self.queue else self.report.target
+            if not same(expected, command.target):
+                self.queue.append(command.target)
+        self.expected_mode = OFF if command.service == "set_hvac_mode" else self.report.heat_mode
         if self.phase is Phase.UNRESPONSIVE:
             self.deadline = now + self.timing.retry_interval
         else:
@@ -373,14 +443,28 @@ class ThermostatDriver:
         self.resending = False
         return command
 
-    def on_refused(self, now: datetime, error: str) -> None:
-        """Home Assistant rejected a command: blocked, and retried every retry_interval."""
+    def on_refused(self, now: datetime, error: str, command: Command) -> bool:
+        """Home Assistant rejected a command. True if that makes the thermostat blocked.
+
+        A refusal that arrives after the thermostat already confirmed what is wanted changes
+        nothing.
+        """
+        if command.target is not None:
+            for index in range(len(self.queue) - 1, -1, -1):
+                if same(self.queue[index], command.target):
+                    del self.queue[index]
+                    break
+        if self.phase is Phase.OK and self.matches():
+            return False
         self.phase = Phase.BLOCKED
         self.attempts = 0
         self.deadline = now + self.timing.retry_interval
         self.send_due = None
         self.resending = False
+        self.expected_mode = None
+        self.disagreeing = False
         self.error = error
+        return True
 
     # --- Hold ----------------------------------------------------------------------------------
 
@@ -392,14 +476,12 @@ class ThermostatDriver:
         self.resending = False
 
     def release(self, now: datetime) -> None:
-        """End a hold. The next report is not a hand change, and a differing state is corrected."""
+        """End a hold. No report is a hand change for a while; a differing state is corrected."""
         if self.hold_until is None:
             return
         self.hold_until = None
-        self.first_report = True
-        self.phase = Phase.OK
-        self.attempts = 0
-        self.deadline = None
+        self._lost()
+        self.exempt_until = now + self.confirm_timeout
         self.reconcile(now)
 
     # --- Status --------------------------------------------------------------------------------
@@ -434,11 +516,13 @@ class ThermostatDriver:
             "attempts": self.attempts,
             "deadline": self.deadline.isoformat() if self.deadline else None,
             "send_due": self.send_due.isoformat() if self.send_due else None,
-            "sent": list(self.sent),
+            "queue": list(self.queue),
             "last_confirmed": self.last_confirmed,
+            "exempt_until": self.exempt_until.isoformat() if self.exempt_until else None,
             "hold_until": self.hold_until.isoformat() if self.hold_until else None,
             "commands_last_hour": len(self.budget),
             "budget_exhausted": self.budget_exhausted,
+            "disagreeing": self.disagreeing,
             "error": self.error,
         }
 
@@ -448,9 +532,9 @@ class ThermostatDriver:
 
 @dataclass(frozen=True, slots=True)
 class FeedStep:
-    """A value to write to a thermostat's external temperature input."""
+    """What the feed does now."""
 
-    value: float
+    value: float | None  # the value to write now, if any
     restarted: bool  # the feed starts again after a stop: device settings follow
 
 
@@ -473,30 +557,33 @@ class Feed:
     def step(
         self, now: datetime, reading: float | None, *, allowed: bool, paused: bool = False
     ) -> FeedStep | None:
-        """The value to write now, if any.
+        """What to do now: a value to write, the news that the feed started again, or None.
 
         ``allowed`` is False while home mode or the room is off and while the room sensor is
         unavailable or stale: the feed stops. ``paused`` holds writes back without stopping it,
-        while the thermostat is held or its input cannot be written.
+        while the thermostat is held or its input is missing or unavailable.
         """
         if not allowed or reading is None:
             self.active = False
             return None
         if paused:
             return None
+        restarted = False
         if not self.active:
             restarted = self.started
             self.active = True
             self.started = True
-            return FeedStep(reading, restarted)
+            if self.last_at is None or now - self.last_at >= self.timing.feed_min_interval:
+                return FeedStep(reading, restarted)
+            # Started again within feed_min_interval of the last write: the normal rule.
         if self.last_at is None:
-            return FeedStep(reading, False)
+            return FeedStep(reading, restarted)
         elapsed = now - self.last_at
-        if elapsed >= self.timing.feed_max_interval:
-            return FeedStep(reading, False)
-        if elapsed >= self.timing.feed_min_interval and self._changed(reading):
-            return FeedStep(reading, False)
-        return None
+        if elapsed >= self.timing.feed_max_interval or (
+            elapsed >= self.timing.feed_min_interval and self._changed(reading)
+        ):
+            return FeedStep(reading, restarted)
+        return FeedStep(None, True) if restarted else None
 
     def wrote(self, value: float, now: datetime) -> None:
         """Record a write (also a failed one, so a failing input is not hammered)."""

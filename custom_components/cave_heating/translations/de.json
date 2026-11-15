@@ -113,6 +113,12 @@
     }
   },
   "exceptions": {
+    "no_room": {
+      "message": "Das Ziel enthält kein Raumthermostat von Cave Heating. Wähle eine Entität climate.cave_<raum> oder das Gerät oder den Bereich eines Raums."
+    },
+    "not_a_room": {
+      "message": "{entity} ist kein Raumthermostat von Cave Heating. Wähle eine Entität climate.cave_<raum> oder das Gerät oder den Bereich eines Raums."
+    },
     "not_loaded": {
       "message": "Cave Heating ist nicht geladen."
     },
@@ -137,6 +143,10 @@
     "applied_file_missing": {
       "title": "Die Heizungskonfiguration fehlt",
       "description": "Cave Heating ist ohne Räume gestartet, weil die übernommene Datei {path} nicht existiert. Beschreibe die Räume in cave/heating.yaml auf dem Server und führe ./cave apply aus."
+    },
+    "disagreeing": {
+      "title": "{room}: {entity} stellt sich immer wieder zurück",
+      "description": "Das Thermostat {entity} in {room} wich immer wieder vom Gewünschten ab, sodass sein Befehlsbudget {hours} Stunden in Folge aufgebraucht war. Um seine Batterie zu schonen, wird es jetzt nur noch von Zeit zu Zeit erneut versucht. Prüfe, ob das Thermostat einen eigenen Zeitplan oder eine eigene Fenstererkennung hat oder ob etwas anderes es steuert."
     },
     "missing_entity": {
       "title": "{room}: {entity} existiert nicht",

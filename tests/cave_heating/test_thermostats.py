@@ -67,10 +67,9 @@ def statuses(home: FakeHome) -> dict[str, str]:
     return dict(home.state(PROBLEM).attributes["thermostats"])
 
 
-def consume_first_report(*trvs: FakeThermostat) -> None:
-    """The first report after a start is never a hand change; send a harmless one."""
-    for trv in trvs:
-        trv.report(current=(trv.current_temperature or 20.0) + 0.1)
+async def past_start_window(home: FakeHome, freezer: FrozenDateTimeFactory) -> None:
+    """For one confirmation timeout after a start no report is a hand change: let it pass."""
+    await home.advance(freezer, 5 * MIN)
 
 
 # --- What is wanted: rounding and clamping ------------------------------------------------------
@@ -385,7 +384,7 @@ async def test_dial_turn_becomes_the_room_override_and_the_others_follow(
     turned = await home.thermostat("climate.a", target=21.0)
     other = await home.thermostat("climate.b", target=21.0)
     await start(home, "climate.a", "climate.b")
-    consume_first_report(turned, other)
+    await past_start_window(home, freezer)
     turned.turn_dial(23.0)
     await home.advance(freezer, 44 * SEC)
     assert other.commands == []
@@ -403,41 +402,44 @@ async def test_dial_turn_becomes_the_room_override_and_the_others_follow(
 async def test_late_report_of_an_earlier_command_is_not_a_hand_change(
     hass: HomeAssistant, home: FakeHome, freezer: FrozenDateTimeFactory
 ) -> None:
-    """A slow thermostat reporting 21 while 22 waits: no override, no extra command.
+    """A slow thermostat reporting 22 while 23 waits: no override, no extra command.
 
-    22 is sent two minutes after 21, so the report of 21 stands alone for longer than
-    manual_settle: were it taken for a hand change, 21 would become the room's override.
+    23 is sent two minutes after 22, so the report of 22 stands alone for longer than
+    manual_settle: were it taken for a hand change, 22 would become the room's override. Both
+    are sent after the start's exemption window, so only the queue of sent targets protects.
     """
-    trv = await home.thermostat("climate.slowpoke", target=20.0, delay=3 * MIN)
+    trv = await home.thermostat("climate.slowpoke", target=21.0, delay=3 * MIN)
     await start(home, "climate.slowpoke")
-    consume_first_report(trv)
-    await home.advance(freezer, 3 * SEC)
-    assert trv.commands == [heat(21.0)]
-    await home.advance(freezer, 2 * MIN)
+    await past_start_window(home, freezer)
+    assert trv.commands == []
     await set_comfort(hass, 22.0)
     await home.advance(freezer, 3 * SEC)
-    assert trv.commands == [heat(21.0), heat(22.0)]
+    assert trv.commands == [heat(22.0)]
+    await home.advance(freezer, 2 * MIN)
+    await set_comfort(hass, 23.0)
+    await home.advance(freezer, 3 * SEC)
+    assert trv.commands == [heat(22.0), heat(23.0)]
     await home.advance(freezer, 1 * MIN)
-    assert home.state("climate.slowpoke").attributes["temperature"] == 21.0, "the late report"
+    assert home.state("climate.slowpoke").attributes["temperature"] == 22.0, "the late report"
     assert statuses(home) == {"climate.slowpoke": "pending"}
     await home.advance(freezer, 1 * MIN + 50 * SEC)
-    assert home.state("climate.slowpoke").attributes["temperature"] == 21.0
-    assert home.state(LIVING).attributes["reason"] == "comfort"
-    assert home.state(LIVING).attributes["temperature"] == 22.0
-    await home.advance(freezer, 15 * SEC)
     assert home.state("climate.slowpoke").attributes["temperature"] == 22.0
+    assert home.state(LIVING).attributes["reason"] == "comfort"
+    assert home.state(LIVING).attributes["temperature"] == 23.0
+    await home.advance(freezer, 15 * SEC)
+    assert home.state("climate.slowpoke").attributes["temperature"] == 23.0
     assert statuses(home) == {"climate.slowpoke": "ok"}
     assert home.state(LIVING).attributes["reason"] == "comfort"
-    assert trv.commands == [heat(21.0), heat(22.0)]
+    assert trv.commands == [heat(22.0), heat(23.0)]
 
 
 async def test_dial_turned_to_a_target_sent_earlier_and_since_superseded_counts(
     hass: HomeAssistant, home: FakeHome, freezer: FrozenDateTimeFactory
 ) -> None:
-    """Sent targets are forgotten once a later one is confirmed."""
+    """A sent target is forgotten once the thermostat has reported it back."""
     trv = await home.thermostat("climate.dial", target=20.0)
     await start(home, "climate.dial")
-    consume_first_report(trv)
+    await past_start_window(home, freezer)
     await home.advance(freezer, 3 * SEC)
     await set_comfort(hass, 22.0)
     await home.advance(freezer, 3 * SEC)
@@ -455,7 +457,7 @@ async def test_thermostat_that_differs_without_a_hand_change_is_corrected(
     """A thermostat that changes its mode by itself is put back; its target is not adopted."""
     trv = await home.thermostat("climate.wilful", target=21.0, modes=("heat", "auto", "off"))
     await start(home, "climate.wilful")
-    consume_first_report(trv)
+    await past_start_window(home, freezer)
     trv.report(mode="auto", target=17.0)
     await home.advance(freezer, 50 * SEC)
     assert trv.commands == [heat(21.0, "heat")]
@@ -472,7 +474,7 @@ async def test_dial_turned_through_intermediate_values_gives_one_override_and_on
     turned = await home.thermostat("climate.a", target=21.0)
     other = await home.thermostat("climate.b", target=21.0)
     await start(home, "climate.a", "climate.b")
-    consume_first_report(turned, other)
+    await past_start_window(home, freezer)
     for target in (21.5, 22.0, 22.5, 23.0):
         turned.turn_dial(target)
         await home.advance(freezer, 2 * SEC)
@@ -492,7 +494,7 @@ async def test_two_dials_turned_within_seconds_give_one_override_and_one_round(
     last = await home.thermostat("climate.b", target=21.0)
     third = await home.thermostat("climate.c", target=21.0)
     await start(home, "climate.a", "climate.b", "climate.c")
-    consume_first_report(first, last, third)
+    await past_start_window(home, freezer)
     first.turn_dial(22.0)
     await home.advance(freezer, 5 * SEC)
     last.turn_dial(24.0)
@@ -509,7 +511,7 @@ async def test_dial_turned_back_to_the_wanted_target_within_the_settle_time_adop
     """The settled state of the dial counts, not a value it passed on the way."""
     trv = await home.thermostat("climate.fidget", target=21.0)
     await start(home, "climate.fidget")
-    consume_first_report(trv)
+    await past_start_window(home, freezer)
     trv.turn_dial(22.0)
     await home.advance(freezer, 5 * SEC)
     trv.turn_dial(21.0)
@@ -525,7 +527,7 @@ async def test_dial_turned_during_a_window_pause_is_not_adopted_and_is_corrected
     trv = await home.thermostat("climate.paused", target=21.0)
     home.set("binary_sensor.window", "off")
     await start(home, "climate.paused", windows=["binary_sensor.window"])
-    consume_first_report(trv)
+    await past_start_window(home, freezer)
     home.set("binary_sensor.window", "on")
     await home.advance(freezer, 63 * SEC)
     assert trv.commands == [OFF]
@@ -556,7 +558,7 @@ async def test_dial_turned_while_the_room_or_home_is_off_is_not_adopted(
             {"entity_id": "select.cave_home_mode", "option": "off"},
             blocking=True,
         )
-    consume_first_report(trv)
+    await past_start_window(home, freezer)
     trv.turn_dial(22.0)
     await home.advance(freezer, 3 * SEC)
     assert trv.commands == [heat(5.0)], "corrected at once, not collected as a hand change"
@@ -565,16 +567,22 @@ async def test_dial_turned_while_the_room_or_home_is_off_is_not_adopted(
     assert home.state(LIVING).attributes["reason"] in ("room_off", "summer")
 
 
-async def test_first_report_after_start_is_not_a_hand_change(
+async def test_no_report_is_a_hand_change_for_a_confirmation_timeout_after_a_start(
     hass: HomeAssistant, home: FakeHome, freezer: FrozenDateTimeFactory
 ) -> None:
-    """It is corrected instead; a later dial turn is adopted."""
+    """P10: changes within confirm_timeout of the start are corrected; later ones adopted."""
     trv = await home.thermostat("climate.fresh", target=21.0)
     await start(home, "climate.fresh")
     trv.turn_dial(24.0)
     await home.advance(freezer, 50 * SEC)
     assert home.state(LIVING).attributes["reason"] == "comfort"
     assert trv.commands == [heat(21.0)]
+    await home.advance(freezer, 3 * MIN)
+    trv.turn_dial(24.0)
+    await home.advance(freezer, 50 * SEC)
+    assert home.state(LIVING).attributes["reason"] == "comfort", "still within five minutes"
+    assert trv.commands == [heat(21.0), heat(21.0)]
+    await home.advance(freezer, 1 * MIN)
     trv.turn_dial(23.0)
     await home.advance(freezer, 50 * SEC)
     assert home.state(LIVING).attributes["reason"] == "override"
@@ -587,7 +595,7 @@ async def test_first_report_after_returning_from_unavailable_is_not_a_hand_chang
     """A thermostat that comes back with another target is corrected, not adopted."""
     trv = await home.thermostat("climate.flaky", target=21.0)
     await start(home, "climate.flaky")
-    consume_first_report(trv)
+    await past_start_window(home, freezer)
     trv.set_available(False)
     await home.advance(freezer, 10 * MIN)
     assert statuses(home) == {"climate.flaky": "unavailable"}
@@ -617,7 +625,7 @@ async def test_held_thermostat_receives_nothing_and_nothing_is_adopted_until_rel
     held = await home.thermostat("climate.held", target=21.0)
     other = await home.thermostat("climate.other", target=21.0)
     await start(home, "climate.held", "climate.other")
-    consume_first_report(held, other)
+    await past_start_window(home, freezer)
     await _hold(hass, "climate.held")
     assert statuses(home) == {"climate.held": "held", "climate.other": "ok"}
     assert home.state(PROBLEM).state == "off", "a hold is a status, not a problem"
@@ -641,7 +649,7 @@ async def test_first_report_after_a_hold_is_released_is_not_a_hand_change(
     """A late report of the device check's own command arrives after the release."""
     trv = await home.thermostat("climate.checked", target=21.0)
     await start(home, "climate.checked")
-    consume_first_report(trv)
+    await past_start_window(home, freezer)
     await _hold(hass, "climate.checked")
     await hass.services.async_call(
         DOMAIN, "release", {"entity_id": "climate.checked"}, blocking=True
@@ -960,7 +968,7 @@ async def test_hand_change_still_settling_when_a_window_pause_starts_is_not_adop
     trv = await home.thermostat("climate.late_turn", target=21.0)
     home.set("binary_sensor.window", "off")
     await start(home, "climate.late_turn", windows=["binary_sensor.window"], window_open_delay=0)
-    consume_first_report(trv)
+    await past_start_window(home, freezer)
     trv.turn_dial(23.0)
     await home.advance(freezer, 10 * SEC)
     home.set("binary_sensor.window", "on")

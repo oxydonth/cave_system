@@ -13,10 +13,11 @@ from homeassistant.const import EVENT_HOMEASSISTANT_STARTED
 from homeassistant.core import CoreState, HomeAssistant
 from homeassistant.helpers import issue_registry as ir
 from homeassistant.setup import async_setup_component
+from homeassistant.util import dt as dt_util
 from pytest_homeassistant_custom_component.common import async_fire_mqtt_message
 from pytest_homeassistant_custom_component.typing import MqttMockHAClient
 
-from custom_components.cave_heating.const import DOMAIN
+from custom_components.cave_heating.const import DOMAIN, STORAGE_KEY
 from tests.cave_heating.fakes import FakeHome, FakeNumber, FakeSelect, config, room
 
 SEC, MIN, HOUR = timedelta(seconds=1), timedelta(minutes=1), timedelta(hours=1)
@@ -108,7 +109,15 @@ async def test_m2_settings_are_written_when_the_device_returns_climate_entity_fi
 async def test_m3_mqtt_room_sensor_that_repeats_its_value_is_not_stale(
     hass: HomeAssistant, home: FakeHome, freezer: FrozenDateTimeFactory, mqtt_mock: MqttMockHAClient
 ) -> None:
-    """Home Assistant's MQTT sensor does not advance last_reported for an unchanged value."""
+    """Home Assistant's MQTT sensor does not advance last_reported for an unchanged value.
+
+    Changed by the author, assertions untouched: the sensor is discovered as Zigbee2MQTT
+    discovers it, on a device together with its humidity entity. Without that the payload's
+    humidity reaches no entity and Home Assistant observes nothing in four hours, so under the
+    decided P1 (stale when no entity of the sensor's device has reported) the sensor is rightly
+    stale; test_rooms.py has that case.
+    """
+    device = {"identifiers": ["zigbee2mqtt_0x00124b0029f1a2b3"], "name": "Wohnzimmer Sensor"}
     discovery = {
         "name": "Temperature",
         "unique_id": "snzb02p_temperature",
@@ -116,12 +125,27 @@ async def test_m3_mqtt_room_sensor_that_repeats_its_value_is_not_stale(
         "value_template": "{{ value_json.temperature }}",
         "device_class": "temperature",
         "unit_of_measurement": "°C",
+        "device": device,
+    }
+    humidity = {
+        "name": "Humidity",
+        "unique_id": "snzb02p_humidity",
+        "state_topic": "zigbee2mqtt/wohnzimmer",
+        "value_template": "{{ value_json.humidity }}",
+        "device_class": "humidity",
+        "unit_of_measurement": "%",
+        "device": device,
     }
     async_fire_mqtt_message(hass, "homeassistant/sensor/snzb02p/t/config", json.dumps(discovery))
+    async_fire_mqtt_message(hass, "homeassistant/sensor/snzb02p/h/config", json.dumps(humidity))
     await hass.async_block_till_done()
     async_fire_mqtt_message(hass, "zigbee2mqtt/wohnzimmer", '{"temperature": 20.4}')
     await hass.async_block_till_done()
-    sensor = next(state.entity_id for state in hass.states.async_all("sensor"))
+    sensor = next(
+        state.entity_id
+        for state in hass.states.async_all("sensor")
+        if state.attributes.get("device_class") == "temperature"
+    )
     await home.thermostat("climate.a", target=21.0, current=23.0)
     feed = FakeNumber("number.a_external", 20.4)
     await home.add(feed)
@@ -215,10 +239,35 @@ async def test_s1_reload_while_home_assistant_starts_keeps_missing_entities_repo
     assert ir.async_get(hass).async_get_issue(DOMAIN, "missing_living_room_climate.nowhere")
 
 
+def stored_before_restart(
+    hass_storage: dict[str, Any], home: dict[str, Any], rooms: dict[str, Any]
+) -> None:
+    """The state file as the running integration left it when Home Assistant stopped.
+
+    Added by the author: the decided P4 restores the window pause and since when nobody is
+    home from this file, so a restart has it. Without it the test is a first start, for which
+    the concept's open delay and away delay apply.
+    """
+    hass_storage[STORAGE_KEY] = {
+        "version": 1,
+        "minor_version": 1,
+        "key": STORAGE_KEY,
+        "data": {"home": {"mode": "auto", "away_temperature": 16.0, **home}, "rooms": rooms},
+    }
+
+
 async def test_s2_restart_during_a_window_pause_sends_nothing(
-    hass: HomeAssistant, home: FakeHome, freezer: FrozenDateTimeFactory
+    hass: HomeAssistant,
+    home: FakeHome,
+    freezer: FrozenDateTimeFactory,
+    hass_storage: dict[str, Any],
 ) -> None:
     """After a restart the entities appear after cave_heating: radiator off, window open."""
+    stored_before_restart(
+        hass_storage,
+        {},
+        {"living_room": {"mode": "heat", "comfort_temperature": 21.0, "window_paused": True}},
+    )
     hass.set_state(CoreState.starting)
     await one_room(home, "climate.a", windows=["binary_sensor.window"])
     trv = await home.thermostat("climate.a", mode="off", target=21.0)
@@ -229,8 +278,17 @@ async def test_s2_restart_during_a_window_pause_sends_nothing(
 
 
 async def test_s2_restart_while_everybody_is_away_sends_nothing(
-    hass: HomeAssistant, home: FakeHome, freezer: FrozenDateTimeFactory
+    hass: HomeAssistant,
+    home: FakeHome,
+    freezer: FrozenDateTimeFactory,
+    hass_storage: dict[str, Any],
 ) -> None:
+    since = (dt_util.utcnow() - HOUR).isoformat()
+    stored_before_restart(
+        hass_storage,
+        {"nobody_home_since": since, "presence": {"device_tracker.phone": "not_home"}},
+        {},
+    )
     hass.set_state(CoreState.starting)
     await one_room(home, "climate.a", top={"presence": ["device_tracker.phone"]})
     trv = await home.thermostat("climate.a", target=16.0)  # at the away temperature

@@ -20,6 +20,7 @@ from custom_components.cave_heating.logic import (
     HomeMode,
     Override,
     Presence,
+    PresenceReadings,
     Preset,
     Reason,
     RoomMode,
@@ -512,11 +513,96 @@ def test_away_only_after_nobody_has_been_home_for_the_away_delay() -> None:
     assert tracker.next_deadline(T0 + timedelta(hours=2)) is None
 
 
-def test_away_found_at_start_is_dated_from_when_the_last_person_left() -> None:
-    """A restart does not restart the away delay."""
-    tracker = AwayTracker(timedelta(minutes=30))
-    tracker.update(False, T0, since=T0 - timedelta(hours=1))
-    assert not tracker.occupied(T0)
+def test_unavailable_presence_keeps_its_last_reading_for_the_grace_then_counts_as_home() -> None:
+    """Section 5.4, presence (P7): presence_unavailable_grace, then home."""
+    readings = PresenceReadings(timedelta(minutes=30))
+    readings.update("device_tracker.a", Presence.NOT_HOME, T0)
+    readings.update("device_tracker.a", Presence.UNKNOWN, T0 + MIN)
+    assert readings.effective("device_tracker.a", T0 + 30 * MIN) is Presence.NOT_HOME
+    assert readings.next_deadline(T0 + MIN) == T0 + 31 * MIN
+    assert readings.effective("device_tracker.a", T0 + 31 * MIN) is Presence.UNKNOWN
+    assert readings.next_deadline(T0 + 31 * MIN) is None
+    readings.update("device_tracker.a", Presence.UNKNOWN, T0 + 40 * MIN)
+    assert readings.effective("device_tracker.a", T0 + 40 * MIN) is Presence.UNKNOWN, (
+        "the grace runs from when it went silent, not from the latest silent report"
+    )
+    readings.update("device_tracker.a", Presence.HOME, T0 + 50 * MIN)
+    assert readings.effective("device_tracker.a", T0 + 50 * MIN) is Presence.HOME
+
+
+def test_presence_without_a_last_reading_counts_as_home_at_once() -> None:
+    """Nothing known: home."""
+    readings = PresenceReadings(timedelta(minutes=30))
+    readings.update("device_tracker.a", Presence.UNKNOWN, T0)
+    assert readings.effective("device_tracker.a", T0) is Presence.UNKNOWN
+    assert readings.effective("device_tracker.never_seen", T0) is Presence.UNKNOWN
+    assert someone_home([readings.effective("device_tracker.a", T0)])
+
+
+def test_presence_readings_survive_a_restart_for_the_grace() -> None:
+    """The last readings are stored; after a restart they stand while the trackers load."""
+    before = PresenceReadings(timedelta(minutes=30))
+    before.update("device_tracker.a", Presence.NOT_HOME, T0)
+    after = PresenceReadings(timedelta(minutes=30))
+    after.restore(before.to_dict(), T0 + timedelta(hours=1))
+    assert after.effective("device_tracker.a", T0 + timedelta(hours=1)) is Presence.NOT_HOME
+    assert after.effective("device_tracker.a", T0 + timedelta(hours=2)) is Presence.UNKNOWN
+    after.restore({"x.y": "nonsense", "z.w": "unknown"}, T0)
+    after.restore("not a mapping", T0)
+    assert set(after.last) == {"device_tracker.a"}
+
+
+def test_restored_window_pause_waits_for_the_contacts_then_ends_by_the_normal_rule() -> None:
+    """Section 5.5, start-up (P4): the pause is restored; contacts not heard from keep it."""
+    pause = WindowPause(MIN, 2 * MIN, timedelta(minutes=30), ["binary_sensor.a"])
+    pause.paused = True
+    assert pause.evaluate(T0 + timedelta(hours=1)), "the contact has not reported yet"
+    pause.update("binary_sensor.a", Contact.CLOSED, T0 + timedelta(hours=1))
+    assert pause.evaluate(T0 + timedelta(hours=1) + MIN)
+    assert not pause.evaluate(T0 + timedelta(hours=1) + 2 * MIN)
+
+
+def test_restored_window_pause_with_a_contact_first_heard_from_as_unavailable() -> None:
+    """Treated as silent while open: the pause lasts the grace, then ends."""
+    pause = WindowPause(MIN, 2 * MIN, timedelta(minutes=30), ["binary_sensor.a"])
+    pause.paused = True
+    pause.update("binary_sensor.a", Contact.SILENT, T0)
+    assert pause.evaluate(T0 + 29 * MIN)
+    assert not pause.evaluate(T0 + 30 * MIN)
+
+
+def test_window_pause_starts_when_one_of_two_contacts_opens() -> None:
+    """Any contact, not all of them (S8)."""
+    pause = WindowPause(MIN, 2 * MIN, timedelta(minutes=30), ["binary_sensor.a", "binary_sensor.b"])
+    pause.update("binary_sensor.a", Contact.CLOSED, T0)
+    pause.update("binary_sensor.b", Contact.CLOSED, T0)
+    pause.update("binary_sensor.b", Contact.OPEN, T0)
+    assert pause.evaluate(T0 + MIN)
+
+
+def test_an_override_keeps_the_schedule_state_it_was_set_under() -> None:
+    """Stored with the override, so a change during a restart still ends it (P4)."""
+    room = _room()
+    room.set_override(T0, timedelta(hours=6), away=False, target=22.0, schedule=True)
+    stored = hand_from_dict(hand_to_dict(room.hand), T0)
+    assert isinstance(stored, Override)
+    assert stored.schedule is True
+    tracker = ScheduleTracker()
+    tracker.last = stored.schedule
+    assert tracker.update("off"), "off after a restart under on is a change"
+
+
+def test_a_waiting_override_takes_on_the_schedule_state_of_changes_that_did_not_end_it() -> None:
+    """So only a change after someone is home ends it, also across a restart."""
+    room = _room()
+    room.set_override(T0, timedelta(hours=6), away=True, target=22.0, schedule=True)
+    room.on_schedule_change(False)
+    assert isinstance(room.hand, Override)
+    assert room.hand.schedule is False
+    room.on_presence(away=False)
+    assert isinstance(room.hand, Override)
+    assert room.hand.schedule is False
+    assert not room.hand.waiting_for_home
 
 
 @pytest.mark.parametrize(
@@ -535,6 +621,9 @@ def test_schedule_changes_are_real_changes_only() -> None:
     assert not tracker.update("unavailable")
     assert not tracker.update("on")
     assert tracker.update("off")
+    assert not tracker.update("off")
+    assert not tracker.update("unavailable"), "the off side as well (S8)"
+    assert not tracker.update("unknown")
     assert not tracker.update("off")
     assert tracker.update("on")
 

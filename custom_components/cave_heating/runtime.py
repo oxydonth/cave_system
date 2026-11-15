@@ -4,14 +4,17 @@
 the state of each thermostat (section 5.5). This module is the only place that talks to Home
 Assistant: it listens to the configured entities, keeps one timer for the earliest deadline of
 anything, sends the commands the drivers hand back, writes the temperature feed and the device
-settings, keeps the room state across restarts, and raises repair notices.
+settings, keeps the room and home state across restarts, and raises repair notices.
 
-Everything runs in the event loop; reading the applied file happens in the executor.
+Everything runs in the event loop; reading the applied file happens in the executor. One room's
+failure is contained: it is logged and reported on that room's problem sensor, and the other
+rooms go on.
 """
 
 from __future__ import annotations
 
 import logging
+import math
 from collections.abc import Callable, Mapping
 from dataclasses import dataclass, field, fields
 from datetime import datetime, timedelta
@@ -75,6 +78,8 @@ from .logic import (
     AwayTracker,
     Decision,
     HomeMode,
+    Override,
+    PresenceReadings,
     Preset,
     RoomMode,
     RoomState,
@@ -91,7 +96,7 @@ from .logic import (
     sensor_fresh,
     someone_home,
 )
-from .schema import ConfigError, HeatingConfig, RoomConfig, ThermostatConfig, load_file
+from .schema import ConfigError, HeatingConfig, RoomConfig, ThermostatConfig, Timing, load_file
 
 _LOGGER = logging.getLogger(__package__)
 
@@ -104,6 +109,8 @@ _CLIMATE_MIN: Final = 7.0
 _CLIMATE_MAX: Final = 35.0
 # A thermostat's external temperature input, when it does not report its step.
 _FEED_STEP: Final = 0.1
+# Only a missing or unavailable entity cannot be written; one that has no value yet can.
+_NOT_WRITABLE: Final = "unavailable"
 
 
 def applied_file_path(hass: HomeAssistant) -> Path:
@@ -121,22 +128,35 @@ class FileResult:
 
 
 def read_applied_file(path: Path) -> FileResult:
-    """Read and validate the applied copy. Blocking: run it in the executor."""
-    if not path.is_file():
-        return FileResult(None, missing=True, errors=(f"the file {path} does not exist",))
+    """Read and validate the applied copy. Blocking: run it in the executor.
+
+    Never raises: whatever goes wrong becomes a result with errors, so that the integration
+    starts without rooms and a repair notice says why.
+    """
     try:
+        if not path.is_file():
+            return FileResult(None, missing=True, errors=(f"The file {path} does not exist.",))
         return FileResult(load_file(path))
     except ConfigError as err:
         return FileResult(None, errors=tuple(err.errors))
+    except Exception as err:  # reported as a repair notice, never raised
+        _LOGGER.exception("Reading %s failed", path)
+        return FileResult(None, errors=(f"The file {path} cannot be read: {err!r}.",))
 
 
 def _float(value: object) -> float | None:
+    """A finite number, or None."""
     if isinstance(value, bool) or value is None:
         return None
     try:
-        return float(value)  # type: ignore[arg-type]
-    except TypeError, ValueError:
+        result = float(value)  # type: ignore[arg-type]
+    except TypeError, ValueError, OverflowError:
         return None
+    return result if math.isfinite(result) else None
+
+
+def _writable(state: State | None) -> bool:
+    return state is not None and state.state != _NOT_WRITABLE
 
 
 @dataclass(slots=True)
@@ -159,6 +179,9 @@ class RoomRuntime:
     schedule: ScheduleTracker = field(default_factory=ScheduleTracker)
     feeds: dict[str, Feed] = field(default_factory=dict)
     settings_due: dict[str, datetime] = field(default_factory=dict)
+    # Settings whose entity could not be written at one of the three moments: setting entity
+    # -> thermostat. Each is written once as soon as its entity can be.
+    pending_settings: dict[str, str] = field(default_factory=dict)
     refused_settings: dict[str, str] = field(default_factory=dict)
     missing: dict[str, str] = field(default_factory=dict)  # entity -> field naming it
     settle: Settle | None = None
@@ -167,6 +190,7 @@ class RoomRuntime:
     sensor_fresh: bool = False
     humidity: float | None = None
     heating_action: bool = False
+    error: str | None = None  # the controller failed on this room in its last evaluation
 
     @property
     def thermostats(self) -> Mapping[str, ThermostatConfig]:
@@ -177,6 +201,16 @@ class RoomRuntime:
     def available(self) -> bool:
         """The room entity is unavailable when none of its thermostats is (section 5.4)."""
         return any(driver.available for driver in self.drivers)
+
+
+def _datetime(value: object) -> datetime | None:
+    if not isinstance(value, str):
+        return None
+    try:
+        parsed = datetime.fromisoformat(value)
+    except ValueError:
+        return None
+    return parsed if parsed.tzinfo is not None else None
 
 
 class HeatingRuntime:
@@ -193,6 +227,7 @@ class HeatingRuntime:
         self.hass = hass
         self.entry = entry
         self._store = store
+        now = dt_util.utcnow()
         stored = stored if isinstance(stored, Mapping) else {}
         raw_home = stored.get("home")
         home: Mapping[str, Any] = raw_home if isinstance(raw_home, Mapping) else {}
@@ -210,12 +245,21 @@ class HeatingRuntime:
         self._away_temperature_stored = stored_away is not None
         self.away_temperature = stored_away if stored_away is not None else 16.0
         self.away = AwayTracker(self.config.away_delay)
+        # Restored, so that a restart neither restarts the away delay nor, while the trackers
+        # are still loading, counts the home as occupied (concept section 5.5, start-up).
+        self.away.nobody_home_since = _datetime(home.get("nobody_home_since"))
+        self.presence = PresenceReadings(Timing().presence_unavailable_grace)
+        self.presence.restore(home.get("presence"), now)
         self.rooms: dict[str, RoomRuntime] = {}
         self.drivers: dict[str, ThermostatDriver] = {}
         self._roles: dict[str, list[Callable[[State | None, datetime], None]]] = {}
+        self._sensor_devices: dict[str, set[str]] = {}  # room sensor -> its device's entities
+        self._sensors_without_device: set[str] = set()
+        self._resubscribe = False
         self._listeners: list[CALLBACK_TYPE] = []
         self._room_adders: list[Callable[[list[RoomRuntime]], None]] = []
         self._unsub_events: list[CALLBACK_TYPE] = []
+        self._unsub_started: CALLBACK_TYPE | None = None
         self._unsub_timer: CALLBACK_TYPE | None = None
         self._timer_at: datetime | None = None
         self._issues: set[str] = set()
@@ -293,6 +337,60 @@ class HeatingRuntime:
         entry = er.async_get(self.hass).async_get(trv.entity)
         return entry is not None and entry.platform in SLOW_PLATFORMS
 
+    def _new_room(
+        self, room_config: RoomConfig, drivers: list[ThermostatDriver], previous: RoomRuntime | None
+    ) -> RoomRuntime:
+        timing = self.config.timing
+        windows = WindowPause(
+            room_config.window_open_delay,
+            room_config.window_close_delay,
+            timing.window_unavailable_grace,
+            room_config.windows,
+        )
+        room = RoomRuntime(
+            config=room_config,
+            state=previous.state if previous else self._initial_room_state(room_config),
+            windows=windows,
+            drivers=drivers,
+        )
+        if previous is not None:
+            # A reload keeps what the room was doing.
+            windows.paused = previous.windows.paused
+            room.decision = previous.decision
+            room.refused_settings = dict(previous.refused_settings)
+            room.pending_settings = {
+                entity: trv
+                for entity, trv in previous.pending_settings.items()
+                if trv in room.thermostats
+            }
+            room.settings_due = {
+                trv: due for trv, due in previous.settings_due.items() if trv in room.thermostats
+            }
+            if previous.config.schedule == room_config.schedule:
+                room.schedule = previous.schedule
+            if previous.settle and previous.settle.entity_id in room.thermostats:
+                room.settle = previous.settle
+        else:
+            stored = self._stored_rooms.get(room_config.id)
+            if isinstance(stored, Mapping) and stored.get("window_paused") is True:
+                windows.paused = True
+            if isinstance(room.state.hand, Override) and room.state.hand.schedule is not None:
+                # A schedule change while Home Assistant was down still ends the override.
+                room.schedule.last = room.state.hand.schedule
+        for trv in room_config.trvs:
+            if trv.external_temperature:
+                old_feed = previous.feeds.get(trv.entity) if previous else None
+                keep = (
+                    old_feed is not None
+                    and previous is not None
+                    and previous.thermostats[trv.entity].external_temperature
+                    == trv.external_temperature
+                )
+                feed = old_feed if keep and old_feed is not None else Feed(timing)
+                feed.timing = timing
+                room.feeds[trv.entity] = feed
+        return room
+
     @callback
     def apply_config(self, config: HeatingConfig) -> None:
         """Make ``config`` the configuration in effect: at start-up and on reload."""
@@ -304,51 +402,25 @@ class HeatingRuntime:
         self.config = config
         self.loaded = True
         self.away.delay = config.away_delay
+        self.presence.grace = config.timing.presence_unavailable_grace
         timing = config.timing
 
         rooms: dict[str, RoomRuntime] = {}
         drivers: dict[str, ThermostatDriver] = {}
         for room_config in config.rooms:
-            previous = old_rooms.get(room_config.id)
             room_drivers: list[ThermostatDriver] = []
             for trv in room_config.trvs:
                 driver = old_drivers.get(trv.entity)
                 if driver is None:
-                    driver = ThermostatDriver(trv.entity, timing, slow=self._slow(trv))
+                    driver = ThermostatDriver(trv.entity, timing, slow=self._slow(trv), now=now)
                 else:
                     driver.timing = timing
                     driver.slow = self._slow(trv)
                 drivers[trv.entity] = driver
                 room_drivers.append(driver)
-            windows = WindowPause(
-                room_config.window_open_delay,
-                room_config.window_close_delay,
-                timing.window_unavailable_grace,
+            rooms[room_config.id] = self._new_room(
+                room_config, room_drivers, old_rooms.get(room_config.id)
             )
-            room = RoomRuntime(
-                config=room_config,
-                state=previous.state if previous else self._initial_room_state(room_config),
-                windows=windows,
-                drivers=room_drivers,
-            )
-            if previous is not None:
-                windows.paused = previous.windows.paused
-                room.decision = previous.decision
-                if previous.settle and previous.settle.entity_id in room.thermostats:
-                    room.settle = previous.settle
-            for trv in room_config.trvs:
-                if trv.external_temperature:
-                    old_feed = previous.feeds.get(trv.entity) if previous else None
-                    keep = (
-                        old_feed is not None
-                        and previous is not None
-                        and previous.thermostats[trv.entity].external_temperature
-                        == trv.external_temperature
-                    )
-                    feed = old_feed if keep and old_feed is not None else Feed(timing)
-                    feed.timing = timing
-                    room.feeds[trv.entity] = feed
-            rooms[room_config.id] = room
         self.rooms = rooms
         self.drivers = drivers
         self._stored_rooms = {
@@ -416,10 +488,12 @@ class HeatingRuntime:
             self._write_all_settings(room, now)
         self._evaluate()
         if not self._started:
-            self._unsub_events.append(async_at_started(self.hass, self._on_started))
+            # Kept apart from the event subscriptions, which a reload renews.
+            self._unsub_started = async_at_started(self.hass, self._on_started)
 
     @callback
     def _on_started(self, _hass: HomeAssistant) -> None:
+        self._unsub_started = None
         self._started = True
         self._read_all(dt_util.utcnow())
         self._evaluate()
@@ -428,6 +502,9 @@ class HeatingRuntime:
         """Stop everything and write the state file."""
         self._running = False
         self._unsubscribe()
+        if self._unsub_started is not None:
+            self._unsub_started()
+            self._unsub_started = None
         if self._unsub_timer is not None:
             self._unsub_timer()
             self._unsub_timer = None
@@ -442,16 +519,29 @@ class HeatingRuntime:
         while self._unsub_events:
             self._unsub_events.pop()()
 
+    def _device_entities(self, entity_id: str) -> set[str] | None:
+        """The entities of the device an entity belongs to; None if it has no known device."""
+        registry = er.async_get(self.hass)
+        entry = registry.async_get(entity_id)
+        if entry is None or entry.device_id is None:
+            return None
+        return {
+            item.entity_id
+            for item in er.async_entries_for_device(registry, entry.device_id)
+            if item.entity_id != entity_id
+        }
+
     @callback
     def _subscribe(self) -> None:
         self._unsubscribe()
+        self._resubscribe = False
         self._roles = {}
 
         def add(entity_id: str, role: Callable[[State | None, datetime], None]) -> None:
             self._roles.setdefault(entity_id, []).append(role)
 
         for entity_id in self.config.presence:
-            add(entity_id, self._on_presence)
+            add(entity_id, self._presence_role(entity_id))
         for room in self.rooms.values():
             for entity_id, field_name in room.config.entities():
                 add(entity_id, self._existence_role(room, entity_id, field_name))
@@ -470,9 +560,23 @@ class HeatingRuntime:
             for room in self.rooms.values()
             if room.config.temperature_sensor
         }
-        if sensors:
+        self._sensor_devices = {}
+        self._sensors_without_device = set()
+        for sensor in sensors:
+            siblings = self._device_entities(sensor)
+            if siblings is None:
+                self._sensors_without_device.add(sensor)
+            else:
+                self._sensor_devices[sensor] = siblings
+        reporters = sensors | {item for items in self._sensor_devices.values() for item in items}
+        if reporters:
             self._unsub_events.append(
-                async_track_state_report_event(self.hass, sensors, self._on_sensor_report)
+                async_track_state_report_event(self.hass, reporters, self._on_sensor_report)
+            )
+        siblings_only = reporters - set(self._roles)
+        if siblings_only:
+            self._unsub_events.append(
+                async_track_state_change_event(self.hass, siblings_only, self._on_sensor_report)
             )
 
     @callback
@@ -484,12 +588,12 @@ class HeatingRuntime:
         self._evaluate()
 
     @callback
-    def _on_sensor_report(self, event: Event[EventStateReportedData]) -> None:
-        """A room sensor repeated its value: only of interest while it counts as stale."""
-        entity_id = event.data["entity_id"]
+    def _on_sensor_report(
+        self, event: Event[EventStateReportedData] | Event[EventStateChangedData]
+    ) -> None:
+        """A room sensor's device reported: only of interest while the sensor counts as stale."""
         if any(
-            room.config.temperature_sensor == entity_id and not room.sensor_fresh
-            for room in self.rooms.values()
+            not room.sensor_fresh and room.config.temperature_sensor for room in self.rooms.values()
         ):
             self._evaluate()
 
@@ -504,19 +608,16 @@ class HeatingRuntime:
             for window in room.config.windows:
                 self._window_role(room, window)(self.hass.states.get(window), now)
             if room.config.schedule:
-                state = self.hass.states.get(room.config.schedule)
-                room.schedule.update(state.state if state else None)
+                self._schedule_role(room)(self.hass.states.get(room.config.schedule), now)
             for driver in room.drivers:
                 state = self.hass.states.get(driver.entity_id)
                 if state is None and not self._started:
                     continue
                 driver.on_report(
-                    self._report(driver.entity_id, state),
-                    now,
-                    exists=state is not None,
-                    initial=True,
+                    self._report(driver.entity_id, state), now, exists=state is not None
                 )
-        self._update_presence(now, initial=True)
+        for entity_id in self.config.presence:
+            self._presence_role(entity_id)(self.hass.states.get(entity_id), now)
 
     def _existence_role(
         self, room: RoomRuntime, entity_id: str, field_name: str
@@ -526,6 +627,9 @@ class HeatingRuntime:
                 room.missing[entity_id] = field_name
             else:
                 room.missing.pop(entity_id, None)
+            if state is not None and entity_id in self._sensors_without_device:
+                # The sensor appeared after the subscriptions were made: find its device now.
+                self._resubscribe = True
 
         return role
 
@@ -556,6 +660,8 @@ class HeatingRuntime:
         self, room: RoomRuntime, entity_id: str
     ) -> Callable[[State | None, datetime], None]:
         def role(state: State | None, now: datetime) -> None:
+            if state is None and not self._started:
+                return  # not loaded yet: a restored pause waits for it
             room.windows.update(
                 entity_id,
                 contact_of(state.state if state else None),
@@ -567,30 +673,19 @@ class HeatingRuntime:
     def _schedule_role(self, room: RoomRuntime) -> Callable[[State | None, datetime], None]:
         def role(state: State | None, _now: datetime) -> None:
             if room.schedule.update(state.state if state else None):
-                room.state.on_schedule_change()
+                room.state.on_schedule_change(room.schedule.last)
 
         return role
 
-    def _on_presence(self, _state: State | None, now: datetime) -> None:
-        self._update_presence(now, initial=False)
-
-    def _update_presence(self, now: datetime, *, initial: bool) -> None:
-        states = {entity_id: self.hass.states.get(entity_id) for entity_id in self.config.presence}
-        readings = {
-            entity_id: presence_of(entity_id, state.state if state else None)
-            for entity_id, state in states.items()
-        }
-        home = someone_home(readings.values())
-        since = None
-        if initial and not home:
-            # Nobody was home already: date it from when the last one left.
-            since = max(
-                (state.last_changed for state in states.values() if state is not None),
-                default=now,
+    def _presence_role(self, entity_id: str) -> Callable[[State | None, datetime], None]:
+        def role(state: State | None, now: datetime) -> None:
+            if state is None and not self._started:
+                return  # not loaded yet: a restored reading stands meanwhile
+            self.presence.update(
+                entity_id, presence_of(entity_id, state.state if state else None), now
             )
-        if initial:
-            self.away.nobody_home_since = None
-        self.away.update(home, now, since)
+
+        return role
 
     def _report(self, entity_id: str, state: State | None) -> Report | None:
         """Read a thermostat's state into a report; None while it cannot be used."""
@@ -599,18 +694,20 @@ class HeatingRuntime:
         attributes = state.attributes
         modes = tuple(str(mode) for mode in attributes.get("hvac_modes") or ())
         step = _float(attributes.get("target_temp_step"))
-        if not step:
+        if not step or step <= 0:
             component = self.hass.data.get(CLIMATE_COMPONENT)
             entity = component.get_entity(entity_id) if component is not None else None
             step = float(entity.precision) if entity is not None else DEFAULT_STEP
+        minimum = _float(attributes.get("min_temp"))
+        maximum = _float(attributes.get("max_temp"))
         action = attributes.get("hvac_action")
         return Report(
             mode=state.state,
             target=_float(attributes.get("temperature")),
             current=_float(attributes.get("current_temperature")),
             modes=modes,
-            min_temp=_float(attributes.get("min_temp")) or _CLIMATE_MIN,
-            max_temp=_float(attributes.get("max_temp")) or _CLIMATE_MAX,
+            min_temp=minimum if minimum is not None else _CLIMATE_MIN,
+            max_temp=maximum if maximum is not None else _CLIMATE_MAX,
             step=step,
             action=str(action) if action is not None else None,
         )
@@ -634,18 +731,24 @@ class HeatingRuntime:
             self._again = True
             return
         self._evaluating = True
+        now = dt_util.utcnow()
         try:
+            if self._resubscribe:
+                self._subscribe()
             self._again = True
             while self._again:
                 self._again = False
-                self._evaluate_once(dt_util.utcnow())
+                now = dt_util.utcnow()
+                self._evaluate_once(now)
+            self._save_if_changed()
+            self._sync_issues(now)
+            for listener in list(self._listeners):
+                listener()
         finally:
             self._evaluating = False
-        self._save_if_changed()
-        self._sync_issues()
-        for listener in list(self._listeners):
-            listener()
-        self._schedule_timer()
+            # Armed from the time the evaluation used, so a deadline that passed meanwhile is
+            # handled at once rather than dropped.
+            self._schedule_timer(now)
 
     def _decide(self, room: RoomRuntime, now: datetime, away: bool) -> Decision:
         schedule = self.hass.states.get(room.config.schedule) if room.config.schedule else None
@@ -658,58 +761,86 @@ class HeatingRuntime:
             away_temperature=self.away_temperature,
         )
 
+    def _someone_home(self, now: datetime) -> bool:
+        return someone_home(
+            self.presence.effective(entity_id, now) for entity_id in self.config.presence
+        )
+
     def _evaluate_once(self, now: datetime) -> None:
+        self.away.update(self._someone_home(now), now)
         away = self._is_away(now)
         for room in self.rooms.values():
-            room.state.on_presence(away)
-            room.state.expire(now)
-            decision = self._decide(room, now, away)
-            if room.settle is not None and now >= room.settle.due:
-                self._finish_settle(room, decision, now, away)
-                decision = self._decide(room, now, away)
-            room.decision = decision
-            want = Want(heat=decision.heating, target=decision.target)
-            may_send = room.settle is None
-            for driver in room.drivers:
-                driver.set_want(want, now)
-                if (command := driver.tick(now, may_send=may_send)) is not None:
-                    self._send(room, driver, command)
+            try:
+                self._evaluate_room(room, now, away)
+            except Exception as err:  # one room must not stop the others
+                _LOGGER.exception("Evaluating room %s failed", room.config.id)
+                room.error = str(err) or type(err).__name__
+            else:
+                room.error = None
 
-            sensor = self._sensor_value(room, now)
-            readings = [
-                driver.report.current
-                for driver in room.drivers
-                if driver.available and driver.report and driver.report.current is not None
-            ]
-            room.temperature, room.sensor_fresh = room_temperature(sensor, readings)
-            room.humidity = self._number_state(room.config.humidity_sensor)
-            room.heating_action = any(
-                driver.available and driver.report and driver.report.action == "heating"
-                for driver in room.drivers
-            )
-            self._feed(room, sensor, now)
-            for entity_id, due in list(room.settings_due.items()):
-                if now >= due:
-                    del room.settings_due[entity_id]
-                    self._write_settings(room, room.thermostats[entity_id], now)
+    def _evaluate_room(self, room: RoomRuntime, now: datetime, away: bool) -> None:
+        room.state.on_presence(away)
+        room.state.expire(now)
+        decision = self._decide(room, now, away)
+        if room.settle is not None and now >= room.settle.due:
+            self._finish_settle(room, decision, now, away)
+            decision = self._decide(room, now, away)
+        room.decision = decision
+        want = Want(heat=decision.heating, target=decision.target)
+        # Nothing is sent while hand changes settle, nor while Home Assistant is still starting
+        # and the room's other inputs may not be known yet.
+        may_send = room.settle is None and self._started
+        for driver in room.drivers:
+            driver.set_want(want, now)
+            if (command := driver.tick(now, may_send=may_send)) is not None:
+                self._send(driver, command)
+
+        sensor = self._sensor_value(room, now)
+        readings = [
+            driver.report.current
+            for driver in room.drivers
+            if driver.available and driver.report and driver.report.current is not None
+        ]
+        room.temperature, room.sensor_fresh = room_temperature(sensor, readings)
+        room.humidity = self._number_state(room.config.humidity_sensor)
+        room.heating_action = any(
+            driver.available and driver.report and driver.report.action == "heating"
+            for driver in room.drivers
+        )
+        self._feed(room, sensor, now)
+        for entity_id, due in list(room.settings_due.items()):
+            if now >= due:
+                del room.settings_due[entity_id]
+                self._write_settings(room, room.thermostats[entity_id], now)
+        self._write_pending_settings(room, now)
 
     def _finish_settle(
         self, room: RoomRuntime, decision: Decision, now: datetime, away: bool
     ) -> None:
-        """The hand changes have settled: the last one becomes the room's override."""
+        """The hand changes have settled: the last one becomes the room's override.
+
+        Nothing is adopted while the radiators are off, from a held thermostat, or from one
+        that is back at what is wanted from it.
+        """
         settle, room.settle = room.settle, None
         assert settle is not None  # noqa: S101
-        if decision.heating:
-            driver = self.drivers.get(settle.entity_id)
-            report = driver.report if driver is not None and driver.available else None
+        driver = self.drivers.get(settle.entity_id)
+        if decision.heating and driver is not None and not driver.held(now):
+            report = driver.report if driver.available else None
             target = settle.target
             if report is not None and report.mode == report.heat_mode and report.target is not None:
                 target = report.target
-            target = round_target(target, TEMPERATURE_STEP, MIN_TEMPERATURE, MAX_TEMPERATURE)
-            if not same(target, decision.target):
-                room.state.set_override(now, room.config.override_max, away=away, target=target)
-        for driver in room.drivers:
-            driver.reconcile(now)
+            if report is None or not driver.matches():
+                target = round_target(target, TEMPERATURE_STEP, MIN_TEMPERATURE, MAX_TEMPERATURE)
+                room.state.set_override(
+                    now,
+                    room.config.override_max,
+                    away=away,
+                    target=target,
+                    schedule=room.schedule.last,
+                )
+        for item in room.drivers:
+            item.reconcile(now)
 
     def _sensor_value(self, room: RoomRuntime, now: datetime) -> float | None:
         """The room sensor's reading, if it is available and fresh (section 5.4)."""
@@ -719,11 +850,27 @@ class HeatingRuntime:
         if state is None or state.state in UNAVAILABLE_STATES:
             return None
         value = _float(state.state)
-        if value is None or not sensor_fresh(
-            state.last_reported, now, self.config.timing.sensor_stale
+        last = self._sensor_last_report(room.config.temperature_sensor)
+        if (
+            value is None
+            or last is None
+            or not sensor_fresh(last, now, self.config.timing.sensor_stale)
         ):
             return None
         return value
+
+    def _sensor_last_report(self, sensor: str) -> datetime | None:
+        """When the sensor's device last reported: the newest report of any of its entities.
+
+        Home Assistant does not record a repeated identical value as a new report, so a steady
+        temperature alone would look like silence (concept section 5.4).
+        """
+        times = []
+        for entity_id in {sensor, *self._sensor_devices.get(sensor, ())}:
+            state = self.hass.states.get(entity_id)
+            if state is not None and state.state not in UNAVAILABLE_STATES:
+                times.append(state.last_reported)
+        return max(times) if times else None
 
     def _number_state(self, entity_id: str | None) -> float | None:
         if not entity_id:
@@ -735,7 +882,7 @@ class HeatingRuntime:
 
     # --- Sending -------------------------------------------------------------------------------
 
-    def _send(self, room: RoomRuntime, driver: ThermostatDriver, command: Command) -> None:
+    def _send(self, driver: ThermostatDriver, command: Command) -> None:
         _LOGGER.debug("%s: %s %s", driver.entity_id, command.service, dict(command.data))
         self.entry.async_create_task(
             self.hass,
@@ -752,11 +899,19 @@ class HeatingRuntime:
                 {ATTR_ENTITY_ID: driver.entity_id, **command.data},
                 blocking=True,
             )
-        except Exception as err:
-            _LOGGER.warning("%s refused %s: %s", driver.entity_id, command.service, err)
-            if self.drivers.get(driver.entity_id) is driver:
-                driver.on_refused(dt_util.utcnow(), str(err) or type(err).__name__)
-                self._evaluate()
+        except Exception as err:  # any refusal makes the thermostat blocked
+            if self.drivers.get(driver.entity_id) is not driver:
+                return
+            if driver.on_refused(dt_util.utcnow(), str(err) or type(err).__name__, command):
+                _LOGGER.warning("%s refused %s: %s", driver.entity_id, command.service, err)
+            else:
+                _LOGGER.info(
+                    "%s: %s failed after the thermostat had confirmed: %s",
+                    driver.entity_id,
+                    command.service,
+                    err,
+                )
+            self._evaluate()
 
     def _call(
         self,
@@ -768,7 +923,7 @@ class HeatingRuntime:
         async def call() -> None:
             try:
                 await self.hass.services.async_call(domain, service, data, blocking=True)
-            except Exception as err:
+            except Exception as err:  # reported, never raised into the loop
                 _LOGGER.warning("%s.%s %s failed: %s", domain, service, data, err)
                 if on_result is not None:
                     on_result(str(err) or type(err).__name__)
@@ -793,9 +948,13 @@ class HeatingRuntime:
             feed = room.feeds[trv.entity]
             driver = self.drivers[trv.entity]
             target = self.hass.states.get(trv.external_temperature)
-            paused = driver.held(now) or target is None or target.state in UNAVAILABLE_STATES
+            paused = driver.held(now) or not _writable(target)
             step = feed.step(now, reading, allowed=allowed, paused=paused)
             if step is None or target is None:
+                continue
+            if step.restarted:
+                room.settings_due[trv.entity] = now + self.config.timing.confirm_timeout
+            if step.value is None:
                 continue
             attributes = target.attributes
             minimum = _float(attributes.get("min"))
@@ -809,22 +968,33 @@ class HeatingRuntime:
             feed.wrote(value, now)
             domain = trv.external_temperature.split(".", 1)[0]
             self._call(domain, "set_value", {ATTR_ENTITY_ID: target.entity_id, "value": value})
-            if step.restarted:
-                room.settings_due[trv.entity] = now + self.config.timing.confirm_timeout
 
     def _write_all_settings(self, room: RoomRuntime, now: datetime) -> None:
         for trv in room.config.trvs:
             self._write_settings(room, trv, now)
 
     def _write_settings(self, room: RoomRuntime, trv: ThermostatConfig, now: datetime) -> None:
-        """Write each device setting that differs, once (section 5.5)."""
+        """One of the three moments: write each device setting that differs, once (5.5).
+
+        A setting whose entity is missing or unavailable now, or whose thermostat is held, is
+        remembered and written once as soon as it can be.
+        """
         driver = self.drivers.get(trv.entity)
-        if driver is None or driver.held(now):
+        if driver is None:
             return
-        for entity_id, wanted in trv.settings.items():
+        for entity_id in trv.settings:
+            room.pending_settings[entity_id] = trv.entity
+        self._write_pending_settings(room, now)
+
+    def _write_pending_settings(self, room: RoomRuntime, now: datetime) -> None:
+        for entity_id, trv_entity in list(room.pending_settings.items()):
+            driver = self.drivers.get(trv_entity)
             state = self.hass.states.get(entity_id)
-            if state is None or state.state in UNAVAILABLE_STATES:
+            if driver is None or driver.held(now) or not _writable(state):
                 continue
+            assert state is not None  # noqa: S101  (checked by _writable)
+            del room.pending_settings[entity_id]
+            wanted = room.thermostats[trv_entity].settings[entity_id]
             if setting_matches(entity_id, wanted, state.state):
                 room.refused_settings.pop(entity_id, None)
                 continue
@@ -843,8 +1013,9 @@ class HeatingRuntime:
 
     def _deadlines(self, now: datetime) -> list[datetime]:
         deadlines: list[datetime] = []
-        if (away := self.away.next_deadline(now)) is not None:
-            deadlines.append(away)
+        for deadline in (self.away.next_deadline(now), self.presence.next_deadline(now)):
+            if deadline is not None:
+                deadlines.append(deadline)
         stale = self.config.timing.sensor_stale
         for room in self.rooms.values():
             if room.state.hand is not None:
@@ -862,17 +1033,18 @@ class HeatingRuntime:
                 if (deadline := feed.next_deadline(now, sensor)) is not None:
                     deadlines.append(deadline)
             if sensor is not None and room.config.temperature_sensor:
-                state = self.hass.states.get(room.config.temperature_sensor)
-                if state is not None:
-                    deadlines.append(state.last_reported + stale)
+                last = self._sensor_last_report(room.config.temperature_sensor)
+                if last is not None:
+                    deadlines.append(last + stale)
         return [deadline for deadline in deadlines if deadline > now]
 
     @callback
-    def _schedule_timer(self) -> None:
-        now = dt_util.utcnow()
+    def _schedule_timer(self, now: datetime) -> None:
+        if not self._running:
+            return
         deadlines = self._deadlines(now)
         next_at = min(deadlines) if deadlines else None
-        if next_at == self._timer_at:
+        if next_at == self._timer_at and self._unsub_timer is not None:
             return
         if self._unsub_timer is not None:
             self._unsub_timer()
@@ -895,9 +1067,16 @@ class HeatingRuntime:
                 "comfort_temperature": room.state.comfort,
                 "eco_temperature": room.state.eco,
                 "hand": hand_to_dict(room.state.hand),
+                "window_paused": room.windows.paused,
             }
+        since = self.away.nobody_home_since
         return {
-            "home": {"mode": self.home_mode.value, "away_temperature": self.away_temperature},
+            "home": {
+                "mode": self.home_mode.value,
+                "away_temperature": self.away_temperature,
+                "nobody_home_since": since.isoformat() if since else None,
+                "presence": self.presence.to_dict(),
+            },
             "rooms": rooms,
         }
 
@@ -907,8 +1086,7 @@ class HeatingRuntime:
             self._saved = data
             self._store.async_delay_save(lambda: data, STORAGE_SAVE_DELAY_SECONDS)
 
-    def _sync_issues(self) -> None:
-        now = dt_util.utcnow()
+    def _sync_issues(self, now: datetime) -> None:
         wanted: dict[str, tuple[str, dict[str, str]]] = {}
         for room in self.rooms.values():
             for entity_id, field_name in room.missing.items():
@@ -919,8 +1097,12 @@ class HeatingRuntime:
             for driver in room.drivers:
                 if driver.status(now) is Status.UNRESPONSIVE:
                     wanted[f"unresponsive_{driver.entity_id}"] = (
-                        "unresponsive",
-                        {"room": room.config.name, "entity": driver.entity_id},
+                        "disagreeing" if driver.disagreeing else "unresponsive",
+                        {
+                            "room": room.config.name,
+                            "entity": driver.entity_id,
+                            "hours": str(self.config.timing.budget_exhausted_hours),
+                        },
                     )
         for issue_id in self._issues - wanted.keys():
             ir.async_delete_issue(self.hass, DOMAIN, issue_id)
@@ -959,12 +1141,21 @@ class HeatingRuntime:
         """What needs attention in a room, in words (the problem sensor)."""
         now = dt_util.utcnow()
         messages: list[str] = []
+        if room.error is not None:
+            messages.append(f"the controller failed on this room: {room.error}")
         for driver in room.drivers:
             status = driver.status(now)
             if driver.availability is Availability.UNSEEN:
                 continue
             if status in PROBLEM_STATUSES:
-                message = _STATUS_MESSAGES[status].format(entity=driver.entity_id)
+                if driver.disagreeing:
+                    message = (
+                        f"{driver.entity_id} kept differing from what is wanted for "
+                        f"{self.config.timing.budget_exhausted_hours} hours; it is only tried "
+                        "again from time to time"
+                    )
+                else:
+                    message = _STATUS_MESSAGES[status].format(entity=driver.entity_id)
                 if status is Status.BLOCKED and driver.error:
                     message += f" ({driver.error})"
                 messages.append(message)
@@ -987,9 +1178,16 @@ class HeatingRuntime:
             messages.append(f"setting {entity_id} was refused: {error}")
         return messages
 
+    def room_for_climate(self, entity_id: str) -> RoomRuntime | None:
+        """The room whose thermostat entity ``climate.cave_<room>`` this is, if any."""
+        entry = er.async_get(self.hass).async_get(entity_id)
+        if entry is None or entry.platform != DOMAIN or entry.domain != "climate":
+            return None
+        return self.rooms.get(entry.unique_id.removesuffix("_climate"))
+
     # --- Actions from entities and services ------------------------------------------------------
 
-    def _refuse_if_off(self, room: RoomRuntime) -> None:
+    def refuse_if_off(self, room: RoomRuntime) -> None:
         """Hand actions are refused while the radiators are off by mode (section 5.3)."""
         if self.home_mode is HomeMode.OFF:
             raise ServiceValidationError(
@@ -1007,11 +1205,15 @@ class HeatingRuntime:
     @callback
     def set_temperature(self, room: RoomRuntime, temperature: float) -> None:
         """A temperature set by hand in the UI: an override."""
-        self._refuse_if_off(room)
+        self.refuse_if_off(room)
         now = dt_util.utcnow()
         target = round_target(temperature, TEMPERATURE_STEP, MIN_TEMPERATURE, MAX_TEMPERATURE)
         room.state.set_override(
-            now, room.config.override_max, away=self._is_away(now), target=target
+            now,
+            room.config.override_max,
+            away=self._is_away(now),
+            target=target,
+            schedule=room.schedule.last,
         )
         room.settle = None
         self._evaluate()
@@ -1019,7 +1221,7 @@ class HeatingRuntime:
     @callback
     def set_preset(self, room: RoomRuntime, preset: Preset) -> None:
         """A preset chosen by hand: boost, an override, or ``none`` to resume the schedule."""
-        self._refuse_if_off(room)
+        self.refuse_if_off(room)
         now = dt_util.utcnow()
         if preset is Preset.NONE:
             room.state.resume()
@@ -1027,7 +1229,11 @@ class HeatingRuntime:
             room.state.start_boost(now, room.config.boost_duration, room.config.boost_temperature)
         else:
             room.state.set_override(
-                now, room.config.override_max, away=self._is_away(now), preset=preset
+                now,
+                room.config.override_max,
+                away=self._is_away(now),
+                preset=preset,
+                schedule=room.schedule.last,
             )
         room.settle = None
         self._evaluate()
@@ -1037,7 +1243,7 @@ class HeatingRuntime:
         self, room: RoomRuntime, duration: timedelta | None, temperature: float | None
     ) -> None:
         """``cave_heating.boost``."""
-        self._refuse_if_off(room)
+        self.refuse_if_off(room)
         room.state.start_boost(
             dt_util.utcnow(),
             duration or room.config.boost_duration,
@@ -1055,7 +1261,7 @@ class HeatingRuntime:
 
     @callback
     def set_room_mode(self, room: RoomRuntime, mode: RoomMode) -> None:
-        """Switch a room on (``heat``) or off."""
+        """Switch a room on (``heat``) or off; off discards hand changes still settling."""
         room.state.set_mode(mode)
         if mode is RoomMode.OFF:
             room.settle = None
@@ -1072,10 +1278,15 @@ class HeatingRuntime:
 
     @callback
     def set_home_mode(self, mode: HomeMode) -> None:
-        """``select.cave_home_mode`` changed by hand."""
+        """``select.cave_home_mode`` changed by hand.
+
+        Away and off end every boost and override, and discard hand changes still settling.
+        """
         if mode is not self.home_mode:
             for room in self.rooms.values():
                 room.state.on_home_mode_by_hand(mode)
+                if mode in (HomeMode.AWAY, HomeMode.OFF):
+                    room.settle = None
         self.home_mode = mode
         self._evaluate()
 
@@ -1098,8 +1309,11 @@ class HeatingRuntime:
 
     @callback
     def hold(self, entity_id: str, duration: timedelta) -> None:
-        """``cave_heating.hold``."""
+        """``cave_heating.hold``: also discards a dial change of that thermostat still settling."""
         self.driver_for_service(entity_id).hold(dt_util.utcnow(), duration)
+        for room in self.rooms.values():
+            if room.settle is not None and room.settle.entity_id == entity_id:
+                room.settle = None
         self._evaluate()
 
     @callback
@@ -1111,13 +1325,13 @@ class HeatingRuntime:
     def diagnostics(self) -> dict[str, Any]:
         """The controller's state, for the diagnostics download."""
         now = dt_util.utcnow()
-        stored = self._serialize()["rooms"]
+        stored = self._serialize()
         timing = self.config.timing
         return {
             "loaded": self.loaded,
+            "started": self._started,
             "version": self.config.version,
-            "home_mode": self.home_mode.value,
-            "away_temperature": self.away_temperature,
+            "home": stored["home"],
             "occupied": self.away.occupied(now),
             "timing": {item.name: str(getattr(timing, item.name)) for item in fields(timing)},
             "rooms": {
@@ -1130,12 +1344,12 @@ class HeatingRuntime:
                         "reason": room.decision.reason.value,
                         "heating": room.decision.heating,
                     },
-                    "state": stored[room_id],
-                    "window_paused": room.windows.paused,
+                    "state": stored["rooms"][room_id],
                     "temperature": room.temperature,
                     "temperature_from_sensor": room.sensor_fresh,
                     "settling": room.settle is not None,
                     "missing": dict(room.missing),
+                    "pending_settings": dict(room.pending_settings),
                     "problems": self.problems(room),
                     "thermostats": {
                         driver.entity_id: driver.diagnostics(now) for driver in room.drivers

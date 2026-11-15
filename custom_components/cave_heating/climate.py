@@ -2,7 +2,6 @@
 
 from __future__ import annotations
 
-from datetime import timedelta
 from typing import TYPE_CHECKING, Any
 
 from homeassistant.components.climate import (
@@ -157,13 +156,3 @@ class RoomClimate(RoomEntity, ClimateEntity):
     async def async_set_preset_mode(self, preset_mode: str) -> None:
         """A preset chosen by hand."""
         self.runtime.set_preset(self._room(), Preset(preset_mode))
-
-    async def async_boost(
-        self, duration: timedelta | None = None, temperature: float | None = None
-    ) -> None:
-        """``cave_heating.boost`` for this room."""
-        self.runtime.boost(self._room(), duration, temperature)
-
-    async def async_resume_schedule(self) -> None:
-        """``cave_heating.resume_schedule`` for this room."""
-        self.runtime.resume_schedule(self._room())

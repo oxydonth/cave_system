@@ -8,7 +8,7 @@ Home Assistant and applies the outcome to the thermostats through ``driver.py`` 
 from __future__ import annotations
 
 from collections.abc import Iterable, Sequence
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from datetime import datetime, timedelta
 from enum import Enum, StrEnum
 from typing import Any, Final
@@ -90,6 +90,63 @@ def someone_home(readings: Iterable[Presence]) -> bool:
     return not readings or any(reading is not Presence.NOT_HOME for reading in readings)
 
 
+class PresenceReadings:
+    """The presence entities' readings, each kept for a grace period while it is unavailable.
+
+    Concept section 5.4: an entity that becomes unavailable keeps its last reading for
+    ``presence_unavailable_grace`` and counts as home after that; without a last reading it
+    counts as home at once. A router reboot therefore does not end an away setback.
+    """
+
+    def __init__(self, grace: timedelta) -> None:
+        """No readings yet."""
+        self.grace = grace
+        self.last: dict[str, Presence] = {}  # the last known home or not-home reading
+        self.lost_at: dict[str, datetime] = {}  # since when an entity has said nothing
+
+    def update(self, entity_id: str, reading: Presence, now: datetime) -> None:
+        """Record what one entity says now."""
+        if reading is Presence.UNKNOWN:
+            self.lost_at.setdefault(entity_id, now)
+        else:
+            self.last[entity_id] = reading
+            self.lost_at.pop(entity_id, None)
+
+    def effective(self, entity_id: str, now: datetime) -> Presence:
+        """The reading that counts now."""
+        last = self.last.get(entity_id)
+        lost = self.lost_at.get(entity_id)
+        if last is None or (lost is not None and now >= lost + self.grace):
+            return Presence.UNKNOWN
+        return last
+
+    def next_deadline(self, now: datetime) -> datetime | None:
+        """When a kept reading runs out."""
+        ends = [
+            lost + self.grace
+            for entity_id, lost in self.lost_at.items()
+            if entity_id in self.last and lost + self.grace > now
+        ]
+        return min(ends) if ends else None
+
+    def to_dict(self) -> dict[str, str]:
+        """The last readings, for the state file."""
+        return {entity_id: reading.value for entity_id, reading in self.last.items()}
+
+    def restore(self, data: object, now: datetime) -> None:
+        """Last readings from before a restart: kept for the grace period from ``now``."""
+        if not isinstance(data, dict):
+            return
+        for entity_id, value in data.items():
+            try:
+                reading = Presence(value)
+            except ValueError:
+                continue
+            if reading is not Presence.UNKNOWN:
+                self.last[str(entity_id)] = reading
+                self.lost_at[str(entity_id)] = now
+
+
 class AwayTracker:
     """Presence after the away delay: ``binary_sensor.cave_home_occupied``."""
 
@@ -98,12 +155,12 @@ class AwayTracker:
         self.delay = delay
         self.nobody_home_since: datetime | None = None
 
-    def update(self, home: bool, now: datetime, since: datetime | None = None) -> None:
-        """Record what presence says now. ``since`` dates a "nobody home" found at start-up."""
+    def update(self, home: bool, now: datetime) -> None:
+        """Record what presence says now."""
         if home:
             self.nobody_home_since = None
         elif self.nobody_home_since is None:
-            self.nobody_home_since = since or now
+            self.nobody_home_since = now
 
     def occupied(self, now: datetime) -> bool:
         """False once presence has reported nobody home for the away delay."""
@@ -154,13 +211,24 @@ class WindowPause:
     closed for ``close_delay``. A contact that is unavailable counts as closed, except one that
     went silent while open: that one keeps the pause going for ``grace`` and then counts as
     closed at once, and it is reported as a problem until it is heard from again.
+
+    A pause restored after a restart (``paused`` set before any contact is known) ends by the
+    same rule once the contacts report: a contact not heard from yet keeps it, and one that is
+    first heard from as unavailable is treated as silent while open.
     """
 
-    def __init__(self, open_delay: timedelta, close_delay: timedelta, grace: timedelta) -> None:
-        """Start without a pause and without contacts."""
+    def __init__(
+        self,
+        open_delay: timedelta,
+        close_delay: timedelta,
+        grace: timedelta,
+        contacts: Iterable[str] = (),
+    ) -> None:
+        """Start without a pause; ``contacts`` are the room's configured contacts."""
         self.open_delay = open_delay
         self.close_delay = close_delay
         self.grace = grace
+        self.contacts = tuple(contacts)
         self.paused = False
         self._contacts: dict[str, _ContactTrack] = {}
 
@@ -175,6 +243,9 @@ class WindowPause:
         )
         previous_closed = previous.closed_since if previous is not None else None
         open_since = previous.open_since if was_open and previous is not None else None
+        if previous is None and state is Contact.SILENT and self.paused:
+            # First heard from as unavailable while a restored pause is in effect.
+            was_open, open_since = True, changed
         if state is Contact.OPEN:
             track = _ContactTrack(state, changed, open_since or changed, None, False)
         elif state is Contact.SILENT:
@@ -215,7 +286,7 @@ class WindowPause:
                 and track.open_since + self.open_delay <= now
                 for track in tracks
             )
-        else:
+        elif all(contact in self._contacts for contact in self.contacts):
             self.paused = not all(
                 not self._is_open(track, now)
                 and ((ready := self._closed_ready(track)) is None or ready <= now)
@@ -319,6 +390,9 @@ class Override:
     # Set while the home is away: the next schedule change does not end it until someone is
     # home again, so the flat can be pre-heated from the phone.
     waiting_for_home: bool = False
+    # The room's schedule (on or off) when the override was set, kept across a restart so that
+    # a schedule change during the restart still ends it. None: no schedule seen.
+    schedule: bool | None = None
 
 
 type HandAction = Boost | Override
@@ -347,10 +421,15 @@ class RoomState:
         away: bool,
         target: float | None = None,
         preset: Preset | None = None,
+        schedule: bool | None = None,
     ) -> None:
         """A hand action: it replaces any earlier boost or override."""
         self.hand = Override(
-            until=now + override_max, target=target, preset=preset, waiting_for_home=away
+            until=now + override_max,
+            target=target,
+            preset=preset,
+            waiting_for_home=away,
+            schedule=schedule,
         )
 
     def start_boost(self, now: datetime, duration: timedelta, temperature: float) -> None:
@@ -368,17 +447,22 @@ class RoomState:
             return True
         return False
 
-    def on_schedule_change(self) -> None:
-        """The room's schedule changed: an override ends, unless it waits for someone home."""
-        if isinstance(self.hand, Override) and not self.hand.waiting_for_home:
-            self.hand = None
+    def on_schedule_change(self, schedule: bool | None = None) -> None:
+        """The room's schedule changed: an override ends, unless it waits for someone home.
+
+        A waiting override takes the new schedule state as its own, so that only a change after
+        someone is home again ends it, also across a restart.
+        """
+        if isinstance(self.hand, Override):
+            if self.hand.waiting_for_home:
+                self.hand = replace(self.hand, schedule=schedule)
+            else:
+                self.hand = None
 
     def on_presence(self, away: bool) -> None:
         """Once someone is home again, the next schedule change ends a waiting override."""
         if isinstance(self.hand, Override) and self.hand.waiting_for_home and not away:
-            self.hand = Override(
-                until=self.hand.until, target=self.hand.target, preset=self.hand.preset
-            )
+            self.hand = replace(self.hand, waiting_for_home=False)
 
     def on_home_mode_by_hand(self, mode: HomeMode) -> None:
         """Home mode switched to away or off by hand ends every boost and override."""
@@ -464,6 +548,7 @@ def hand_to_dict(hand: HandAction | None) -> dict[str, Any] | None:
             "target": hand.target,
             "preset": hand.preset.value if hand.preset else None,
             "waiting_for_home": hand.waiting_for_home,
+            "schedule": hand.schedule,
         }
     return None
 
@@ -486,6 +571,7 @@ def hand_from_dict(data: object, now: datetime) -> HandAction | None:
                 target=float(target) if target is not None else None,
                 preset=Preset(preset) if preset is not None else None,
                 waiting_for_home=bool(data.get("waiting_for_home", False)),
+                schedule=schedule if isinstance(schedule := data.get("schedule"), bool) else None,
             )
     except KeyError, TypeError, ValueError:
         return None

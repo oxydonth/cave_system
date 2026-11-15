@@ -30,7 +30,7 @@ def config_dir(tmp_path: Path) -> Path:
 
 def run(config_dir: Path, *args: str) -> subprocess.CompletedProcess[str]:
     """Run the validator with the configuration directory as the working directory."""
-    return subprocess.run(  # noqa: S603  (a fixed command line)
+    return subprocess.run(
         [sys.executable, "-m", "custom_components.cave_heating.validate", *args],
         cwd=config_dir,
         capture_output=True,

@@ -12,7 +12,6 @@ from typing import Any
 
 import pytest
 from freezegun.api import FrozenDateTimeFactory
-from homeassistant import block_async_io
 from homeassistant.config_entries import SOURCE_USER, ConfigEntryState
 from homeassistant.const import EVENT_HOMEASSISTANT_STARTED
 from homeassistant.core import CoreState, HomeAssistant
@@ -30,6 +29,7 @@ import custom_components.cave_heating as integration
 from custom_components.cave_heating import runtime as runtime_module
 from custom_components.cave_heating.const import DOMAIN, STORAGE_KEY
 from custom_components.cave_heating.diagnostics import async_get_config_entry_diagnostics
+from homeassistant import block_async_io
 from tests.cave_heating.fakes import FakeHome, config, room
 
 TRANSLATIONS = Path(integration.__file__).parent / "translations"
@@ -617,8 +617,8 @@ async def test_entities_not_loaded_while_home_assistant_starts_are_not_reported_
     assert home.state(problem).state == "off"
     assert not ir.async_get(hass).issues
     trv = await home.thermostat("climate.later", target=18.0)
-    await home.advance(freezer, 3 * SEC)
-    assert trv.commands == [("set_temperature", {"temperature": 21.0})]
+    await home.advance(freezer, 1 * MIN)
+    assert trv.commands == [], "nothing is sent while Home Assistant is still starting"
     hass.set_state(CoreState.running)
     hass.bus.async_fire(EVENT_HOMEASSISTANT_STARTED)
     await hass.async_block_till_done()
@@ -626,17 +626,60 @@ async def test_entities_not_loaded_while_home_assistant_starts_are_not_reported_
         "sensor.never (temperature_sensor) does not exist"
     ]
     assert ir.async_get(hass).async_get_issue(DOMAIN, "missing_living_room_sensor.never")
+    await home.advance(freezer, 3 * SEC)
+    assert trv.commands == [("set_temperature", {"temperature": 21.0})]
 
 
-async def test_nobody_home_at_start_counts_from_when_the_last_person_left(
+async def test_a_restart_while_everybody_is_away_keeps_the_away_state(
+    hass: HomeAssistant,
+    home: FakeHome,
+    freezer: FrozenDateTimeFactory,
+    hass_storage: dict[str, Any],
+) -> None:
+    """P4 and P7: since when nobody is home, and the trackers' readings, are restored.
+
+    The trackers come back unavailable first, as Home Assistant restores them, then not_home.
+    """
+    before = dt_util.utcnow() - timedelta(hours=2)
+    hass_storage[STORAGE_KEY] = {
+        "version": 1,
+        "minor_version": 1,
+        "key": STORAGE_KEY,
+        "data": {
+            "home": {
+                "mode": "auto",
+                "away_temperature": 16.0,
+                "nobody_home_since": before.isoformat(),
+                "presence": {"device_tracker.phone": "not_home"},
+            },
+            "rooms": {},
+        },
+    }
+    hass.set_state(CoreState.starting)
+    await home.start(config(room("living_room", "climate.a"), presence="device_tracker.phone"))
+    trv = await home.thermostat("climate.a", target=16.0)
+    home.set("device_tracker.phone", "unavailable")
+    await home.advance(freezer, 1 * MIN)
+    home.set("device_tracker.phone", "not_home")
+    hass.set_state(CoreState.running)
+    hass.bus.async_fire(EVENT_HOMEASSISTANT_STARTED)
+    await home.advance(freezer, 2 * timedelta(hours=1), step=10 * MIN)
+    assert home.state("binary_sensor.cave_home_occupied").state == "off"
+    assert trv.commands == []
+
+
+async def test_a_reload_does_not_restart_the_away_delay(
     hass: HomeAssistant, home: FakeHome, freezer: FrozenDateTimeFactory
 ) -> None:
-    """A restart does not restart the away delay."""
+    """O2: "nobody home since" is kept, not re-dated from the tracker's last change."""
     await home.thermostat("climate.a", target=21.0)
+    home.set("person.max", "home")
+    file = config(room("living_room", "climate.a"), presence="person.max", away_delay="00:30:00")
+    await home.start(file)
     home.set("person.max", "not_home")
-    await home.advance(freezer, timedelta(hours=1))
-    await home.start(
-        config(room("living_room", "climate.a"), presence="person.max", away_delay="00:30:00")
-    )
+    await home.advance(freezer, 15 * MIN)
+    home.set("person.max", "work")  # still not home, but its last change is now
+    await home.advance(freezer, 5 * MIN)
+    await home.reload(file)
+    await home.advance(freezer, 10 * MIN)
     assert home.state("binary_sensor.cave_home_occupied").state == "off"
-    assert home.state("climate.cave_living_room").attributes["reason"] == "away"
