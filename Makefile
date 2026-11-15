@@ -15,7 +15,7 @@ TYPED_DIRS := custom_components $(wildcard sim tools)
 COV_ARGS := $(addprefix --cov=,$(TYPED_DIRS))
 YAML_FILES = $(shell find . $(PRUNE) -type f \( -name '*.yml' -o -name '*.yaml' \) -print)
 # Shell scripts: every *.sh, plus the `cave` entry point only if it is a shell script.
-SHELL_FILES = $(strip $(shell find . $(PRUNE) -type f -name '*.sh' -print) $(shell grep -lE '^\#!.*sh' ./cave 2>/dev/null))
+SHELL_FILES = $(strip $(shell find . $(PRUNE) -type f -name '*.sh' -print) $(shell [ -f ./cave ] && head -n 1 ./cave | grep -qE '^\#!.*sh' && echo ./cave))
 
 .DEFAULT_GOAL := help
 
