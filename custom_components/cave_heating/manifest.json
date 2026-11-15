@@ -1,0 +1,12 @@
+{
+  "domain": "cave_heating",
+  "name": "Cave Heating",
+  "codeowners": ["@oxydonth"],
+  "dependencies": [],
+  "documentation": "https://github.com/oxydonth/cave_system",
+  "integration_type": "hub",
+  "iot_class": "calculated",
+  "issue_tracker": "https://github.com/oxydonth/cave_system/issues",
+  "requirements": [],
+  "version": "0.1.0"
+}
