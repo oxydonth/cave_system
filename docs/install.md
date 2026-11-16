@@ -133,25 +133,34 @@ without a browser:
   that entity ID and a default week (Monday to Friday 06:00–08:00 and 17:00–22:00, Saturday and
   Sunday 08:00–22:00; on means comfort). Edit the timetables in the UI under Settings → Devices &
   services → Helpers; the bootstrap never touches a schedule that exists;
-* the script token: a long-lived access token named `cave-scripts` in
+* the script token: a long-lived access token named `cave-scripts` of the owner account in
   `CAVE_DATA/homeassistant/.cave/token`, mode 0600 and owned by the user who runs `./cave`, which
   `apply`, `status`, `update` and the health check use;
 * and it removes the integrations Home Assistant's onboarding adds by itself (Radio Browser,
   Google Translate text-to-speech, Shopping list): this system keeps nothing that reaches the
-  internet when used. Only the entries onboarding created go; one you add later yourself stays.
+  internet when used. It does so on every run, and only for the entries onboarding created;
+  the same integration added by you later stays.
 
 To try everything without hardware first, see [the demo](demo.md).
 
 Run it again whenever you like: it changes only what is missing, so a second run changes nothing,
 and an interrupted run is finished by the next. It repairs a deleted or revoked script token (the
-old token is deleted in Home Assistant, a new one written), and changes the MQTT login to the one
-in `.env` if that changed. After describing new rooms with schedules, `./cave apply` and then
-`./cave bootstrap` create their schedule helpers.
+old token is deleted in Home Assistant, a new one written), replaces a token in the file that is
+not the owner's `cave-scripts` token, and changes the MQTT login to the one in `.env` if that
+changed. After describing new rooms with schedules in `cave/heating.yaml`, run `./cave apply`, then
+`./cave bootstrap` to create their schedule helpers.
 
-The owner's password in `.env` is used to create the account and, later, only to log in when the
-script token has to be renewed; the bootstrap never changes it. If you change the password in
-Home Assistant, put the same into `.env`, or a token renewal stops with a message saying so. The
-passwords are handed to the setup on its standard input and never printed.
+The owner's user name and password in `.env` are used to create the account and, later, only to
+log in when the script token has to be renewed; the bootstrap never changes the account. If you
+change the password in Home Assistant, put the same into `.env`, or a token renewal stops with a
+message saying so. The passwords are handed to the setup on its standard input and never printed.
+
+**If you created the owner account in the browser** before running the bootstrap, set
+`CAVE_HA_OWNER_NAME`, `CAVE_HA_OWNER_USER` and `CAVE_HA_OWNER_PASSWORD` in `.env` to that account's
+name, user name and password first: the bootstrap logs in with them, and stops with a message
+naming the user name when Home Assistant refuses the login. Be aware that it then removes the
+Radio Browser, Google Translate and Shopping list entries that your onboarding in the browser
+created, as above.
 
 ## Other commands
 
@@ -170,7 +179,8 @@ passwords are handed to the setup on its standard input and never printed.
   `CAVE_DATA/mosquitto/passwd`. To change the password, edit `CAVE_MQTT_PASSWORD` in `.env` (or
   empty it, to have a new one generated), run `sudo chown -R cave: /var/lib/cave/mosquitto` (the
   broker's container takes ownership of its data directory), then `./cave init`, which writes the
-  password file again, and `./cave up`. If `init` finds the two out of step it fixes them or stops
+  password file again, `./cave up`, and `./cave bootstrap`, which gives Home Assistant's MQTT
+  integration the new login. If `init` finds the two out of step it fixes them or stops
   and prints the command to run. Change the broker login only this way, through `.env` and
   `./cave init`: once the broker has started, `init` cannot read the password file and relies on a
   record of what it wrote, so a file changed by hand would go unnoticed.
@@ -178,5 +188,5 @@ passwords are handed to the setup on its standard input and never printed.
   `CAVE_DATA/zigbee2mqtt/configuration.yaml`. Back that file up: without the key every Zigbee device
   has to be paired again.
 * Files that containers create in the state directory belong to root.
-* `./cave init` never overwrites `cave/heating.yaml`, and `./cave apply` (later) is the only way
+* `./cave init` never overwrites `cave/heating.yaml`, and `./cave apply` is the only way
   a change to it takes effect.

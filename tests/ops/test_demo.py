@@ -33,8 +33,10 @@ def checkout_with_demo(checkout, repo_root):
 
 
 @pytest.fixture
-def demo_data(checkout_with_demo):
-    return (checkout_with_demo / "data" / "demo").resolve()
+def demo_data(checkout_with_demo, tmp_path, monkeypatch):
+    """The default state directory, under a scratch $XDG_STATE_HOME."""
+    monkeypatch.setenv("XDG_STATE_HOME", str(tmp_path / "state"))
+    return (tmp_path / "state" / "cave" / "demo").resolve()
 
 
 @pytest.fixture
@@ -70,7 +72,8 @@ def test_the_demo_runs_as_a_project_of_its_own_with_its_own_state(
         assert call.env["COMPOSE_PROFILES"] == ""
     # The home's checkout is untouched: no .env, no home state.
     assert not (checkout_with_demo / ".env").exists()
-    assert sorted(p.name for p in (checkout_with_demo / "data").iterdir()) == ["demo"]
+    assert not (checkout_with_demo / "data").exists()
+    assert (demo_data / "demo.env").is_file()
     assert "The demo is running" in result.out
 
 
@@ -138,7 +141,7 @@ def test_the_bootstrap_points_at_the_simulators(run_cave, fake_runner, docker_wo
         assert all(secret not in arg for c in fake_runner.calls for arg in c.args)
 
 
-def test_the_demo_refuses_while_the_homes_stack_runs(run_cave, fake_runner, checkout_with_demo):
+def test_the_demo_refuses_while_the_homes_stack_runs(run_cave, fake_runner, demo_data):
     fake_runner.on(["docker", "ps"], out="3f2a9c1d\n")
 
     result = run_cave("demo")
@@ -147,7 +150,64 @@ def test_the_demo_refuses_while_the_homes_stack_runs(run_cave, fake_runner, chec
     assert "./cave down" in result.err
     (call,) = fake_runner.calls
     assert "label=com.docker.compose.project=cave" in call.args
-    assert not (checkout_with_demo / "data").exists()
+    assert not demo_data.exists()
+
+
+@pytest.mark.parametrize(
+    "where",
+    ["the home's state", "inside the home's state", "the checkout holding the home's state"],
+)
+def test_the_demo_refuses_the_homes_state_directory(
+    run_cave, fake_runner, ctx, checkout_with_demo, snapshot, where
+):
+    home = ctx.paths.data
+    (home / "homeassistant" / "cave").mkdir(parents=True)
+    (home / "homeassistant" / "cave" / "heating.yaml").write_text("the home's own description\n")
+    target = {
+        "the home's state": home,
+        "inside the home's state": home / "demo",
+        "the checkout holding the home's state": checkout_with_demo,
+    }[where]
+    before = snapshot(checkout_with_demo)
+
+    result = run_cave("demo", "--data", str(target))
+
+    assert result.code == 1
+    assert "home's state directory" in result.err
+    assert fake_runner.calls == []
+    assert snapshot(checkout_with_demo) == before  # nothing was written anywhere
+
+
+def test_the_demo_refuses_a_directory_that_is_not_a_demos(
+    run_cave, fake_runner, tmp_path, snapshot
+):
+    other = tmp_path / "photos"
+    other.mkdir()
+    (other / "holiday.jpg").write_bytes(b"not really a photo")
+    before = snapshot(other)
+
+    result = run_cave("demo", "--data", str(other))
+
+    assert result.code == 1
+    assert "not a demo's state directory" in result.err
+    assert fake_runner.calls == []
+    assert snapshot(other) == before
+
+
+def test_a_demo_whose_secrets_are_lost_is_not_started_with_new_ones(
+    run_cave, fake_runner, docker_works, demo_data
+):
+    assert run_cave("demo").code == 0
+    (demo_data / "demo.env").unlink()
+    calls = len(fake_runner.calls)
+
+    result = run_cave("demo")
+
+    assert result.code == 1
+    assert "secrets were lost" in result.err
+    assert f"sudo rm -rf {demo_data}" in result.err
+    assert len(fake_runner.calls) == calls
+    assert not (demo_data / "demo.env").exists()
 
 
 def test_demo_down_stops_the_demos_project(run_cave, fake_runner, docker_works, demo_data):
@@ -160,12 +220,19 @@ def test_demo_down_stops_the_demos_project(run_cave, fake_runner, docker_works, 
     assert call.env["COMPOSE_PROJECT_NAME"] == "cave-demo"
 
 
-def test_demo_down_without_a_demo_does_nothing(run_cave, fake_runner, checkout_with_demo):
+def test_demo_down_stops_the_demos_project_even_without_its_demo_env(
+    run_cave, fake_runner, demo_data
+):
+    fake_runner.on([*COMPOSE, "down"])
+
     result = run_cave("demo", "down")
 
     assert result.code == 0
-    assert "nothing to stop" in result.out
-    assert fake_runner.calls == []
+    assert "stopping project cave-demo anyway" in result.out
+    (call,) = fake_runner.matching(*COMPOSE, "down")
+    assert call.env["COMPOSE_PROJECT_NAME"] == "cave-demo"
+    assert call.env["CAVE_FRITZ_PASSWORD"]  # compose.sim.yaml requires one, even to stop
+    assert not demo_data.exists()  # nothing written
 
 
 def test_another_state_directory_can_be_chosen(run_cave, fake_runner, docker_works, tmp_path):

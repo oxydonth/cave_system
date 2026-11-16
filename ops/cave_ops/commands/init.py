@@ -29,32 +29,9 @@ from ..envfile import (
 from ..errors import CaveError
 from ..mosquitto import accepts, password_line
 from ..paths import Paths, default_data_dir
+from ..state import HA_FILES, MOUNT_DIRS, PLACEHOLDER_DASHBOARD, home_assistant_directories
 
 HELP = "Create the state directories, secrets and .env (changes nothing when run again)"
-
-SECRETS_YAML = "# Home Assistant secrets, for `!secret` in the configuration. Empty on purpose.\n"
-PLACEHOLDER_DASHBOARD = """\
-# Placeholder until `./cave apply` generates the heating dashboard from cave/heating.yaml.
-title: Heizung
-views:
-  - title: Heizung
-    cards:
-      - type: markdown
-        content: >-
-          No rooms yet. Describe them in `cave/heating.yaml` and run `./cave apply`.
-"""
-
-# Files Home Assistant includes but does not create (concept section 4.2).
-HA_FILES = {
-    "secrets.yaml": SECRETS_YAML,
-    "automations.yaml": "[]\n",
-    "scripts.yaml": "{}\n",
-    "scenes.yaml": "[]\n",
-}
-
-# Mount points of the read-only code mounts (compose.yaml). Created here so that they belong
-# to the service user rather than to root, which Docker would otherwise create them as.
-MOUNT_DIRS = ("packages", "custom_components/cave_heating")
 
 
 def add_arguments(parser: argparse.ArgumentParser) -> None:
@@ -212,10 +189,7 @@ def run(ctx: Context, args: argparse.Namespace) -> int:
 
     for directory in (
         paths.data,
-        paths.ha_config,
-        paths.ha_config / "cave",
-        paths.ha_config / "cave" / ".applied",
-        paths.ha_config / "dashboards",
+        *home_assistant_directories(paths),
         paths.z2m_data,
         paths.mosquitto_data,
         paths.lock_file.parent,

@@ -2,29 +2,32 @@
 
 The demo is a stack of its own next to the home's: Compose project ``cave-demo``, the overlay
 ``compose.sim.yaml`` (the ``sim`` service: the Zigbee2MQTT stand-in, the fake FRITZ!Box and the
-control API), and a state directory of its own (``data/demo`` in the checkout unless ``--data``
-says otherwise) with its own generated secrets in ``demo.env``. It needs no ``./cave init``, and it
-never touches the home's ``.env`` or state. Because Home Assistant runs on the host network, the
-demo and the home's stack use the same ports and cannot run at the same time.
+control API), and a state directory of its own with its own generated secrets in ``demo.env``.
+That directory is ``$XDG_STATE_HOME/cave/demo`` (``~/.local/state/cave/demo``) unless ``--data``
+names another; it may not be, contain or lie inside the home's state directory, and a directory
+that is not empty must be a demo's. The demo needs no ``./cave init`` and never touches the
+home's ``.env`` or state. Because Home Assistant runs on the host network, the demo and the
+home's stack use the same ports and cannot run at the same time.
 
 ``cave demo`` (or ``cave demo up``):
 
-1. prepares the demo's state directory and ``demo.env``;
-2. validates ``sim/demo/heating.yaml`` and stores it as the demo's applied copy through the shared
-   ``validate_and_store``;
-3. builds the simulator image and starts the stack;
-4. runs the first-run setup against the simulators, as ``cave bootstrap`` does: FRITZ!SmartHome
-   at the fake FRITZ!Box (FRITZ!Box Tools needs TR-064, which it does not have), and the switch
-   that stands in for presence.
+1. checks the state directory, then prepares it and ``demo.env``;
+2. builds the simulator image;
+3. validates ``sim/demo/heating.yaml`` and stores it as the demo's applied copy through the shared
+   ``validate_and_store``, before Home Assistant starts;
+4. starts the stack and runs the first-run setup against the simulators, as ``cave bootstrap``
+   does: FRITZ!SmartHome at the fake FRITZ!Box (FRITZ!Box Tools needs TR-064, which it does not
+   have), and the switch that stands in for presence.
 
-Run again, it starts the demo afresh with the same state. ``cave demo down`` stops it and keeps
-the state.
+Run again, it starts the demo afresh with the same state. ``cave demo down`` stops the demo's
+containers and keeps the state.
 """
 
 from __future__ import annotations
 
 import argparse
 import dataclasses
+import os
 from pathlib import Path
 from typing import Any
 
@@ -34,8 +37,8 @@ from ..errors import CaveError
 from ..heating import validate_and_store
 from ..mosquitto import password_line
 from ..paths import Paths
+from ..state import HA_FILES, MOUNT_DIRS, PLACEHOLDER_DASHBOARD, home_assistant_directories
 from .bootstrap import set_up_home_assistant, settings_from_env
-from .init import HA_FILES, MOUNT_DIRS, PLACEHOLDER_DASHBOARD
 
 HELP = "Start (or `down`: stop) a demo with simulated devices in a stack of its own"
 
@@ -43,6 +46,7 @@ PROJECT = "cave-demo"
 HOME_PROJECT = "cave"  # the name in compose.yaml
 OVERLAY = "compose.sim.yaml"
 HEATING = Path("sim") / "demo" / "heating.yaml"
+ENV_FILE = "demo.env"
 FRITZ_URL = "http://127.0.0.1:8480"  # the fake FRITZ!Box (concept section 4.1)
 FRITZ_USER = "cave"
 CONTROL_API = "http://127.0.0.1:8481"
@@ -58,7 +62,9 @@ def add_arguments(parser: argparse.ArgumentParser) -> None:
         "action", nargs="?", choices=("up", "down"), default="up", help="start (default) or stop"
     )
     parser.add_argument(
-        "--data", metavar="DIR", help="the demo's state directory (default: data/demo)"
+        "--data",
+        metavar="DIR",
+        help="the demo's state directory (default: ~/.local/state/cave/demo)",
     )
     parser.add_argument(
         "--timeout",
@@ -69,15 +75,39 @@ def add_arguments(parser: argparse.ArgumentParser) -> None:
     )
 
 
-def demo_data(ctx: Context, args: argparse.Namespace) -> Path:
-    if args.data:
-        return Path(args.data).expanduser().resolve()
-    return (ctx.paths.root / "data" / "demo").resolve()
+def default_data() -> Path:
+    """``$XDG_STATE_HOME/cave/demo``: outside the checkout, its linters and the home's state."""
+    state_home = os.environ.get("XDG_STATE_HOME") or str(Path.home() / ".local" / "state")
+    return Path(state_home) / "cave" / "demo"
+
+
+def demo_data(args: argparse.Namespace) -> Path:
+    return (Path(args.data).expanduser() if args.data else default_data()).resolve()
+
+
+def check_data(ctx: Context, data: Path) -> None:
+    """Refuse a directory that would mix the demo with the home's state or anything else.
+
+    Runs before anything is written.
+    """
+    home = ctx.paths.data.expanduser().resolve()
+    if data == home or data.is_relative_to(home) or home.is_relative_to(data):
+        raise CaveError(
+            f"the demo's state directory {data} would be the home's state directory {home}, "
+            "lie inside it or contain it; choose another with `--data DIR`"
+        )
+    if data.is_dir() and any(data.iterdir()) and not (data / ENV_FILE).is_file():
+        raise CaveError(
+            f"{data} is not empty and holds no {ENV_FILE}, so it is not a demo's state directory, "
+            "or its secrets were lost and no longer match its state. Choose another with "
+            f"`--data DIR`, or remove it (`./cave demo down`, then `sudo rm -rf {data}`: Home "
+            "Assistant and the broker write files there as root)."
+        )
 
 
 def demo_env(data: Path) -> dict[str, str]:
     """The demo's variables from ``demo.env``, which is created or completed as needed."""
-    path = data / "demo.env"
+    path = data / ENV_FILE
     values = load_env(path)
     wanted = fresh_values(data, existing=values)
     for name in ("CAVE_FRITZ_HOST", "CAVE_FRITZ_USER", "CAVE_FRITZ_PASSWORD"):
@@ -121,8 +151,7 @@ def prepare_state(ctx: Context) -> None:
     """The demo's state directory: what ``init`` creates for the home, without Zigbee2MQTT."""
     paths = ctx.paths
     for directory in (
-        paths.ha_config / "cave" / ".applied",
-        paths.ha_config / "dashboards",
+        *home_assistant_directories(paths),
         paths.mosquitto_data,
         paths.lock_file.parent,
         *(paths.ha_config / relative for relative in MOUNT_DIRS),
@@ -136,7 +165,7 @@ def prepare_state(ctx: Context) -> None:
     _write_if_missing(paths.ha_config / "configuration.yaml", "")  # single-file mount point
     _write_if_missing(paths.dashboard, PLACEHOLDER_DASHBOARD)
     # The broker's container takes the directory over at its first start; the demo's login
-    # never changes, so a file that exists is the right one.
+    # never changes (a lost demo.env is refused by check_data), so a file that exists is right.
     _write_if_missing(
         paths.mosquitto_passwd,
         password_line(ctx.env["CAVE_MQTT_USER"], ctx.env["CAVE_MQTT_PASSWORD"]),
@@ -163,12 +192,13 @@ def bootstrap_settings(env: dict[str, str], timeout: float) -> dict[str, Any]:
 
 
 def up(ctx: Context, args: argparse.Namespace) -> int:
+    data = demo_data(args)
+    check_data(ctx, data)
     if home_stack_running(ctx):
         raise CaveError(
             "the home's stack is running; the demo uses the same ports (8123, 1883). "
             "Stop it with `./cave down` first."
         )
-    data = demo_data(ctx, args)
     env = demo_env(data)
     demo = demo_context(ctx, data, env)
     prepare_state(demo)
@@ -200,19 +230,22 @@ def up(ctx: Context, args: argparse.Namespace) -> int:
     demo.say(
         "\nThe demo is running.\n"
         f"  Home Assistant: http://<this machine>:8123, login {env['CAVE_HA_OWNER_USER']!r}; the "
-        f"password is CAVE_HA_OWNER_PASSWORD in {data / 'demo.env'}\n"
+        f"password is CAVE_HA_OWNER_PASSWORD in {data / ENV_FILE}\n"
         f"  The simulators' control API: {CONTROL_API} (see sim/README.md)\n"
-        "  Stop it with `./cave demo down`. See docs/demo.md."
+        "  Stop it with `./cave demo down`; until then it keeps the ports busy, also after a "
+        "reboot. See docs/demo.md."
     )
     return 0
 
 
 def down(ctx: Context, args: argparse.Namespace) -> int:
-    data = demo_data(ctx, args)
-    env = load_env(data / "demo.env")
+    """Stop the demo's project, also when its ``demo.env`` is gone (with stand-in values then)."""
+    data = demo_data(args)
+    env = load_env(data / ENV_FILE)
     if not env:
-        ctx.say(f"No demo in {data}: nothing to stop.")
-        return 0
+        ctx.say(f"No {ENV_FILE} in {data}; stopping project {PROJECT} anyway.")
+        env = fresh_values(data)
+        env.update(CAVE_FRITZ_USER=FRITZ_USER, CAVE_FRITZ_PASSWORD=generate_secret())
     return demo_context(ctx, data, env).compose("down", capture=False).returncode
 
 
