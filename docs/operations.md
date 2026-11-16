@@ -45,8 +45,13 @@ Find the start of the message in the left column.
 | `An update from … was interrupted` / `it was interrupted (killed or a power cut)` | The server lost power or the update was killed during an update. The next run (at boot) finished it. | As the rest of the message says. | See [Interrupted updates](#interrupted-updates). |
 | `Not updated: … is running` / `No backup was made: … is running` | Update, backup and restore never run at the same time; one was still busy. | Unchanged. | Nothing; the next night runs again. |
 | `The backup failed: …` | No archive was written; the older ones are kept. | Fine, but without a fresh backup. | Read the reason (often a full disk). Run `sudo ./cave backup` once fixed. |
+| `Backup … written …; … symbolic link(s) pointing outside their directory were left out` | The state contained links that are absolute or contain `..`. A restore refuses such links, so the backup leaves them out to stay restorable; the manifest lists them. | Backup fine. | None of the services makes such links; look at the named ones. |
 | `Backup … written …; WARNING: … could not be read as a SQLite database` | The backup was made, but one database file is damaged (Home Assistant renames a damaged database to `home-assistant_v2.db.corrupt.<time>`). It is archived as it is. | Backup fine. | If the named file is a `….corrupt.*` file, Home Assistant has replaced it already: delete it to save space. Otherwise look at `journalctl -t cave`. |
-| `The restore failed while unpacking: …` | A restore could not unpack the archive; nothing was restored. | The stack runs again unchanged (or the message says it could not be started). | Read the reason (often a full disk). |
+| `The restore failed while unpacking: …` | A restore could not unpack the archive; nothing was restored. | The stack runs again unchanged (or the message says it could not be started). If an update was interrupted, its way back was finished instead (`… was finished instead`), so the release and the state belong together; its own notification says how that went. | Read the reason (often a full disk). |
+| `Not updating: a restore of … was interrupted` / `No backup was made: a restore of … was interrupted` | A restore was cut off while moving the state into place. Update and backup wait for it. | The stack is stopped; the state may be half restored. | Run the same `sudo ./cave restore …` again. |
+| `Update to v… failed earlier and was rolled back … That could not be recorded then` | An earlier way back had finished, but the disk was full when it wanted to record that. | The previous release runs, healthy; nothing was stopped. | Free space on the disk. |
+| `… Note: left in place, because they are not the new release's files: …` | After a rollback, files in `/opt/cave` that the new release would have added, but whose content is not the release's, were kept: they are yours. | As the rest of the message says. | Look at the named files; move them out of `/opt/cave` if they are in the way of the next release. |
+| `Not updating to v…: … is on another file system than the rest of the state` | Something is mounted at an entry of `/var/lib/cave` (for example a separate disk at `homeassistant`). Snapshots are put back by renaming, which cannot cross file systems. | Unchanged. | Keep all of `/var/lib/cave` on one file system: mount the disk at `/var/lib/cave` itself instead. |
 | `… The copy to CAVE_BACKUP_COPY_TO=… FAILED` | The backup was written locally, but the second location was not reachable (not mounted?). | Local backup fine. | Mount the second location, or fix `CAVE_BACKUP_COPY_TO` in `.env`. |
 | `No backup was made: the update to v… was interrupted` | An update was interrupted; the state may be incomplete, so it is not archived. | See [Interrupted updates](#interrupted-updates). | `sudo ./cave update --recover`. |
 
@@ -129,6 +134,13 @@ the result.
 `update` exits with 0 (installed, or nothing to do), 1 (not updated, the previous release runs as
 before), 2 (the release failed and was rolled back; the previous release runs, healthy) or 3 (the
 previous release is not back healthy, or nothing runs: act now).
+
+### One file system
+
+All of `/var/lib/cave` must be on **one file system**: snapshots and restores put state back by
+renaming, which needs no free space but cannot cross file systems. An update or restore refuses,
+before touching anything, when an entry is on another one. To give the state a disk of its own,
+mount it at `/var/lib/cave` itself.
 
 ### Which user
 
@@ -225,10 +237,17 @@ for e in homeassistant zigbee2mqtt mosquitto .cave/mqtt-credentials; do   # thos
   sudo mv "/var/lib/cave/$e" "$B/$e"; sudo mv "$S/$e" "/var/lib/cave/$e"
 done
 sudo -u cave git checkout --force --detach <the commit or release named before "-to-" in the snapshot name>
-sudo rm /var/lib/cave/.cave/ops/update.json          # forget the update in flight
+# forget the update in flight, but keep the record of failed releases:
+sudo python3 -c 'import json; p="/var/lib/cave/.cave/ops/update.json"; d=json.load(open(p)); d["switch"]=None; json.dump(d, open(p, "w"), indent=2)'
 sudo -u cave ./cave up
 sudo systemctl start cave-update.timer               # delete $B once everything works
 ```
+
+### Giving up on a way back
+
+If the way back keeps failing for a reason that will not go away, no backup is made until it is
+finished. To give up deliberately, put the state right by hand (above), then forget the update
+in flight with the `python3` line in that recipe; it keeps the record of failed releases.
 
 ### Interrupted updates
 
@@ -240,7 +259,7 @@ stops for any reason, or any later `cave update`. `sudo ./cave update --recover`
 |---|---|---|
 | Before stopping the stack | No update in flight (only a temporary export, removed) | Nothing special; a normal update. |
 | While stopping, or while copying the snapshot | Stack stopped or stopping; a snapshot `….partial`; checkout and state unchanged | Removes the partial snapshot, starts the previous release, waits for healthy. The release is not marked as failed. |
-| After the snapshot: during the checkout, before or after starting the new release | Stack stopped or running the new release; the checkout possibly half changed, with Git's lock file left behind; a complete snapshot | The full rollback: stop, put back the snapshot, remove Git's stale lock files, check out exactly the previous release (files that only the new release has are removed), start, wait. The release is marked as failed (an update that died during the switch is suspect); `--force` tries it again. |
+| After the snapshot: during the checkout, before or after starting the new release | Stack stopped or running the new release; the checkout possibly half changed, with Git's lock file left behind; a complete snapshot | The full rollback: stop, put back the snapshot, remove Git's stale lock files, check out exactly the previous release (a file the new release added is removed only if its content is the release's own; anything else, such as a file of yours at that path, is left in place and named in the message), start, wait. The release is marked as failed (an update that died during the switch is suspect); `--force` tries it again. |
 | In the instant after the new release became healthy, before the result was recorded | The new release running, the record still saying "switching" | Rolls back, as above. Conservative: an update is only done once it is recorded. |
 | While rolling back (also half-way through putting the snapshot back) | State possibly half replaced | Rolls back again: entries the snapshot still holds are moved into place, those already moved stay. Safe to repeat until it completes. |
 | A way back that could not finish | The update still recorded as in flight | Tries the way back again. |
@@ -280,16 +299,26 @@ the state and `.env`, and starts the stack. The state it replaces is kept in
 restore is interrupted, run the same command again. If it fails while unpacking (for example a
 full disk; it checks the space first), nothing is restored and the stack is started again.
 
-Every member of the archive is checked before anything is touched, and again where it would
-really land: nothing in an archive can make the restore write outside the state directory and
-`.env`, by absolute paths, `..`, links (also chains of links), hard links or device files. Files
-of the old server's service user get this server's service user as owner, whatever its user
-number.
+**What an archive may contain.** Directories, regular files and symbolic links, each once, below
+`data/`, none below a link, with no absolute path and no `..` in a name. A link must be relative
+and contain no `..` at all, so it can only point at or below its own directory; and once the
+whole archive is unpacked, every link in it is resolved and must stay inside. An archive that
+breaks a rule is refused before anything is stopped or touched. So nothing in an archive can
+make the restore write outside the state directory and `.env`, nor leave a link there that
+points outside (which a container's bind mount would otherwise follow). `cave backup` leaves out
+links that break the rule and names them, so every archive it writes can be restored. Files of
+the old server's service user get this server's service user as owner, whatever its user number.
 
-If an update was interrupted (`cave status` shows it), the restore supersedes it: it checks out
-the release from before that update, restores the archive, marks that update's release as
-failed and forgets the update, so that no later recovery can put the update's snapshot back over
-the restored state. The archive is then compared with that release.
+If an update was interrupted (`cave status` shows it), the restore supersedes it. Only once the
+archive is unpacked does it check out the release from before that update, mark that update's
+release as failed and forget the update; then it moves the archive's state in. So no later
+recovery can put the update's snapshot back over the restored state. If unpacking fails, it
+finishes the update's way back instead (the update's release and state belong together), and
+says so. The archive is compared with the release from before the update.
+
+While the state is moved in, a marker (`/var/lib/cave/.cave/ops/restore.json`) is kept: if the
+restore is cut off there, `status` shows it, and update and backup refuse until the same restore
+has been run again.
 
 * `--data DIR` restores into another state directory (`.env` is changed to name it).
 * `--no-start` does not start the stack afterwards.

@@ -332,7 +332,7 @@ class _Update:
                 "refused",
                 f"Not updating to {tag}: {', '.join(elsewhere)} in {ctx.paths.data} is on another "
                 "file system than the rest of the state, so the snapshot could not be put back by "
-                f"renaming. Nothing was changed. See {OPERATIONS}, 'Which user'.",
+                f"renaming. Nothing was changed. See {OPERATIONS}, 'One file system'.",
             )
 
         dirty = _server.git(ctx, "status", "--porcelain", "--untracked-files=no")
