@@ -118,17 +118,32 @@ def check_token_file(ctx: Context) -> None:
 
 def run(ctx: Context, args: argparse.Namespace) -> int:
     require_initialised(ctx)
-    settings = settings_from_env(ctx.env, args.timeout)
+    return set_up_home_assistant(ctx, settings_from_env(ctx.env, args.timeout), args.timeout)
+
+
+def set_up_home_assistant(
+    ctx: Context,
+    settings: dict[str, Any],
+    timeout: float,
+    *,
+    again: str = "./cave bootstrap",
+    start: str = "./cave up",
+) -> int:
+    """Wait for the stack, run the tool with ``settings``, check the token and the health.
+
+    ``cave demo`` calls this with its own context and settings; ``again`` is the command that
+    continues an interrupted run, ``start`` the one that starts the stack.
+    """
     # init creates it; if it went missing, recreate it as the user who runs ./cave, because the
     # tool gives the token file to the directory's owner.
     ctx.paths.token.parent.mkdir(mode=0o700, parents=True, exist_ok=True)
 
     ctx.say("Waiting until the stack is healthy ...")
-    health = wait_healthy(ctx, timeout=args.timeout, api=False)
+    health = wait_healthy(ctx, timeout=timeout, api=False)
     if not health.healthy:
         raise CaveError(
-            f"the stack is {health.describe()} after {args.timeout:.0f} s; "
-            "start it with `./cave up` and look at `./cave logs homeassistant`"
+            f"the stack is {health.describe()} after {timeout:.0f} s; "
+            f"start it with `{start}` and look at Home Assistant's log"
         )
 
     result = run_in_homeassistant(
@@ -136,16 +151,16 @@ def run(ctx: Context, args: argparse.Namespace) -> int:
         [TOOL],
         capture=False,
         input_text=json.dumps(settings),
-        timeout=args.timeout + RUN_MARGIN,
+        timeout=timeout + RUN_MARGIN,
     )
     if not result.ok:
         raise CaveError(
             f"the first-run setup failed (exit status {result.returncode}); "
-            "its messages are above. Running `./cave bootstrap` again continues where it stopped."
+            f"its messages are above. Running `{again}` again continues where it stopped."
         )
 
     check_token_file(ctx)
-    health = wait_healthy(ctx, timeout=args.timeout)
+    health = wait_healthy(ctx, timeout=timeout)
     ctx.say(f"Stack {health.describe()}.")
     if not health.healthy:
         return 1

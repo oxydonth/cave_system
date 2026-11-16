@@ -53,6 +53,9 @@ LONG_LIVED = "long_lived_access_token"
 ONBOARDING_STEPS = ("user", "core_config", "analytics", "integration")
 # The language of the default areas that onboarding creates; Home Assistant's own default.
 ONBOARDING_LANGUAGE = "en"
+# What onboarding's core_config step sets up by itself, besides `met` (which declines without a
+# home location): radio_browser and google_translate reach the internet when used.
+ONBOARDING_INTEGRATIONS = ("radio_browser", "google_translate", "shopping_list")
 # Home Assistant's own settings that configuration.yaml leaves to the UI (concept section 4.2).
 UNIT_SYSTEM = "metric"
 COUNTRY = "DE"
@@ -66,6 +69,7 @@ DEFAULT_WEEK: dict[str, list[dict[str, str]]] = {
     day: WORKDAY if day not in ("saturday", "sunday") else WEEKEND for day in DAYS
 }
 SCHEDULE_ICON = "mdi:calendar-clock"
+SWITCH_ICON = "mdi:home-account"
 
 POLL_INTERVAL = 2.0  # seconds between two looks at a condition that is being waited for
 REQUEST_TIMEOUT = 60.0  # seconds for one request; a config flow may contact a device
@@ -100,6 +104,13 @@ class Settings:
     heating_file: Path = Path("/config/cave/.applied/heating.yaml")
     config_entries_file: Path = Path("/config/.storage/core.config_entries")
     timeout: float = 300.0
+    fritz_tools: bool = True
+    """Set up FRITZ!Box Tools with a FRITZ!Box. The demo's simulated box has no TR-064."""
+    switches: tuple[tuple[str, str], ...] = ()
+    """``(entity ID, name)`` of ``input_boolean`` helpers to create, switched on once created;
+    the demo's stand-in for presence."""
+    onboarding_wait: float = 60.0
+    """How long to wait for the integrations onboarding sets up by itself to appear."""
 
     @classmethod
     def from_json(cls, data: Mapping[str, Any]) -> Settings:
@@ -121,6 +132,20 @@ class Settings:
             optional["url"] = str(data["url"]).rstrip("/")
         if data.get("timeout") is not None:
             optional["timeout"] = float(data["timeout"])
+        if data.get("onboarding_wait") is not None:
+            optional["onboarding_wait"] = float(data["onboarding_wait"])
+        if "fritz_tools" in data:
+            optional["fritz_tools"] = bool(data["fritz_tools"])
+        switches = data.get("switches") or []
+        if not isinstance(switches, list) or not all(
+            isinstance(item, dict)
+            and str(item.get("entity_id", "")).startswith("input_boolean.")
+            and _is_slug(str(item["entity_id"]).partition(".")[2])
+            and item.get("name")
+            for item in switches
+        ):
+            raise BootstrapError("setting 'switches' must list input_boolean entity IDs with names")
+        optional["switches"] = tuple((str(s["entity_id"]), str(s["name"])) for s in switches)
         return cls(
             owner_name=text("owner_name"),
             owner=Login(text("owner_user"), text("owner_password")),
@@ -536,11 +561,13 @@ class Bootstrap:
             )
 
     # --- 4. onboarding
-    async def finish_onboarding(self, done: Mapping[str, bool], token: str) -> None:
+    async def finish_onboarding(self, done: Mapping[str, bool], token: str) -> bool:
+        """Complete the open steps; return whether this run completed ``core_config``."""
         open_steps = [step for step in ONBOARDING_STEPS[1:] if not done.get(step)]
         if not open_steps and done.get("user"):
             self.out.unchanged("onboarding is complete")
-            return
+            return False
+        completed_core_config = False
         for step in open_steps:
             payload: dict[str, str] = {}
             if step == "integration":
@@ -556,6 +583,62 @@ class Bootstrap:
                     f"{reply.message()}"
                 )
             self.out.changed(f"completed the onboarding step {step}")
+            completed_core_config = completed_core_config or step == "core_config"
+        return completed_core_config
+
+    # --- integrations that onboarding adds by itself
+    async def remove_onboarding_integrations(self, token: str, wait: bool) -> None:
+        """Remove what onboarding's ``core_config`` step sets up without being asked.
+
+        Home Assistant starts their flows in the background when that step completes
+        (``components/onboarding/views.py``). A local-only system does not carry integrations
+        that reach the internet when used. Only entries onboarding created (source
+        ``onboarding``) are removed, so the same integration added later by hand stays. In the
+        run that completed the step, the entries are awaited first, so that a later run finds
+        nothing left to remove.
+        """
+
+        async def onboarding_entries() -> list[dict[str, Any]]:
+            found = []
+            for domain in ONBOARDING_INTEGRATIONS:
+                found += [
+                    entry
+                    for entry in await self.entries(token, domain)
+                    if entry.get("source") == "onboarding"
+                ]
+            return found
+
+        if wait:
+            deadline = time.monotonic() + self.settings.onboarding_wait
+            while True:
+                domains = {entry["domain"] for entry in await onboarding_entries()}
+                if domains >= set(ONBOARDING_INTEGRATIONS):
+                    break
+                if time.monotonic() >= deadline:
+                    missing = sorted(set(ONBOARDING_INTEGRATIONS) - domains)
+                    self.out.say(
+                        f"  note:    onboarding did not set up {', '.join(missing)} within "
+                        f"{self.settings.onboarding_wait:.0f} s; nothing to remove there"
+                    )
+                    break
+                await asyncio.sleep(POLL_INTERVAL)
+        entries = await onboarding_entries()
+        if not entries:
+            self.out.unchanged(
+                f"none of {', '.join(ONBOARDING_INTEGRATIONS)} (set up by onboarding) is left"
+            )
+            return
+        for entry in entries:
+            await self.api.expect(
+                "DELETE",
+                f"/api/config/config_entries/entry/{entry['entry_id']}",
+                f"removing {entry['domain']}",
+                token=token,
+            )
+            self.out.changed(
+                f"removed {entry['domain']} ({entry.get('title')}), which onboarding set up and "
+                "which reaches the internet when used"
+            )
 
     # --- 5. the script token
     async def ensure_token(self, ws: WebSocket, stored: StoredToken) -> None:
@@ -752,6 +835,9 @@ class Bootstrap:
             ),
         )
         for domain, title, form in integrations:
+            if domain == "fritz" and not settings.fritz_tools:
+                self.out.unchanged(f"{title} is left out by request (it needs TR-064)")
+                continue
             existing = await self.entries(token, domain)
             if existing:
                 self.out.unchanged(f"{title} is set up ({existing[0].get('state')})")
@@ -833,17 +919,77 @@ class Bootstrap:
                 f"created the schedule {entity_id} ({title}) with the default timetable"
             )
 
-    async def registry_entry_for(self, ws: WebSocket, unique_id: str) -> dict[str, Any]:
+    async def registry_entry_for(
+        self, ws: WebSocket, unique_id: str, platform: str = "schedule"
+    ) -> dict[str, Any]:
         async def registered() -> dict[str, Any] | None:
             for entry in await ws.call("config/entity_registry/list"):
-                if entry.get("platform") == "schedule" and entry.get("unique_id") == unique_id:
+                if entry.get("platform") == platform and entry.get("unique_id") == unique_id:
                     return dict(entry)
             return None
 
         found: dict[str, Any] = await wait_for(
-            registered, f"the entity of the new schedule {unique_id}", 30.0, interval=0.5
+            registered, f"the entity of the new {platform} {unique_id}", 30.0, interval=0.5
         )
         return found
+
+    async def ensure_switches(self, ws: WebSocket, token: str) -> None:
+        """The ``input_boolean`` helpers of the settings (the demo's presence), switched on.
+
+        Made like the schedules: created under the object ID as name so the entity ID comes out
+        as asked, switched on, then named; an existing entity is left alone.
+        """
+        if not self.settings.switches:
+            return
+        items = {item["id"]: item for item in await ws.call("input_boolean/list")}
+        by_entity = {e["entity_id"]: e for e in await ws.call("config/entity_registry/list")}
+        for entity_id, name in self.settings.switches:
+            object_id = entity_id.partition(".")[2]
+            entry = by_entity.get(entity_id)
+            if entry is None:
+                state = await self.api.request("GET", f"/api/states/{entity_id}", token=token)
+                if state.status == 200:
+                    self.out.unchanged(f"{entity_id} exists (defined outside the UI)")
+                    continue
+            else:
+                item = (
+                    items.get(entry.get("unique_id"))
+                    if entry["platform"] == "input_boolean"
+                    else None
+                )
+                if item is not None and item.get("name") == object_id:
+                    await self.finish_switch(ws, token, entity_id, item, name)
+                    self.out.changed(f"switched on and named {entity_id} {name!r}")
+                else:
+                    self.out.unchanged(f"{entity_id} exists (its state is left alone)")
+                continue
+            item = await ws.call("input_boolean/create", name=object_id, icon=SWITCH_ICON)
+            created = await self.registry_entry_for(ws, str(item["id"]), "input_boolean")
+            if created["entity_id"] != entity_id:
+                await ws.call(
+                    "config/entity_registry/update",
+                    entity_id=created["entity_id"],
+                    new_entity_id=entity_id,
+                )
+            await self.finish_switch(ws, token, entity_id, item, name)
+            self.out.changed(f"created {entity_id} ({name}), switched on")
+
+    async def finish_switch(
+        self, ws: WebSocket, token: str, entity_id: str, item: Mapping[str, Any], name: str
+    ) -> None:
+        await self.api.expect(
+            "POST",
+            "/api/services/input_boolean/turn_on",
+            f"switching on {entity_id}",
+            token=token,
+            payload={"entity_id": entity_id},
+        )
+        await ws.call(
+            "input_boolean/update",
+            input_boolean_id=item["id"],
+            name=name,
+            icon=item.get("icon") or SWITCH_ICON,
+        )
 
     async def rename_schedule(self, ws: WebSocket, item: Mapping[str, Any], name: str) -> None:
         days = {day: item.get(day, []) for day in DAYS}
@@ -872,11 +1018,13 @@ class Bootstrap:
                 out.unchanged(f"the owner account exists (login {self.settings.owner.username!r})")
             async with WebSocket(self.session, self.settings.url, session.access_token) as ws:
                 await self.core_settings(ws, session.access_token)
-                await self.finish_onboarding(done, session.access_token)
+                onboarded_now = await self.finish_onboarding(done, session.access_token)
                 await self.ensure_token(ws, stored)
                 await self.ensure_mqtt(session.access_token)
                 await self.ensure_fritz(session.access_token)
                 await self.ensure_schedules(ws, session.access_token)
+                await self.ensure_switches(ws, session.access_token)
+                await self.remove_onboarding_integrations(session.access_token, onboarded_now)
         finally:
             await self.close_session(session)
 

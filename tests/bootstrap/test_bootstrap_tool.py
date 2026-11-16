@@ -22,11 +22,13 @@ from homeassistant.auth.models import TOKEN_TYPE_LONG_LIVED_ACCESS_TOKEN
 from homeassistant.core import HomeAssistant
 from homeassistant.helpers import entity_registry as er
 from homeassistant.helpers.json import json_bytes
+from pytest_homeassistant_custom_component.common import MockConfigEntry
 
 from tools.bootstrap import (
     DEFAULT_WEEK,
     TOKEN_NAME,
     Api,
+    BootstrapError,
     Output,
     Reply,
     Settings,
@@ -183,6 +185,43 @@ async def test_a_fresh_home_assistant_is_set_up_completely(home: Home) -> None:
     }
     # Nothing is left half-way.
     assert hass.config_entries.flow.async_progress() == []
+    # What onboarding set up by itself is gone again, and the output says so.
+    for domain in ("radio_browser", "google_translate", "shopping_list"):
+        assert hass.config_entries.async_entries(domain) == []
+        assert f"removed {domain} (" in run.output
+
+
+async def test_the_same_integrations_added_by_hand_are_kept(home: Home) -> None:
+    assert (await home.run()).ok
+    by_hand = MockConfigEntry(domain="shopping_list", title="Einkaufsliste", source="user")
+    by_hand.add_to_hass(home.hass)
+
+    run = await home.run()
+
+    assert run.ok, run.output
+    assert home.hass.config_entries.async_entries("shopping_list") == [by_hand]
+    assert "changed:" not in run.output
+
+
+async def test_onboarding_integrations_that_never_appear_are_waited_for_only_so_long(
+    home: Home,
+) -> None:
+    flows = home.hass.config_entries.flow
+    original = flows.async_init
+
+    async def nothing_from_onboarding(
+        handler: str, *, context: dict[str, Any] | None = None, **kwargs: Any
+    ) -> Any:
+        if (context or {}).get("source") == "onboarding":
+            return {"type": "abort", "reason": "declined"}
+        return await original(handler, context=context, **kwargs)
+
+    with patch.object(flows, "async_init", nothing_from_onboarding):
+        run = await home.run(onboarding_wait=0.5)
+
+    assert run.ok, run.output
+    assert "onboarding did not set up google_translate, radio_browser, shopping_list" in run.output
+    assert "changed:" not in (await home.run()).output
 
 
 def _time(value: str) -> Any:
@@ -405,6 +444,66 @@ async def test_a_broker_login_changed_in_env_reconfigures_the_entry(home: Home) 
     _store_entries(home)
     again = await home.run(mqtt=new.mqtt)
     assert "changed:" not in again.output
+
+
+async def test_fritz_box_tools_can_be_left_out(home: Home, fritz_box: Any) -> None:
+    fritz = Settings.from_json(
+        {
+            **_settings_json(home.settings),
+            "fritz_host": "http://127.0.0.1:8480",
+            "fritz_user": "cave",
+            "fritz_password": FRITZ_PASSWORD,
+            "fritz_tools": False,
+        }
+    )
+
+    run = await home.run(fritz_host=fritz.fritz_host, fritz=fritz.fritz, fritz_tools=False)
+
+    assert run.ok, run.output
+    (smarthome,) = home.hass.config_entries.async_entries("fritzbox")
+    assert smarthome.data["host"] == "http://127.0.0.1:8480"
+    assert home.hass.config_entries.async_entries("fritz") == []
+    assert "FRITZ!Box Tools is left out by request" in run.output
+    fritz_box.tools.assert_not_called()
+
+
+async def test_a_switch_is_created_switched_on_and_left_alone_afterwards(home: Home) -> None:
+    switches = (("input_boolean.demo_someone_home", "Demo: someone is home"),)
+
+    run = await home.run(switches=switches)
+
+    assert run.ok, run.output
+    state = home.hass.states.get("input_boolean.demo_someone_home")
+    assert state.state == "on"
+    assert state.name == "Demo: someone is home"
+    # Switched off by someone: a second run leaves it off and changes nothing.
+    await home.hass.services.async_call(
+        "input_boolean", "turn_off", {"entity_id": "input_boolean.demo_someone_home"}, blocking=True
+    )
+    before = await snapshot(home)
+    again = await home.run(switches=switches)
+    assert again.ok, again.output
+    assert "changed:" not in again.output
+    assert home.hass.states.get("input_boolean.demo_someone_home").state == "off"
+    assert await snapshot(home) == before
+
+
+async def test_a_switch_created_but_not_yet_named_is_finished(home: Home) -> None:
+    assert (await home.run()).ok
+    await _ws(home, "input_boolean/create", name="demo_someone_home")
+
+    run = await home.run(switches=(("input_boolean.demo_someone_home", "Demo: someone is home"),))
+
+    assert run.ok, run.output
+    state = home.hass.states.get("input_boolean.demo_someone_home")
+    assert (state.state, state.name) == ("on", "Demo: someone is home")
+
+
+def test_switches_must_be_input_booleans() -> None:
+    with pytest.raises(BootstrapError, match="switches"):
+        Settings.from_json(
+            {**_minimal_json(), "switches": [{"entity_id": "switch.x", "name": "X"}]}
+        )
 
 
 async def test_the_fritz_integrations_are_set_up_when_env_names_a_fritz_box(

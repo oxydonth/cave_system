@@ -24,6 +24,11 @@ import homeassistant.components.mqtt.config_flow  # noqa: F401 - imported for pa
 import pytest
 from homeassistant.core import HomeAssistant
 from homeassistant.setup import async_setup_component
+from pytest_homeassistant_custom_component.common import (
+    MockConfigEntry,
+    MockModule,
+    mock_integration,
+)
 
 from tools.bootstrap import Output, Settings, bootstrap
 
@@ -113,11 +118,14 @@ async def home(
         "onboarding",
         "websocket_api",
         "schedule",
+        "input_boolean",
         "person",
         "file_upload",
         "network",
     ):
         assert await async_setup_component(hass, domain, {})
+    for domain in ONBOARDING_ENTRIES:  # stand-ins, so that their entries can be removed
+        mock_integration(hass, MockModule(domain))
     client = await aiohttp_client(hass.http.app)
     url = str(client.make_url("/")).rstrip("/")
 
@@ -142,6 +150,7 @@ async def home(
             "heating_file": str(heating),
             "config_entries_file": str(tmp_path / "config" / ".storage" / "core.config_entries"),
             "timeout": 10,
+            "onboarding_wait": 5,
         }
     )
     result = Home(hass, url, settings)
@@ -164,17 +173,30 @@ async def home(
 
 def _without_onboarding_flows(hass: HomeAssistant) -> Any:
     """Onboarding's core_config step starts flows for integrations that go to the internet
-    (radio browser, Google Translate). In the container they run; here they are dropped."""
+    (radio browser, Google Translate) and for the shopping list; their client libraries are not
+    installed here. The entries those flows create are added directly instead, with the source
+    `onboarding`, as their flows would (`met` declines without a home location)."""
     original = hass.config_entries.flow.async_init
 
     async def async_init(
         handler: str, *, context: dict[str, Any] | None = None, **kwargs: Any
     ) -> Any:
         if (context or {}).get("source") == "onboarding":
+            if handler in ONBOARDING_ENTRIES:
+                MockConfigEntry(
+                    domain=handler, title=ONBOARDING_ENTRIES[handler], source="onboarding"
+                ).add_to_hass(hass)
             return {"type": "abort", "reason": "not_in_tests"}
         return await original(handler, context=context, **kwargs)
 
     return async_init
+
+
+ONBOARDING_ENTRIES = {
+    "radio_browser": "Radio Browser",
+    "google_translate": "Google Translate text-to-speech",
+    "shopping_list": "Shopping list",
+}
 
 
 FRITZ_LIBRARIES = (
