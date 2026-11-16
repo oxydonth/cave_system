@@ -29,6 +29,7 @@ from typing import Any
 import aiohttp
 import pytest
 
+from cave_ops.commands.demo import default_data
 from cave_ops.envfile import load_env
 from cave_ops.ha import HAClient, HAError
 from tools.bootstrap import ONBOARDING_STEPS, WebSocket
@@ -64,29 +65,15 @@ class Stack:
 
     @property
     def env_file(self) -> Path:
-        return self.root / ("data/demo/demo.env" if self.kind == "demo" else ".env")
+        if self.kind == "demo":
+            # `./cave demo`'s default state directory, or the one it was given with --data.
+            data = os.environ.get("CAVE_E2E_DEMO_DATA")
+            return (Path(data) if data else default_data()) / "demo.env"
+        return self.root / ".env"
 
     @property
     def env(self) -> dict[str, str]:
         return load_env(self.env_file)
-
-    @property
-    def compose(self) -> list[str]:
-        """``docker compose`` with this stack's project and files."""
-        if self.kind == "demo":
-            return [
-                "docker",
-                "compose",
-                "-p",
-                "cave-demo",
-                "-f",
-                "compose.yaml",
-                "-f",
-                "compose.sim.yaml",
-                "--env-file",
-                str(self.env_file),
-            ]
-        return ["docker", "compose"]
 
     def control(self, method: str, path: str, body: Any = None) -> Any:
         """The simulators' control API (sim/README.md)."""
@@ -126,6 +113,7 @@ class Stack:
             timeout=timeout,
             check=False,
         )
+        mask_in_job_log(self.token_file)  # a run may have made a new script token
         print(f"$ ./cave {' '.join(args)}  (exit status {done.returncode})")  # noqa: T201
         print(done.stdout + done.stderr)  # noqa: T201
         return done
@@ -209,6 +197,15 @@ class Stack:
                 info.st_mtime_ns,
             ),
         }
+
+
+def mask_in_job_log(token_file: Path) -> None:
+    """In GitHub Actions, have the runner mask the script token in everything printed later."""
+    if os.environ.get("GITHUB_ACTIONS") != "true" or not token_file.is_file():
+        return
+    token = token_file.read_text(encoding="utf-8").strip()
+    if token:
+        print(f"::add-mask::{token}")  # noqa: T201 - a workflow command; the runner hides it
 
 
 @pytest.fixture(scope="session")

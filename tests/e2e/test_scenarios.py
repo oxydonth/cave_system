@@ -110,6 +110,10 @@ class Home:
             return "off"
         return state["occupied_heating_setpoint"]
 
+    def set_commands(self, device: str) -> int:
+        """How many set commands the fake FRITZ!Box has received for ``device``."""
+        return int(self.stack.device(device)["set_commands"])
+
     # --- waiting for outcomes
     def room_at(self, room: str, target: float, reason: str, timeout: float = 30) -> None:
         def reached() -> bool:
@@ -274,10 +278,13 @@ def test_the_room_sensor_feeds_the_thermostats(home: Home) -> None:
 
 
 def test_a_slow_fritz_thermostat_is_waited_for_not_resent_to(home: Home) -> None:
-    delay = 40  # longer than confirm_timeout, shorter than confirm_timeout_slow
+    # The box reports the new setpoint after 40 s: longer than confirm_timeout, after which a
+    # fast thermostat's command is resent, and shorter than confirm_timeout_slow.
+    delay = 40
     assert CONFIRM_TIMEOUT < delay < TIMING.confirm_timeout_slow.total_seconds() - 30
     home.stack.control("POST", "/api/fritzbox", {"report_delay": delay})
     try:
+        commands_before = home.set_commands("bad_heizung")
         sent = time.monotonic()
         home.call("climate", "set_temperature", entity_id="climate.cave_bathroom", temperature=23)
         home.room_at("bathroom", 23.0, "override")
@@ -294,7 +301,9 @@ def test_a_slow_fritz_thermostat_is_waited_for_not_resent_to(home: Home) -> None
         home.wait_until(confirmed, "the slow FRITZ! thermostat to confirm 23 °C", 120)
         took = time.monotonic() - sent
         assert took > CONFIRM_TIMEOUT  # longer than a fast thermostat may take
-        assert "pending" in seen  # it was waited for
+        # Exactly one command for the change: waited for, not resent after confirm_timeout.
+        assert home.set_commands("bad_heizung") - commands_before == 1
+        assert "pending" in seen
         assert "unresponsive" not in seen
         assert home.state("binary_sensor.cave_bathroom_problem")["state"] == "off"
         assert home.state("climate.bad_heizung")["attributes"]["temperature"] == 23.0
@@ -354,7 +363,7 @@ def test_a_zigbee_thermostat_that_goes_offline_is_brought_in_line_when_it_return
     home.devices_at("living_room", COMFORT)
 
 
-def test_a_fritz_thermostat_that_goes_offline_makes_its_room_unavailable_until_it_returns(
+def test_a_fritz_thermostat_that_goes_offline_is_brought_in_line_when_it_returns(
     home: Home,
 ) -> None:
     home.stack.control("POST", "/api/devices/bad_heizung/availability", {"online": False})
@@ -365,6 +374,13 @@ def test_a_fritz_thermostat_that_goes_offline_makes_its_room_unavailable_until_i
 
     home.wait_until(gone, "the bathroom, whose only thermostat is gone, to be unavailable", 60)
     assert home.statuses("bathroom")["climate.bad_heizung"] == "unavailable"
+    # The room's target changes while the thermostat is gone; nothing can be sent to it.
+    commands_while_gone = home.set_commands("bad_heizung")
+    home.set_schedule("bathroom", on=False)
+    home.wait_until(lambda: home.reason("bathroom") == "eco", "the bathroom to be at eco", 30)
+    home.poll_fritzbox()
+    assert home.device_target("bad_heizung") == COMFORT
+    assert home.set_commands("bad_heizung") == commands_while_gone
 
     home.stack.control("POST", "/api/devices/bad_heizung/availability", {"online": True})
 
@@ -373,4 +389,8 @@ def test_a_fritz_thermostat_that_goes_offline_makes_its_room_unavailable_until_i
         return home.room("bathroom")["state"] == "heat"
 
     home.wait_until(back, "the bathroom to be back", 60)
+    home.devices_at("bathroom", ECO, timeout=90)  # brought in line on its return
+    assert home.set_commands("bad_heizung") > commands_while_gone
+    home.set_schedule("bathroom", on=True)
+    home.room_at("bathroom", COMFORT, "comfort")
     home.devices_at("bathroom", COMFORT, timeout=90)

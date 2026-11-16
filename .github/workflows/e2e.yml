@@ -23,8 +23,6 @@ jobs:
     name: e2e
     runs-on: ubuntu-24.04
     timeout-minutes: 30
-    env:
-      DEMO_COMPOSE: -p cave-demo -f compose.yaml -f compose.sim.yaml --env-file data/demo/demo.env
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
@@ -41,9 +39,15 @@ jobs:
 
       - run: make setup
 
+      - name: Where the demo keeps its state (`./cave demo`'s default)
+        run: echo "DEMO_DATA=${XDG_STATE_HOME:-${HOME}/.local/state}/cave/demo" >> "${GITHUB_ENV}"
+
       # --- part 1: first-run setup on the home's stack
       - name: Initialise
-        run: ./cave init
+        run: |
+          ./cave init
+          # From here on the runner masks every generated secret in the job log.
+          tests/e2e/mask-secrets.sh .env
 
       - name: Pull the images
         run: docker compose pull --quiet
@@ -65,7 +69,9 @@ jobs:
 
       # --- part 2: the demo and the scenarios
       - name: Start the demo
-        run: ./cave demo --timeout 420
+        run: |
+          ./cave demo --timeout 420
+          tests/e2e/mask-secrets.sh "${DEMO_DATA}/demo.env" "${DEMO_DATA}/homeassistant/.cave/token"
 
       - name: The scenarios on the demo
         env:
@@ -74,8 +80,8 @@ jobs:
 
       - name: Home Assistant logged no unexpected errors (demo)
         run: |
-          # shellcheck disable=SC2086 # DEMO_COMPOSE is a list of options
-          tests/e2e/check-ha-log.sh ${DEMO_COMPOSE}
+          tests/e2e/check-ha-log.sh -p cave-demo -f compose.yaml -f compose.sim.yaml \
+            --env-file "${DEMO_DATA}/demo.env"
 
       # --- when something failed
       - name: Logs, when something failed
@@ -83,13 +89,13 @@ jobs:
         run: |
           mkdir -p "${RUNNER_TEMP}/logs"
           ./cave logs --tail all > "${RUNNER_TEMP}/logs/home.log" 2>&1 || true
-          if [ -f data/demo/demo.env ]; then
-            # shellcheck disable=SC2086
-            docker compose ${DEMO_COMPOSE} logs --no-color --tail all \
+          if [ -f "${DEMO_DATA}/demo.env" ]; then
+            docker compose -p cave-demo -f compose.yaml -f compose.sim.yaml \
+              --env-file "${DEMO_DATA}/demo.env" logs --no-color --tail all \
               > "${RUNNER_TEMP}/logs/demo.log" 2>&1 || true
           fi
-          # Every generated secret of both stacks is masked before the logs are shown or kept.
-          for file in .env data/demo/demo.env; do
+          # The runner masks what it prints; the files kept as the artifact are masked here.
+          for file in .env "${DEMO_DATA}/demo.env"; do
             [ -f "${file}" ] || continue
             grep -E '^CAVE_(MQTT_PASSWORD|HA_OWNER_PASSWORD|Z2M_FRONTEND_TOKEN|FRITZ_PASSWORD)=' "${file}" |
               cut -d= -f2- | while read -r secret; do

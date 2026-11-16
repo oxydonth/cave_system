@@ -62,8 +62,9 @@ def test_the_first_run_succeeds_and_says_what_it_did(first_run: Any, stack: Any)
         "Stack healthy",
     ):
         assert line in first_run.stdout
-    for secret in stack.secrets:
-        assert secret not in first_run.stdout + first_run.stderr
+    # A boolean, so that a failing assertion does not print the secret it found.
+    leaked = any(secret in first_run.stdout + first_run.stderr for secret in stack.secrets)
+    assert not leaked, "a generated password appears in the output of ./cave bootstrap"
 
 
 def test_nothing_that_reaches_the_internet_is_left_from_onboarding(
@@ -94,7 +95,8 @@ def assert_token_file_is_the_runners_alone(stack: Any) -> None:
         check=False,
     )
     assert other.returncode != 0
-    assert stack.token() not in other.stdout
+    shown = stack.token() in other.stdout
+    assert not shown, "another user read the script token"
 
 
 def test_home_assistant_accepts_the_token_and_runs_normally(first_run: Any, stack: Any) -> None:
@@ -306,6 +308,7 @@ def test_a_restarting_home_assistant_is_waited_for(first_run: Any, stack: Any) -
     run = stack.cave("bootstrap")
 
     assert run.returncode == 0
-    assert "Waiting until the stack is healthy" in run.stdout
+    # Only a wait produces this line: the stack was not healthy when the bootstrap began.
+    assert "Waiting until the stack is healthy (now not healthy: homeassistant" in run.stdout
     assert "bootstrap: done, nothing to change" in run.stdout
     assert stack.state() == before

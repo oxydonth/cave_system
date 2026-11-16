@@ -30,7 +30,10 @@ allowed=(
   '^$'
 )
 
-grep -E '^[0-9-]+ [0-9:.]+ (ERROR|CRITICAL) ' "${work}/ha.log" > "${work}/errors.log" || true
+# Errors and criticals of Home Assistant's logging, and any traceback, also one printed to
+# standard error outside logging (one that belongs to a logged error is reported with it).
+grep -E '^[0-9-]+ [0-9:.]+ (ERROR|CRITICAL) |^Traceback \(most recent call last\)' \
+  "${work}/ha.log" > "${work}/errors.log" || true
 for pattern in "${allowed[@]}"; do
   grep -vE "${pattern}" "${work}/errors.log" > "${work}/errors.next" || true
   mv "${work}/errors.next" "${work}/errors.log"
