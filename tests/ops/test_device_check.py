@@ -3,14 +3,19 @@
 The thermostat here is a small model of what Home Assistant's REST API shows for one: it takes
 ``climate.set_temperature`` and reports the target after a delay of simulated time (or never),
 and ``cave_heating.hold`` / ``release`` change what the room's problem sensor shows for it. The
-fake clock of ``ctx`` advances when the command sleeps, so nothing waits for real.
+fake clock of ``ctx`` advances when the command sleeps, so nothing waits for real. ``Faults``
+sits between the command and the fake Home Assistant and makes chosen requests fail.
 
-In every case the original target must be back and the hold released at the end.
+In every case the original target must be back and the hold released at the end, or the output
+must say that it could not be and when the hold ends by itself.
 """
 
 from __future__ import annotations
 
 import json
+import os
+import signal
+from datetime import UTC, datetime, timedelta
 from typing import Any
 
 import pytest
@@ -25,19 +30,28 @@ WINDOW = "switch.schlafzimmer_heizung_window_detection"
 SELECT = "select.wohnzimmer_heizung_fenster_temperature_sensor_select"
 CONFIG_RUN = ["docker", "compose", "run"]
 HOLD_SECONDS = 3 * 1200 + 60 + 300
+NOW = datetime(2026, 11, 16, 12, 0, tzinfo=UTC)
 
 
 def configured(
-    *, external: str | None = INPUT, settings: dict[str, Any] | None = None
+    *,
+    external: str | None = INPUT,
+    settings: dict[str, Any] | None = None,
+    found: bool = True,
+    platform: str | None = "mqtt",
 ) -> dict[str, Any]:
-    """What the container script prints for a thermostat in the applied heating.yaml."""
+    """What the container script prints for the thermostat and the applied heating.yaml."""
+    thermostat = {
+        "room": "bedroom",
+        "external_temperature": external,
+        "settings": {WINDOW: "off"} if settings is None else settings,
+        "temperature_sensor": SENSOR,
+    }
     return {
-        "thermostat": {
-            "room": "bedroom",
-            "external_temperature": external,
-            "settings": {WINDOW: "off"} if settings is None else settings,
-            "temperature_sensor": SENSOR,
-        }
+        "thermostat": thermostat if found else None,
+        "platform": platform,
+        "rooms": ["bedroom", "living_room"],
+        "sensor_stale": 10800.0,
     }
 
 
@@ -58,7 +72,11 @@ class FakeThermostat:
         self.release_calls: list[float] = []
         self.input_value = 19.0
         self.states: dict[str, dict[str, Any]] = {
-            SENSOR: {"state": "19.4", "attributes": {}},
+            SENSOR: {
+                "state": "19.4",
+                "attributes": {},
+                "last_reported": (NOW - timedelta(minutes=20)).isoformat(),
+            },
             WINDOW: {"state": "on", "attributes": {}},
             SELECT: {
                 "state": "local_temperature",
@@ -122,13 +140,51 @@ class _Live(dict):  # type: ignore[type-arg]
         return self.thermostat.state(key) or default
 
 
+class Faults:
+    """Between the command and the fake Home Assistant: makes chosen requests fail.
+
+    ``fail[(domain, service)]`` is a list of answers for the successive calls of that service:
+    ``None`` passes the call through, ``500`` answers with that status without reaching Home
+    Assistant, ``"timeout"`` lets the call through and then raises a timeout, as when Home
+    Assistant applies it but answers too late. ``down`` refuses every connection.
+    """
+
+    def __init__(self, fake_ha: Any) -> None:
+        self.fake_ha = fake_ha
+        self.fail: dict[tuple[str, str], list[Any]] = {}
+        self.down = False
+
+    def __call__(self, method, url, headers, body, timeout):
+        if self.down:
+            raise ConnectionRefusedError("connection refused")
+        if "/api/services/" in url:
+            domain, service = url.rsplit("/", 2)[-2:]
+            answers = self.fail.get((domain, service))
+            if answers:
+                answer = answers.pop(0)
+                if answer == "timeout":
+                    self.fake_ha(method, url, headers, body, timeout)
+                    raise TimeoutError("timed out")
+                if answer is not None:
+                    return answer, b'{"message": "refused by the fake"}'
+        return self.fake_ha(method, url, headers, body, timeout)
+
+
 @pytest.fixture
-def thermostat(fake_ha, clock, ctx, write_token, fake_runner):
+def thermostat(fake_ha, clock, ctx, write_token, fake_runner, monkeypatch):
     """A checkout that is initialised, a token, and the thermostat configured in the file."""
     ctx.paths.env_file.write_text("", encoding="utf-8")
     write_token()
     answer(fake_runner, configured())
+    monkeypatch.setattr(device_check, "_utcnow", lambda: NOW + timedelta(seconds=clock.now))
     return FakeThermostat(fake_ha, clock)
+
+
+@pytest.fixture
+def faults(ctx, fake_ha):
+    wrapper = Faults(fake_ha)
+    ctx.transport = wrapper
+    return wrapper
 
 
 def answer(fake_runner, payload: Any) -> None:
@@ -137,6 +193,10 @@ def answer(fake_runner, payload: Any) -> None:
 
 def calls(fake_ha) -> list[tuple[str, str, dict[str, Any]]]:
     return [call for call in fake_ha.service_calls if call[0] != "persistent_notification"]
+
+
+def services(fake_ha) -> list[str]:
+    return [call[1] for call in calls(fake_ha)]
 
 
 def rows(out: str) -> dict[str, str]:
@@ -148,6 +208,9 @@ def rows(out: str) -> dict[str, str]:
             if marker in line + " ":
                 table[line.split(marker)[0].strip()] = result
     return table
+
+
+# --- the normal cases ----------------------------------------------------------------------
 
 
 def test_a_device_that_passes(run_cave, fake_ha, fake_runner, thermostat):
@@ -164,11 +227,13 @@ def test_a_device_that_passes(run_cave, fake_ha, fake_runner, thermostat):
     ]
     table = rows(result.out)
     assert table["accepts 21.5 °C and reports it back"] == "pass"
+    assert table[f"external input {INPUT} accepts 19.4"] == "pass"
     assert table[f"setting {WINDOW} can be off"] == "pass"
     assert table["original target 21 °C restored"] == "pass"
     assert table["hold released"] == "pass"
     timing = next(line for line in result.out.splitlines() if "reports it back" in line)
     assert "6.0 s" in timing, "how long the thermostat took to report the target"
+    assert "until Home Assistant showed it (FRITZ!: what the box reports" in timing
     assert thermostat.target == 21.0
     assert not thermostat.held
     # The configuration is read with the integration's own loader in a one-off container.
@@ -178,6 +243,24 @@ def test_a_device_that_passes(run_cave, fake_ha, fake_runner, thermostat):
     assert run.args[-2:] == (ENTITY, "/config/cave/.applied/heating.yaml")
 
 
+def test_the_time_counts_from_before_the_command(run_cave, fake_ha, clock, thermostat, faults):
+    """A call that itself takes long (the FRITZ! integration polls the box within it) counts."""
+    original = faults.fake_ha
+
+    def slow(method, url, headers, body, timeout):
+        if url.endswith("/climate/set_temperature"):
+            clock.now += 4.0
+        return original(method, url, headers, body, timeout)
+
+    faults.fake_ha = slow
+    thermostat.delay = 2.0
+
+    result = run_cave("device-check", ENTITY)
+
+    timing = next(line for line in result.out.splitlines() if "reports it back" in line)
+    assert "6.0 s" in timing, "4 s in the call and 2 s until the report"
+
+
 def test_a_device_that_never_confirms(run_cave, fake_ha, clock, thermostat):
     thermostat.confirms = False
 
@@ -185,8 +268,7 @@ def test_a_device_that_never_confirms(run_cave, fake_ha, clock, thermostat):
 
     assert result.code == 1
     assert "The check failed." in result.out
-    table = rows(result.out)
-    assert table["accepts 21.5 °C and reports it back"] == "FAIL"
+    assert rows(result.out)["accepts 21.5 °C and reports it back"] == "FAIL"
     assert "no report within 300 s" in result.out
     assert ("climate", "set_temperature", {"entity_id": ENTITY, "temperature": 21.0}) in calls(
         fake_ha
@@ -229,56 +311,78 @@ def test_a_device_that_is_unavailable(run_cave, fake_ha, thermostat):
 
     assert result.code == 1
     assert rows(result.out)["is available"] == "FAIL"
-    assert not [call for call in calls(fake_ha) if call[0] == "climate"], "nothing was sent"
-    assert [call[1] for call in calls(fake_ha)] == ["hold", "release"]
+    assert services(fake_ha) == ["hold", "release"], "nothing was sent to the thermostat"
     assert thermostat.target == 21.0
     assert not thermostat.held
 
 
-def test_a_restart_during_the_check_cannot_complete_and_cleans_up(run_cave, fake_ha, thermostat):
-    """The hold is not kept across a restart: the check says it could not complete (not that the
-    device failed), holds the thermostat again, restores the target and releases."""
-    thermostat.lose_hold_on_set = True
-
-    result = run_cave("device-check", ENTITY)
-
-    assert result.code == 2
-    assert "The check could not complete" in result.out
-    assert "did Home Assistant restart?" in result.out
-    assert "The check failed." not in result.out
-    assert [(call[0], call[1]) for call in calls(fake_ha)] == [
-        ("cave_heating", "hold"),
-        ("climate", "set_temperature"),
-        ("cave_heating", "hold"),
-        ("climate", "set_temperature"),
-        ("cave_heating", "release"),
-    ]
-    assert thermostat.target == 21.0
-    assert not thermostat.held
-
-
-def test_a_thermostat_that_is_off_cannot_be_checked_and_is_left_alone(
-    run_cave, fake_ha, thermostat
+@pytest.mark.parametrize(
+    ("mode", "target", "words"),
+    [
+        ("off", 21.0, "run the check while its room heats"),
+        ("heat", None, "holiday mode"),
+    ],
+)
+def test_a_thermostat_that_is_off_or_shows_no_target_is_left_alone(
+    run_cave, fake_ha, thermostat, mode, target, words
 ):
-    thermostat.mode = "off"
+    thermostat.mode = mode
+    thermostat.target = target
 
     result = run_cave("device-check", ENTITY)
 
     assert result.code == 2
-    assert "run the check while its room heats" in result.out
-    assert [call[1] for call in calls(fake_ha)] == ["hold", "release"]
+    assert words in result.out
+    assert services(fake_ha) == ["hold", "release"]
 
 
-def test_a_thermostat_not_in_the_file_is_checked_without_a_hold(
+# --- what is refused ---------------------------------------------------------------------
+
+
+@pytest.mark.parametrize(
+    ("entity", "payload"),
+    [
+        ("climate.cave_bedroom", configured()),
+        ("climate.cave_attic", configured(found=False)),  # by its name alone
+        ("climate.renamed_room", configured(found=False, platform="cave_heating")),
+    ],
+)
+def test_a_room_thermostat_of_cave_heating_is_refused(
+    run_cave, fake_ha, fake_runner, thermostat, entity, payload
+):
+    """Setting a temperature on climate.cave_<room> would start a six-hour override."""
+    answer(fake_runner, payload)
+
+    result = run_cave("device-check", entity)
+
+    assert result.code == 1
+    assert "belongs to cave_heating itself" in result.err
+    assert calls(fake_ha) == []
+
+
+def test_a_thermostat_not_in_the_file_is_refused_without_the_option(
     run_cave, fake_ha, fake_runner, thermostat
 ):
-    answer(fake_runner, {"thermostat": None})
+    answer(fake_runner, configured(found=False))
 
     result = run_cave("device-check", ENTITY)
+
+    assert result.code == 1
+    assert "--not-in-heating-yaml" in result.err
+    assert calls(fake_ha) == []
+
+
+def test_with_the_option_a_thermostat_not_in_the_file_is_checked_without_a_hold(
+    run_cave, fake_ha, fake_runner, thermostat
+):
+    answer(fake_runner, configured(found=False))
+
+    result = run_cave("device-check", ENTITY, "--not-in-heating-yaml")
 
     assert result.code == 0, result.out
     assert rows(result.out)["held for the check"] == "skipped"
-    assert [call[1] for call in calls(fake_ha)] == ["set_temperature", "set_temperature"]
+    assert "the controller does not drive it" in result.out
+    assert services(fake_ha) == ["set_temperature", "set_temperature"]
     assert thermostat.target == 21.0
 
 
@@ -294,24 +398,24 @@ def test_a_setting_without_the_configured_option_fails(run_cave, fake_ha, fake_r
     assert not thermostat.held
 
 
-def test_interrupted_it_still_restores_and_releases(run_cave, ctx, clock, thermostat):
-    """Ctrl-C while waiting for the report: the cleanup runs before the command exits."""
-    sleep = clock.sleep
-    interrupted = []
+@pytest.mark.parametrize("sensor", ["unavailable", "stale"])
+def test_the_external_input_is_written_only_with_a_fresh_room_sensor_reading(
+    run_cave, fake_ha, thermostat, sensor
+):
+    """Anything but the room's current temperature would leave the thermostat regulating on a
+    made-up value that the controller's stopped feed never corrects."""
+    if sensor == "unavailable":
+        thermostat.states[SENSOR] = {"state": "unavailable", "attributes": {}}
+    else:
+        thermostat.states[SENSOR]["last_reported"] = (NOW - timedelta(hours=3)).isoformat()
 
-    def interrupt_once(seconds: float) -> None:
-        if not interrupted:
-            interrupted.append(seconds)
-            raise KeyboardInterrupt
-        sleep(seconds)
-
-    ctx.sleep = interrupt_once
     result = run_cave("device-check", ENTITY)
 
-    assert result.code == 130
-    assert thermostat.target == 21.0
-    assert thermostat.release_calls
-    assert not thermostat.held
+    assert result.code == 0, result.out
+    assert rows(result.out)[f"external input {INPUT} accepts the room's temperature"] == "skipped"
+    assert "the controller's feed is stopped" in result.out
+    assert "set_value" not in services(fake_ha)
+    assert thermostat.input_value == 19.0
 
 
 def test_without_a_token_nothing_is_touched(run_cave, fake_ha, ctx, fake_runner):
@@ -341,3 +445,188 @@ def test_a_timeout_that_needs_a_hold_over_four_hours_is_refused(run_cave, fake_h
     assert result.code == 1
     assert "would exceed four hours" in result.err
     assert calls(fake_ha) == []
+
+
+# --- errors from Home Assistant ------------------------------------------------------------
+
+
+def test_a_refused_command_cannot_complete_and_the_hold_is_released(
+    run_cave, fake_ha, thermostat, faults
+):
+    """A FRITZ! thermostat with its key lock on: Home Assistant answers 500. Nothing changed, so
+    nothing is restored; the hold is released and the table is printed."""
+    faults.fail[("climate", "set_temperature")] = [500]
+
+    result = run_cave("device-check", ENTITY)
+
+    assert result.code == 2
+    assert "The check could not complete: Home Assistant refused a request" in result.out
+    assert rows(result.out)["hold released"] == "pass"
+    assert services(fake_ha) == ["hold", "release"]
+    assert thermostat.release_calls
+    assert thermostat.target == 21.0
+
+
+def test_a_refused_restore_is_reported_and_the_hold_still_released(
+    run_cave, fake_ha, thermostat, faults
+):
+    faults.fail[("climate", "set_temperature")] = [None, 500]
+
+    result = run_cave("device-check", ENTITY)
+
+    assert result.code == 2
+    assert rows(result.out)["original target 21 °C restored"] == "FAIL"
+    assert "Home Assistant refused to restore" in result.out
+    assert rows(result.out)["hold released"] == "pass"
+    assert thermostat.release_calls
+    assert not thermostat.held
+
+
+def test_a_refused_release_says_when_the_hold_ends(run_cave, fake_ha, thermostat, faults):
+    faults.fail[("cave_heating", "release")] = [500]
+
+    result = run_cave("device-check", ENTITY)
+
+    assert result.code == 1
+    assert rows(result.out)["hold released"] == "FAIL"
+    assert "could not be released; it ends by itself at about" in result.out
+    assert thermostat.target == 21.0
+
+
+def test_a_hold_call_that_timed_out_is_still_released(run_cave, fake_ha, thermostat, faults):
+    """Home Assistant applied the hold but answered too late: it must be released all the same."""
+    faults.fail[("cave_heating", "hold")] = ["timeout"]
+
+    result = run_cave("device-check", ENTITY)
+
+    assert result.code == 2
+    assert "could not be reached" in result.out
+    assert thermostat.hold_calls
+    assert thermostat.release_calls
+    assert not thermostat.held
+
+
+def test_a_restart_during_the_check_cannot_complete_and_cleans_up(run_cave, fake_ha, thermostat):
+    """The hold is not kept across a restart: the check says it could not complete (not that the
+    device failed), holds the thermostat again for the whole restore, restores and releases."""
+    thermostat.lose_hold_on_set = True
+
+    result = run_cave("device-check", ENTITY)
+
+    assert result.code == 2
+    assert "The check could not complete" in result.out
+    assert "did Home Assistant restart?" in result.out
+    assert "The check failed." not in result.out
+    assert services(fake_ha) == ["hold", "set_temperature", "hold", "set_temperature", "release"]
+    assert thermostat.hold_calls[1][1] == 2 * 1200 + 300, "covers the restore it protects"
+    assert thermostat.target == 21.0
+    assert not thermostat.held
+
+
+def test_home_assistant_down_until_the_hold_ends_is_reported_as_ended(
+    run_cave, fake_ha, clock, thermostat, faults
+):
+    """Home Assistant goes away after the check's target was confirmed and stays away: the
+    restore gives up, and the hold, which cannot be released, is reported as ended once its time
+    is over, not as left behind."""
+    original = faults.fake_ha
+
+    def down_after_the_input(method, url, headers, body, timeout):
+        if url.endswith("/number/set_value"):
+            faults.down = True
+        return original(method, url, headers, body, timeout)
+
+    faults.fake_ha = down_after_the_input
+    thermostat.held = True
+
+    result = run_cave("device-check", ENTITY, "--timeout", "60")
+
+    assert result.code == 2
+    assert "Home Assistant could not be reached" in result.out
+    assert rows(result.out)["original target 21 °C restored"] == "FAIL"
+    assert "the controller brings it to the room's target once it runs" in result.out
+    assert "it had ended by itself" in result.out
+    assert "could not be released" not in result.out
+
+
+# --- interruptions -------------------------------------------------------------------------
+
+
+def _interrupt_on_first_sleep(ctx, clock, action):
+    sleep = clock.sleep
+    fired = []
+
+    def sleep_once(seconds: float) -> None:
+        if not fired:
+            fired.append(seconds)
+            action()
+        sleep(seconds)
+
+    ctx.sleep = sleep_once
+
+
+def _keyboard_interrupt() -> None:
+    raise KeyboardInterrupt
+
+
+@pytest.mark.parametrize(
+    "how",
+    [
+        "ctrl-c",
+        pytest.param(
+            "SIGTERM",
+            marks=pytest.mark.skipif(not hasattr(signal, "SIGTERM"), reason="no SIGTERM"),
+        ),
+        pytest.param(
+            "SIGHUP",
+            marks=pytest.mark.skipif(not hasattr(signal, "SIGHUP"), reason="no SIGHUP"),
+        ),
+    ],
+)
+def test_interrupted_it_restores_releases_and_prints_the_table(
+    run_cave, ctx, clock, fake_ha, thermostat, how
+):
+    """Ctrl-C, or SIGTERM / SIGHUP (a dropped SSH session) while waiting for the report: the
+    clean-up runs, the table is printed, and the user is told how to abandon it."""
+    if how == "ctrl-c":
+        _interrupt_on_first_sleep(ctx, clock, _keyboard_interrupt)
+    else:
+        number = getattr(signal, how)
+        _interrupt_on_first_sleep(ctx, clock, lambda: os.kill(os.getpid(), number))
+    before = {name: signal.getsignal(getattr(signal, name)) for name in ("SIGTERM", "SIGHUP")}
+
+    result = run_cave("device-check", ENTITY)
+
+    assert result.code == 130
+    assert "Interrupting again leaves it as it is; its hold then ends by itself at about" in (
+        result.out
+    )
+    assert rows(result.out)["hold released"] == "pass"
+    assert "original target 21 °C restored" in rows(result.out)
+    assert thermostat.target == 21.0
+    assert thermostat.release_calls
+    assert not thermostat.held
+    after = {name: signal.getsignal(getattr(signal, name)) for name in ("SIGTERM", "SIGHUP")}
+    assert after == before, "the previous signal handlers are back"
+
+
+def test_a_second_interrupt_abandons_the_restore_but_still_releases(
+    run_cave, ctx, clock, fake_ha, thermostat
+):
+    sleep = clock.sleep
+    count = []
+
+    def interrupt_twice(seconds: float) -> None:
+        count.append(seconds)
+        if len(count) in (1, 2):
+            raise KeyboardInterrupt
+        sleep(seconds)
+
+    ctx.sleep = interrupt_twice
+
+    result = run_cave("device-check", ENTITY)
+
+    assert result.code == 130
+    assert rows(result.out)["clean-up"] == "skipped"
+    assert rows(result.out)["hold released"] == "pass"
+    assert thermostat.release_calls

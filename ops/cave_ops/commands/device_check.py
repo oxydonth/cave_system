@@ -4,31 +4,39 @@ Concept sections 4.4 and 8, work package 7. Through Home Assistant's REST API wi
 token, against the running system:
 
 1. Read the thermostat's entry from the applied ``heating.yaml`` (in a one-off Home Assistant
-   container, with the integration's own loader): its room, its external temperature input and
-   its ``settings``.
+   container, with the integration's own loader): its room, its external temperature input, its
+   ``settings``, the file's ``sensor_stale``, and the entity's platform from Home Assistant's
+   entity registry. A room thermostat ``climate.cave_<room>``, or anything else of
+   ``cave_heating`` itself, is refused: setting a temperature on it would start an override.
+   A thermostat the file does not name is refused too, unless ``--not-in-heating-yaml`` says the
+   check is meant for one paired but not yet applied; it is then checked without a hold.
 2. Hold it with ``cave_heating.hold``, for longer than this check can take, so the controller
-   neither reacts to the check nor passes it on to the room. A thermostat the file does not
-   name is not driven by the controller and is checked without a hold.
+   neither reacts to the check nor passes it on to the room.
 3. Check that it exists, is available and reports a temperature; that it accepts a target half a
    degree higher and reports it back, and how long that took; where the file names them, that
-   the external input accepts a value and that the settings entities exist with the configured
-   options.
-4. Whatever happens, also on an error or Ctrl-C: restore the original target (and wait until the
-   thermostat reports it, so that no late report of the check's own command arrives after the
-   release) and release the hold. If the command is killed, the hold ends by itself.
+   the external input accepts the room sensor's fresh reading (and nothing else) and that the
+   settings entities exist with the configured options.
+4. Whatever happens, also on an error from Home Assistant, Ctrl-C, SIGTERM or SIGHUP: restore the
+   original target (and wait until the thermostat reports it, so that no late report of the
+   check's own command arrives after the release), and, in a step of its own that runs even when
+   the restore fails, release the hold. If the command is killed outright, the hold ends by
+   itself, and the user is always told when.
 
-If the hold disappears during the check (Home Assistant restarted), the result is "the check
-could not complete", not a failure: the check holds the thermostat again to restore it.
-
-Exit status: 0 every check passed, 1 a check failed, 2 the check could not complete.
+The result table is always printed. Exit status: 0 every check passed, 1 a check failed, 2 the
+check could not complete (an error from Home Assistant, the hold lost to a restart, the
+thermostat off), 130 interrupted.
 """
 
 from __future__ import annotations
 
 import argparse
+import contextlib
 import json
 import math
+import signal
+from collections.abc import Callable, Iterator
 from dataclasses import dataclass, field
+from datetime import UTC, datetime, timedelta
 from typing import Any
 
 from ..container import run_in_homeassistant
@@ -44,27 +52,45 @@ DEFAULT_TIMEOUT = 1200.0
 DEFAULT_INTERVAL = 2.0
 # Waiting for an external input, which Zigbee2MQTT reports at once.
 INPUT_TIMEOUT = 60.0
-# Added to the hold for the requests themselves (each may take its 10 s) and the cleanup.
+# Added to every hold for the requests themselves (each may take its 10 s) and the release.
 HOLD_MARGIN = 300.0
 HOLD_MAX = 4 * 3600.0  # what cave_heating.hold accepts (concept 5.5)
-# Retrying the cleanup while Home Assistant is restarting.
-CLEANUP_PATIENCE = 300.0
+# How long the clean-up keeps trying while Home Assistant restarts (a Raspberry Pi can take
+# several minutes); the hold covers it.
+CLEANUP_PATIENCE = 900.0
+RETRY_PAUSE = 5.0
 STEP = 0.5
 UNUSABLE = ("unavailable", "unknown")
 MARKER = "CAVE-DEVICE-CHECK "
+OWN_PREFIX = "climate.cave_"
+INTEGRATION = "cave_heating"
+TIMING_NOTE = (
+    "until Home Assistant showed it (FRITZ!: what the box reports, polled every 30 s; "
+    "see docs/devices.md)"
+)
 
 # Runs in the Home Assistant container with /config as the working directory, so that the
-# integration's own loader reads the applied copy (with its version conversion).
+# integration's own loader reads the applied copy (with its version conversion), and Home
+# Assistant's entity registry tells which integration the entity belongs to.
 CONFIG_SCRIPT = """\
 import json, sys
 from pathlib import Path
 from custom_components.cave_heating.schema import ConfigError, load_file
 
 entity, path = sys.argv[1], Path(sys.argv[2])
+platform = None
+try:
+    registry = json.loads(Path(".storage/core.entity_registry").read_text(encoding="utf-8"))
+    for item in registry["data"]["entities"]:
+        if item.get("entity_id") == entity:
+            platform = item.get("platform")
+except (OSError, ValueError, KeyError, TypeError):
+    pass
 try:
     config = load_file(path)
 except ConfigError as error:
-    print("CAVE-DEVICE-CHECK " + json.dumps({"error": " ".join(error.errors)}))
+    answer = {"error": " ".join(error.errors), "platform": platform}
+    print("CAVE-DEVICE-CHECK " + json.dumps(answer))
     sys.exit(0)
 found = None
 for room in config.rooms:
@@ -76,8 +102,19 @@ for room in config.rooms:
                 "settings": dict(trv.settings),
                 "temperature_sensor": room.temperature_sensor,
             }
-print("CAVE-DEVICE-CHECK " + json.dumps({"thermostat": found}))
+answer = {
+    "thermostat": found,
+    "platform": platform,
+    "rooms": [room.id for room in config.rooms],
+    "sensor_stale": config.timing.sensor_stale.total_seconds(),
+}
+print("CAVE-DEVICE-CHECK " + json.dumps(answer))
 """
+
+
+def _utcnow() -> datetime:
+    """The wall clock, for the freshness of the room sensor and the hold's end (replaceable)."""
+    return datetime.now(UTC)
 
 
 class HoldLost(Exception):
@@ -105,6 +142,16 @@ class Thermostat:
 
 
 @dataclass
+class Lookup:
+    """What the container found: the thermostat's entry, and what tells it apart from others."""
+
+    thermostat: Thermostat | None
+    platform: str | None
+    rooms: list[str]
+    sensor_stale: float
+
+
+@dataclass
 class Run:
     """The state of one check."""
 
@@ -114,12 +161,15 @@ class Run:
     timeout: float
     interval: float
     config: Thermostat | None
+    sensor_stale: float = 3 * 3600.0
     rows: list[Row] = field(default_factory=list)
-    held: bool = False
+    # A hold was asked for and may be in effect (also when the call timed out), until released.
+    hold_requested: bool = False
+    hold_end: float | None = None  # ctx.monotonic() when the last hold asked for ends by itself
     incomplete: str | None = None
     original: float | None = None  # the target before the check
     wanted: float | None = None  # the target the check sends
-    changed: bool = False  # the check sent the thermostat a target that must be undone
+    changed: bool = False  # the check may have changed the target: it must be put back
     confirmed: bool = False  # the thermostat reported the check's target
 
     # --- results -----------------------------------------------------------------------------
@@ -130,6 +180,14 @@ class Run:
 
     def skip(self, check: str, note: str) -> None:
         self.rows.append(Row(check, "skipped", None, note))
+
+    def hold_ends(self) -> str:
+        """When the hold asked for ends by itself, in words."""
+        if self.hold_end is None:
+            return "now"
+        remaining = max(self.hold_end - self.ctx.monotonic(), 0.0)
+        at = (_utcnow() + timedelta(seconds=remaining)).astimezone().strftime("%H:%M")
+        return f"at about {at} (in {math.ceil(remaining / 60)} min)"
 
     # --- Home Assistant ----------------------------------------------------------------------
 
@@ -142,7 +200,7 @@ class Run:
 
     def still_held(self) -> bool:
         """Whether the controller still shows the thermostat as held."""
-        if not self.held:
+        if not self.hold_requested:
             return True
         sensor = self.state(self.problem_sensor())
         statuses = (sensor or {}).get("attributes", {}).get("thermostats") or {}
@@ -153,10 +211,16 @@ class Run:
             raise HoldLost
 
     def hold(self, seconds: float) -> None:
-        self.client.call_service(
-            "cave_heating", "hold", {"entity_id": self.entity, "duration": math.ceil(seconds)}
-        )
-        self.held = True
+        # Counted as held before the call: a call that times out may still have taken effect.
+        self.hold_requested = True
+        self.hold_end = self.ctx.monotonic() + seconds
+        try:
+            self.client.call_service(
+                INTEGRATION, "hold", {"entity_id": self.entity, "duration": math.ceil(seconds)}
+            )
+        except HAError:
+            self.hold_requested = False  # refused: no hold was taken
+            raise
 
     def target(self) -> float | None:
         state = self.state(self.entity)
@@ -164,9 +228,10 @@ class Run:
             return None
         return _number(state.get("attributes", {}).get("temperature"))
 
-    def wait_for(self, read: Any, expected: float, limit: float) -> float | None:
-        """Poll until ``read()`` reports ``expected``; the seconds it took, or None."""
-        start = self.ctx.monotonic()
+    def wait_for(
+        self, read: Callable[[], float | None], expected: float, limit: float, start: float
+    ) -> float | None:
+        """Poll until ``read()`` reports ``expected``; seconds since ``start``, or None."""
         while True:
             try:
                 value = read()
@@ -182,9 +247,15 @@ class Run:
             self.ctx.sleep(self.interval)
 
     def set_target(self, value: float) -> None:
-        self.client.call_service(
-            "climate", "set_temperature", {"entity_id": self.entity, "temperature": value}
-        )
+        """Send a target. A refused call changed nothing; an unanswered one may have."""
+        try:
+            self.client.call_service(
+                "climate", "set_temperature", {"entity_id": self.entity, "temperature": value}
+            )
+        except HAUnreachable:
+            self.changed = True
+            raise
+        self.changed = True
 
 
 def _number(value: Any) -> float | None:
@@ -195,6 +266,10 @@ def _number(value: Any) -> float | None:
     except (TypeError, ValueError):
         return None
     return number if math.isfinite(number) else None
+
+
+def _close(first: float | None, second: float | None) -> bool:
+    return first is not None and second is not None and abs(first - second) < 0.01
 
 
 def add_arguments(parser: argparse.ArgumentParser) -> None:
@@ -212,6 +287,12 @@ def add_arguments(parser: argparse.ArgumentParser) -> None:
         default=DEFAULT_INTERVAL,
         help=f"seconds between two looks at the thermostat (default {DEFAULT_INTERVAL:g})",
     )
+    parser.add_argument(
+        "--not-in-heating-yaml",
+        action="store_true",
+        help="check a thermostat the applied heating.yaml does not name yet (paired, not yet "
+        "applied); it is checked without a hold, because the controller does not drive it",
+    )
 
 
 def hold_seconds(timeout: float) -> float:
@@ -224,8 +305,13 @@ def hold_seconds(timeout: float) -> float:
     return 3 * timeout + INPUT_TIMEOUT + HOLD_MARGIN
 
 
-def read_config(ctx: Context, entity: str) -> Thermostat | None:
-    """The thermostat's entry in the applied heating.yaml; None if the file does not name it."""
+def rehold_seconds(timeout: float) -> float:
+    """A hold taken again during the clean-up covers the whole restore, two timeouts at most."""
+    return 2 * timeout + HOLD_MARGIN
+
+
+def read_config(ctx: Context, entity: str) -> Lookup:
+    """The thermostat's entry in the applied heating.yaml, its platform, and the room IDs."""
     applied = ctx.paths.container_path(ctx.paths.heating_applied)
     if applied is None:
         raise CaveError(f"{ctx.paths.heating_applied} is not inside the state directory")
@@ -239,17 +325,57 @@ def read_config(ctx: Context, entity: str) -> Thermostat | None:
             + (result.output.strip()[-500:] or f"exit status {result.returncode}")
         )
     answer = json.loads(lines[-1].removeprefix(MARKER))
+    if answer.get("platform") == INTEGRATION:
+        raise CaveError(_own_entity(entity))
     if "error" in answer:
         raise CaveError(f"the applied heating.yaml is not valid: {answer['error']}")
     found = answer.get("thermostat")
-    if found is None:
-        return None
-    return Thermostat(
-        room=found["room"],
-        external_temperature=found.get("external_temperature"),
-        settings=dict(found.get("settings") or {}),
-        temperature_sensor=found.get("temperature_sensor"),
+    thermostat = None
+    if found is not None:
+        thermostat = Thermostat(
+            room=found["room"],
+            external_temperature=found.get("external_temperature"),
+            settings=dict(found.get("settings") or {}),
+            temperature_sensor=found.get("temperature_sensor"),
+        )
+    return Lookup(
+        thermostat,
+        answer.get("platform"),
+        list(answer.get("rooms") or []),
+        float(answer.get("sensor_stale") or 3 * 3600.0),
     )
+
+
+def _own_entity(entity: str) -> str:
+    return (
+        f"{entity} belongs to cave_heating itself (a room thermostat climate.cave_<room>): "
+        "setting a temperature on it starts an override for the whole room. Name a radiator "
+        "thermostat of the room instead, as listed under its trvs in heating.yaml"
+    )
+
+
+@contextlib.contextmanager
+def _signals_interrupt() -> Iterator[None]:
+    """SIGTERM and SIGHUP (a dropped SSH session) interrupt the check like Ctrl-C, so the
+    clean-up runs; the previous handlers are back afterwards."""
+
+    def interrupt(signum: int, _frame: Any) -> None:
+        raise KeyboardInterrupt(signal.Signals(signum).name)
+
+    previous: dict[int, Any] = {}
+    for name in ("SIGTERM", "SIGHUP"):
+        number = getattr(signal, name, None)
+        if number is None:
+            continue
+        try:
+            previous[number] = signal.signal(number, interrupt)
+        except ValueError:  # not the main thread: leave the signals alone
+            continue
+    try:
+        yield
+    finally:
+        for number, handler in previous.items():
+            signal.signal(number, handler)
 
 
 def run(ctx: Context, args: argparse.Namespace) -> int:
@@ -257,6 +383,8 @@ def run(ctx: Context, args: argparse.Namespace) -> int:
     entity: str = args.entity
     if not entity.startswith("climate."):
         raise CaveError(f"{entity} is not a climate entity")
+    if entity.startswith(OWN_PREFIX):
+        raise CaveError(_own_entity(entity))
     if args.timeout <= 0 or args.interval <= 0:
         raise CaveError("--timeout and --interval must be more than zero")
     if hold_seconds(args.timeout) > HOLD_MAX:
@@ -268,26 +396,60 @@ def run(ctx: Context, args: argparse.Namespace) -> int:
         raise CaveError("there is no script token yet; run `./cave bootstrap` first")
 
     ctx.say(f"Reading {entity} from the applied heating.yaml ...")
-    config = read_config(ctx, entity)
-    check = Run(ctx, client, entity, args.timeout, args.interval, config)
-    try:
-        _check(check)
-    except HoldLost:
-        check.incomplete = (
-            "the hold ended during the check (did Home Assistant restart?); the results so far "
-            "are shown, but the check could not complete"
+    lookup = read_config(ctx, entity)
+    if entity in {f"{OWN_PREFIX}{room}" for room in lookup.rooms}:
+        raise CaveError(_own_entity(entity))
+    if lookup.thermostat is None and not args.not_in_heating_yaml:
+        raise CaveError(
+            f"{entity} is not in the applied heating.yaml, so cave_heating does not drive it and "
+            "nothing would be checked against the room. If it is paired but not yet applied, run "
+            "again with --not-in-heating-yaml to check it on its own, without a hold"
         )
-    except HAUnreachable as error:
-        check.incomplete = f"Home Assistant could not be reached: {error}"
-    finally:
-        _clean_up(check)
-    return _report(check)
+    check = Run(
+        ctx,
+        client,
+        entity,
+        args.timeout,
+        args.interval,
+        lookup.thermostat,
+        sensor_stale=lookup.sensor_stale,
+    )
+    interrupted = False
+    with _signals_interrupt():
+        try:
+            _check(check)
+        except HoldLost:
+            check.incomplete = (
+                "the hold ended during the check (did Home Assistant restart?); the results so "
+                "far are shown"
+            )
+        except HAUnreachable as error:
+            check.incomplete = f"Home Assistant could not be reached: {error}"
+        except HAError as error:
+            check.incomplete = f"Home Assistant refused a request: {error}"
+        except KeyboardInterrupt as stop:
+            interrupted = True
+            check.incomplete = f"interrupted ({stop or 'Ctrl-C'})"
+            ctx.say(
+                "Interrupted: putting the thermostat back. Interrupting again leaves it as it "
+                f"is; its hold then ends by itself {check.hold_ends()}."
+            )
+        try:
+            _clean_up(check)
+        except KeyboardInterrupt:
+            interrupted = True
+            check.skip("clean-up", "abandoned by a second interrupt")
+    code = _report(check)
+    return 130 if interrupted else code
 
 
 def _check(check: Run) -> None:
     ctx, entity = check.ctx, check.entity
     if check.config is None:
-        check.skip("held for the check", "not in heating.yaml: the controller does not drive it")
+        check.skip(
+            "held for the check",
+            "not in heating.yaml (--not-in-heating-yaml): the controller does not drive it",
+        )
     else:
         seconds = hold_seconds(check.timeout)
         check.hold(seconds)
@@ -305,74 +467,102 @@ def _check(check: Run) -> None:
     attributes = state.get("attributes", {})
     current = _number(attributes.get("current_temperature"))
     check.record(
-        "reports a temperature", current is not None, note=f"{current} °C" if current else ""
+        "reports a temperature",
+        current is not None,
+        note="" if current is None else f"{current:g} °C",
     )
 
     original = _number(attributes.get("temperature"))
-    if state.get("state") == "off" or original is None:
+    if state.get("state") == "off":
         check.incomplete = (
-            "the thermostat is off (its room is switched off, paused or in summer mode); run the "
-            "check while its room heats"
+            "the thermostat is off (its room is switched off or paused, or the home is in "
+            "summer mode); run the check while its room heats"
+        )
+        return
+    if original is None:
+        check.incomplete = (
+            "the thermostat shows no target (a FRITZ! thermostat in holiday mode or summer "
+            "mode, or with its dial turned to ON); run the check when it shows a target"
         )
         return
     maximum = _number(attributes.get("max_temp"))
     wanted = original + STEP
     if maximum is not None and wanted > maximum:
         wanted = original - STEP
-    check.original = original
+    check.original, check.wanted = original, wanted
     ctx.say(f"Setting {wanted:g} °C and waiting up to {check.timeout:g} s for the report ...")
-    check.changed = True
+    start = ctx.monotonic()
     check.set_target(wanted)
-    check.wanted = wanted
-    took = check.wait_for(check.target, wanted, check.timeout)
+    took = check.wait_for(check.target, wanted, check.timeout, start)
     check.confirmed = took is not None
     check.record(
         f"accepts {wanted:g} °C and reports it back",
         took is not None,
         took,
-        "" if took is not None else f"no report within {check.timeout:g} s",
+        TIMING_NOTE if took is not None else f"no report within {check.timeout:g} s",
     )
 
     if check.config is not None and check.config.external_temperature:
-        _check_input(check, check.config.external_temperature, current)
+        _check_input(check, check.config.external_temperature)
     if check.config is not None:
         for setting, value in check.config.settings.items():
             _check_setting(check, setting, value)
 
 
-def _check_input(check: Run, input_entity: str, current: float | None) -> None:
+def _fresh_sensor_reading(check: Run) -> tuple[float | None, str]:
+    """The room sensor's reading if the controller's feed would write it now, else why not."""
+    sensor = check.config.temperature_sensor if check.config is not None else None
+    if sensor is None:
+        return None, "the room has no temperature sensor, so the controller writes nothing"
+    state = check.state(sensor)
+    value = _number(state.get("state")) if state is not None else None
+    if state is None or state.get("state") in UNUSABLE or value is None:
+        return None, f"room sensor {sensor} unavailable: the controller's feed is stopped"
+    reported = state.get("last_reported") or state.get("last_updated")
+    try:
+        when = datetime.fromisoformat(str(reported))
+    except ValueError:
+        return None, f"room sensor {sensor} does not say when it reported"
+    if when.tzinfo is None or _utcnow() - when >= timedelta(seconds=check.sensor_stale):
+        return None, f"room sensor {sensor} is stale: the controller's feed is stopped"
+    return value, ""
+
+
+def _check_input(check: Run, input_entity: str) -> None:
+    label = f"external input {input_entity} accepts the room's temperature"
     state = check.state(input_entity)
-    if state is None or state.get("state") in ("unavailable",):
-        check.record(f"external input {input_entity} accepts a value", False, note="unavailable")
+    if state is None or state.get("state") == "unavailable":
+        check.record(label, False, note="missing" if state is None else "unavailable")
         return
-    attributes = state.get("attributes", {})
-    sensor = check.config.temperature_sensor if check.config else None
-    sensor_state = check.state(sensor) if sensor else None
-    # The room's temperature, which the controller writes anyway; else what the input has.
-    value = (
-        _number((sensor_state or {}).get("state")) or _number(state.get("state")) or current or 20.0
-    )
-    step = _number(attributes.get("step")) or 0.1
+    value, reason = _fresh_sensor_reading(check)
+    if value is None:
+        # Writing anything else would leave the thermostat regulating on a made-up value (a
+        # Sonoff for two hours, a Bosch for 30 minutes) that the stopped feed never corrects.
+        check.skip(label, reason)
+        return
+    step = _number(state.get("attributes", {}).get("step"))
+    step = step if step is not None and step > 0 else 0.1
     value = round(round(value / step) * step, 2)
     domain = input_entity.split(".", 1)[0]
-    started = check.ctx.monotonic()
+    start = check.ctx.monotonic()
     check.client.call_service(domain, "set_value", {"entity_id": input_entity, "value": value})
 
     def read() -> float | None:
         return _number((check.state(input_entity) or {}).get("state"))
 
-    took = check.wait_for(read, value, INPUT_TIMEOUT)
+    took = check.wait_for(read, value, INPUT_TIMEOUT, start)
     check.record(
         f"external input {input_entity} accepts {value:g}",
         took is not None,
-        check.ctx.monotonic() - started if took is not None else None,
+        took,
+        f"from {value:g} °C",
     )
 
 
 def _check_setting(check: Run, setting: str, value: Any) -> None:
     state = check.state(setting)
     label = f"setting {setting} can be {value}"
-    if state is None or state.get("state") in ("unavailable",):
+    if state is None or state.get("state") == "unavailable":
         check.record(label, False, note="missing" if state is None else "unavailable")
         return
     domain = setting.split(".", 1)[0]
@@ -394,33 +584,40 @@ def _check_setting(check: Run, setting: str, value: Any) -> None:
 
 
 def _clean_up(check: Run) -> None:
-    """Restore the original target and release the hold, retrying while Home Assistant restarts."""
+    """Restore the original target; release the hold in any case, also if the restore failed."""
+    try:
+        if check.changed and check.original is not None:
+            _restore_patiently(check, check.original)
+    finally:
+        _release(check)
+
+
+def _restore_patiently(check: Run, original: float) -> None:
+    """Restore, taking the hold again if it was lost, and waiting out a restart."""
     ctx = check.ctx
-    original, changed = check.original, check.changed
+    label = f"original target {original:g} °C restored"
     deadline = ctx.monotonic() + CLEANUP_PATIENCE
     while True:
         try:
-            if changed and original is not None:
-                if check.config is not None and not check.still_held():
-                    # Hold again, so that restoring the target is not taken for a dial turn.
-                    check.hold(check.timeout + HOLD_MARGIN)
-                _restore(check, original)
-                changed = False
-            if check.held:
-                check.client.call_service("cave_heating", "release", {"entity_id": check.entity})
-                check.held = False
-                check.record("hold released", True)
+            if check.config is not None and not check.still_held():
+                # Hold again, for the whole restore, so that it is not taken for a dial turn.
+                check.hold(rehold_seconds(check.timeout))
+            _restore(check, original)
             return
-        except (HoldLost, HAUnreachable, HAError) as error:
-            # A hold lost again is taken up again at the top of the loop.
+        except HAError as error:
+            check.record(label, False, note=f"refused: {error}")
+            check.incomplete = check.incomplete or f"Home Assistant refused to restore: {error}"
+            return
+        except (HoldLost, HAUnreachable) as error:
             if ctx.monotonic() >= deadline:
-                note = str(error)
-                if changed:
-                    check.record("original target restored", False, note=note)
-                if check.held:
-                    check.record("hold released", False, note=f"{note}; it ends by itself")
+                reason = "the hold kept ending" if isinstance(error, HoldLost) else str(error)
+                check.record(
+                    label,
+                    False,
+                    note=f"{reason}; the controller brings it to the room's target once it runs",
+                )
                 return
-            ctx.sleep(5.0)
+            ctx.sleep(RETRY_PAUSE)
 
 
 def _restore(check: Run, original: float) -> None:
@@ -434,20 +631,20 @@ def _restore(check: Run, original: float) -> None:
     ctx = check.ctx
     ctx.say(f"Restoring {original:g} °C ...")
     label = f"original target {original:g} °C restored"
+    start = ctx.monotonic()
     check.set_target(original)
     if check.confirmed:
-        took = check.wait_for(check.target, original, check.timeout)
+        took = check.wait_for(check.target, original, check.timeout, start)
         check.record(label, took is not None, took)
         return
     ctx.say(f"Watching {check.timeout:g} s for a late report of {check.wanted:g} °C ...")
-    start = ctx.monotonic()
     resent = False
     value: float | None = None
     while True:
         elapsed = ctx.monotonic() - start
-        back = value is not None and abs(value - original) < 0.01
+        back = _close(value, original)
         # The whole timeout, and after a late report until the original is back (at most a
-        # second timeout: hold_seconds counts three).
+        # second timeout: hold_seconds counts three, rehold_seconds two).
         if (elapsed >= check.timeout and (back or not resent)) or elapsed >= 2 * check.timeout:
             break
         ctx.sleep(check.interval)
@@ -456,14 +653,39 @@ def _restore(check: Run, original: float) -> None:
         except HAUnreachable:
             continue
         check.ensure_held()
-        late = value is not None and check.wanted is not None and abs(value - check.wanted) < 0.01
-        if late and not resent:
+        if _close(value, check.wanted) and not resent:
             check.set_target(original)
             resent = True
     value = check.target()
     note = "the late report came and was undone" if resent else "no late report came"
-    ok = value is not None and abs(value - original) < 0.01
-    check.record(label, ok, ctx.monotonic() - start, note)
+    check.record(label, _close(value, original), ctx.monotonic() - start, note)
+
+
+def _release(check: Run) -> None:
+    """Release the hold, retrying while Home Assistant restarts; say when it ends otherwise."""
+    if not check.hold_requested:
+        return
+    ctx = check.ctx
+    deadline = ctx.monotonic() + CLEANUP_PATIENCE
+    while True:
+        try:
+            check.client.call_service(INTEGRATION, "release", {"entity_id": check.entity})
+        except HAUnreachable as error:
+            if check.hold_end is not None and ctx.monotonic() >= check.hold_end:
+                check.hold_requested = False
+                check.record("hold released", True, note="it had ended by itself")
+                return
+            if ctx.monotonic() >= deadline:
+                check.record("hold released", False, note=f"{error}; it ends by itself")
+                return
+            ctx.sleep(RETRY_PAUSE)
+        except HAError as error:
+            check.record("hold released", False, note=f"refused: {error}; it ends by itself")
+            return
+        else:
+            check.hold_requested = False
+            check.record("hold released", True)
+            return
 
 
 def _report(check: Run) -> int:
@@ -475,6 +697,12 @@ def _report(check: Run) -> int:
         took = f"{row.seconds:.1f} s" if row.seconds is not None else ""
         ctx.say(f"{row.check.ljust(width)}  {row.result.ljust(7)}  {took.ljust(7)}  {row.note}")
     ctx.say("")
+    if check.hold_requested:
+        ctx.say(
+            f"The hold on {check.entity} could not be released; it ends by itself "
+            f"{check.hold_ends()}, and the controller then brings the thermostat back to its "
+            "room's target."
+        )
     if check.incomplete:
         ctx.say(f"The check could not complete: {check.incomplete}.")
         return 2
