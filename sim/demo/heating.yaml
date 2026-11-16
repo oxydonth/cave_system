@@ -63,6 +63,7 @@ rooms:
     name: Bad
     trvs:
       - entity: climate.bad_heizung
+        slow: false
     temperature_sensor: sensor.bad_temperature
     humidity_sensor: sensor.bad_humidity
     schedule: schedule.bathroom_heating
