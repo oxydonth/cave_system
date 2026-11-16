@@ -10,7 +10,6 @@ from __future__ import annotations
 
 import contextlib
 import os
-import shutil
 import stat
 import subprocess
 from pathlib import Path
@@ -18,8 +17,10 @@ from typing import Any
 
 import pytest
 
+from cave_ops.context import Context
 from cave_ops.ha import HAError
-from tools.bootstrap import DEFAULT_WEEK, TOKEN_NAME, BootstrapError
+from cave_ops.heating import validate_and_store
+from tools.bootstrap import DEFAULT_WEEK, ONBOARDING_INTEGRATIONS, TOKEN_NAME, BootstrapError
 
 HEATING = Path(__file__).with_name("first_run_heating.yaml")
 ROOM_SCHEDULES = {
@@ -28,15 +29,22 @@ ROOM_SCHEDULES = {
 }
 
 
+@pytest.fixture(scope="module", autouse=True)
+def home_stack(e2e_stack: str) -> None:
+    if e2e_stack != "home":
+        pytest.skip("first-run tests need the home's fresh stack: CAVE_E2E=home")
+
+
 @pytest.fixture(scope="module")
 def first_run(stack: Any) -> subprocess.CompletedProcess[str]:
     """Apply the test home and run the bootstrap once, on the fresh stack the job started.
 
-    The applied copy is written directly here: the validator that `cave apply` uses arrives with
-    the cave_heating integration, and the bootstrap only reads the rooms' schedules.
+    The test home goes through the shared function that validates first (concept section 4.5),
+    with the validator of cave_heating in a one-off Home Assistant container.
     """
-    shutil.copyfile(HEATING, stack.data / "homeassistant" / "cave" / ".applied" / "heating.yaml")
     assert not stack.token_file.exists(), "the e2e job expects a stack that was never set up"
+    applied = validate_and_store(Context.create(stack.root), HEATING)
+    assert applied.ok, applied.messages
     return stack.cave("bootstrap")
 
 
@@ -50,11 +58,21 @@ def test_the_first_run_succeeds_and_says_what_it_did(first_run: Any, stack: Any)
         f"created the script token {TOKEN_NAME}",
         "set up MQTT with the broker 127.0.0.1:1883",
         "created the schedule schedule.living_room_heating",
+        *(f"removed {domain} (" for domain in ONBOARDING_INTEGRATIONS),
         "Stack healthy",
     ):
         assert line in first_run.stdout
     for secret in stack.secrets:
         assert secret not in first_run.stdout + first_run.stderr
+
+
+def test_nothing_that_reaches_the_internet_is_left_from_onboarding(
+    first_run: Any, stack: Any
+) -> None:
+    entries = stack.api().request("GET", "/api/config/config_entries/entry")
+
+    assert sorted({entry["domain"] for entry in entries} & set(ONBOARDING_INTEGRATIONS)) == []
+    assert "met" not in {entry["domain"] for entry in entries}  # declines without a location
 
 
 def test_the_token_file_is_the_runners_alone(first_run: Any, stack: Any) -> None:

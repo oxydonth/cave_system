@@ -636,8 +636,8 @@ class Bootstrap:
                 token=token,
             )
             self.out.changed(
-                f"removed {entry['domain']} ({entry.get('title')}), which onboarding set up and "
-                "which reaches the internet when used"
+                f"removed {entry['domain']} ({entry.get('title')}), which onboarding set up by "
+                "itself; this system keeps only what it uses"
             )
 
     # --- 5. the script token

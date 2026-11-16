@@ -1,12 +1,16 @@
 name: End-to-end
 
-# The complete stack from a clean checkout (concept section 8, end-to-end level). This first
-# version covers first-run setup: `./cave init`, `./cave up`, `./cave bootstrap`, then
-# tests/e2e checks the result through Home Assistant's API with the stored script token, runs
-# the bootstrap again and proves that nothing changed, also after a deleted token file, a revoked
-# token, a changed owner password and a restart. The demo with simulated devices and the heating
-# scenarios follow once the simulators and cave_heating are merged. Called from ci.yml; its job
-# counts towards `ci-ok` through the one calling job.
+# The complete system from a clean checkout (concept section 8, end-to-end level), in two parts:
+#
+# 1. First-run setup on the home's stack: `./cave init`, `./cave up`, then tests/e2e/
+#    test_first_run.py runs `./cave bootstrap`, checks the result through Home Assistant's API
+#    with the stored script token, runs it again and proves that nothing changed, also after a
+#    deleted token file, a revoked token, a changed owner password and a restart.
+# 2. The demo: `./cave demo` (the stack with simulated devices, a Compose project and state of its
+#    own), then tests/e2e/test_scenarios.py: schedule, window pause, away, boost, room-sensor feed,
+#    a slow FRITZ! thermostat, a dial, offline devices, across both device families.
+#
+# Called from ci.yml; its job counts towards `ci-ok` through the one calling job.
 
 on:
   workflow_call:
@@ -19,6 +23,8 @@ jobs:
     name: e2e
     runs-on: ubuntu-24.04
     timeout-minutes: 30
+    env:
+      DEMO_COMPOSE: -p cave-demo -f compose.yaml -f compose.sim.yaml --env-file data/demo/demo.env
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
@@ -35,6 +41,7 @@ jobs:
 
       - run: make setup
 
+      # --- part 1: first-run setup on the home's stack
       - name: Initialise
         run: ./cave init
 
@@ -46,70 +53,69 @@ jobs:
 
       - name: First-run setup, checked through Home Assistant's API, and run again
         env:
-          CAVE_E2E: "1"
+          CAVE_E2E: home
         # -s: the output of every ./cave run is part of the job log.
-        run: uv run --locked pytest tests/e2e -v -s -p no:cacheprovider
+        run: uv run --locked pytest tests/e2e/test_first_run.py -v -s -p no:cacheprovider
 
-      - name: Home Assistant logged no unexpected errors
+      - name: Home Assistant logged no unexpected errors (home)
+        run: tests/e2e/check-ha-log.sh
+
+      - name: Stop the home's stack, which uses the same ports as the demo
+        run: ./cave down
+
+      # --- part 2: the demo and the scenarios
+      - name: Start the demo
+        run: ./cave demo --timeout 420
+
+      - name: The scenarios on the demo
+        env:
+          CAVE_E2E: demo
+        run: uv run --locked pytest tests/e2e/test_scenarios.py -v -s -p no:cacheprovider
+
+      - name: Home Assistant logged no unexpected errors (demo)
         run: |
-          # Home Assistant colours its log lines; remove the escape sequences before matching.
-          docker compose logs --no-color --no-log-prefix homeassistant 2>&1 |
-            sed 's/\x1b\[[0-9;]*m//g' > "${RUNNER_TEMP}/ha.log"
-          line_format='^[0-9-]+ [0-9:.]+ (DEBUG|INFO|WARNING|ERROR|CRITICAL) '
-          lines=$(grep -cE "${line_format}" "${RUNNER_TEMP}/ha.log" || true)
-          if [ "${lines}" -lt 10 ]; then
-            echo "::error::only ${lines} log lines match the expected format; has Home Assistant's log format changed?"
-            exit 1
-          fi
+          # shellcheck disable=SC2086 # DEMO_COMPOSE is a list of options
+          tests/e2e/check-ha-log.sh ${DEMO_COMPOSE}
 
-          # Errors that are expected. Every entry is an extended regular expression matched
-          # against the whole log line, and says why it is harmless. Do not add one without a
-          # reason. There is none now.
-          allowed=(
-            '^$'
-          )
-
-          grep -E '^[0-9-]+ [0-9:.]+ (ERROR|CRITICAL) ' "${RUNNER_TEMP}/ha.log" > "${RUNNER_TEMP}/errors.log" || true
-          for pattern in "${allowed[@]}"; do
-            grep -vE "${pattern}" "${RUNNER_TEMP}/errors.log" > "${RUNNER_TEMP}/errors.next" || true
-            mv "${RUNNER_TEMP}/errors.next" "${RUNNER_TEMP}/errors.log"
-          done
-          if [ -s "${RUNNER_TEMP}/errors.log" ]; then
-            echo "::error::Home Assistant logged errors that are not on the allow-list:"
-            cat "${RUNNER_TEMP}/errors.log"
-            exit 1
-          fi
-          echo "no unexpected errors in $(wc -l < "${RUNNER_TEMP}/ha.log") log lines"
-
-      - name: Collect the logs, when something failed
+      # --- when something failed
+      - name: Logs, when something failed
         if: failure()
         run: |
           mkdir -p "${RUNNER_TEMP}/logs"
-          ./cave logs --tail all > "${RUNNER_TEMP}/logs/compose.log" 2>&1 || true
-          # Written by the container as root.
-          sudo cp data/homeassistant/home-assistant.log "${RUNNER_TEMP}/logs/" || true
-          sudo chown -R "$(id -u)" "${RUNNER_TEMP}/logs"
-          # The logs must not carry a password; replace every generated secret before upload.
-          set -a
-          # shellcheck disable=SC1091
-          . ./.env
-          set +a
-          for secret in "${CAVE_HA_OWNER_PASSWORD}" "${CAVE_MQTT_PASSWORD}" "${CAVE_Z2M_FRONTEND_TOKEN}"; do
-            [ -n "${secret}" ] && sed -i "s/${secret}/********/g" "${RUNNER_TEMP}"/logs/*.log
+          ./cave logs --tail all > "${RUNNER_TEMP}/logs/home.log" 2>&1 || true
+          if [ -f data/demo/demo.env ]; then
+            # shellcheck disable=SC2086
+            docker compose ${DEMO_COMPOSE} logs --no-color --tail all \
+              > "${RUNNER_TEMP}/logs/demo.log" 2>&1 || true
+          fi
+          # Every generated secret of both stacks is masked before the logs are shown or kept.
+          for file in .env data/demo/demo.env; do
+            [ -f "${file}" ] || continue
+            grep -E '^CAVE_(MQTT_PASSWORD|HA_OWNER_PASSWORD|Z2M_FRONTEND_TOKEN|FRITZ_PASSWORD)=' "${file}" |
+              cut -d= -f2- | while read -r secret; do
+                [ -n "${secret}" ] && sed -i "s/${secret}/********/g" "${RUNNER_TEMP}"/logs/*.log
+              done
           done
-          # Also in the job log, in case the artifact cannot be stored.
-          echo "::group::Home Assistant's log (warnings and errors)"
-          grep -E ' (WARNING|ERROR|CRITICAL) ' "${RUNNER_TEMP}/logs/home-assistant.log" | tail -200 || true
-          echo "::endgroup::"
+          # The artifact store of the account may be full, so the essentials go into the job
+          # log as well.
+          for file in "${RUNNER_TEMP}"/logs/*.log; do
+            echo "::group::$(basename "${file}"): warnings and errors"
+            grep -E 'WARNING|ERROR|CRITICAL|Traceback' "${file}" | tail -300 || true
+            echo "::endgroup::"
+          done
 
       - name: Upload the logs, when something failed
         if: failure()
+        # The account's artifact storage can be full; that must not hide the real failure.
+        continue-on-error: true
         uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
           name: e2e-logs
           path: ${{ runner.temp }}/logs
           retention-days: 7
 
-      - name: Stop the stack
+      - name: Stop everything
         if: always()
-        run: ./cave down
+        run: |
+          ./cave demo down || true
+          ./cave down || true

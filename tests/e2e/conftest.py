@@ -1,18 +1,26 @@
-"""End-to-end tests against the running stack (concept section 8), run by the ``e2e`` job.
+"""End-to-end tests against a running stack (concept section 8), run by the ``e2e`` job.
 
-They need a checkout where ``./cave init`` and ``./cave up`` have run, and are skipped unless
-``CAVE_E2E=1``, so ``make test`` passes over them on a machine without Docker. They talk to Home
-Assistant only as any other client would: through its REST and WebSocket APIs with the script
-token, and through ``./cave``.
+``CAVE_E2E`` names the stack that runs, and so which tests apply:
+
+* ``home``: the home's stack after ``./cave init`` and ``./cave up``, never set up
+  (``test_first_run.py``);
+* ``demo``: the demo after ``./cave demo`` (``test_scenarios.py``).
+
+Without ``CAVE_E2E`` everything here is skipped, so ``make test`` passes over it on a machine
+without Docker. The tests talk to Home Assistant only as any other client would, through its REST
+and WebSocket APIs with the script token; to the simulators through their control API; and to
+the system through ``./cave``.
 """
 
 from __future__ import annotations
 
 import asyncio
 import hashlib
+import json
 import os
 import subprocess
 import time
+import urllib.request
 from collections.abc import Callable
 from dataclasses import dataclass
 from pathlib import Path
@@ -29,10 +37,17 @@ REPO = Path(__file__).resolve().parents[2]
 URL = "http://127.0.0.1:8123"
 
 
-@pytest.fixture(scope="session", autouse=True)
-def e2e_only() -> None:
-    if os.environ.get("CAVE_E2E") != "1":
-        pytest.skip("end-to-end tests run against a running stack: CAVE_E2E=1 (the e2e job)")
+STACKS = ("home", "demo")
+CONTROL_API = "http://127.0.0.1:8481"
+
+
+@pytest.fixture(scope="session")
+def e2e_stack() -> str:
+    """Which stack runs: ``home`` or ``demo`` (``CAVE_E2E``)."""
+    value = os.environ.get("CAVE_E2E", "")
+    if value not in STACKS:
+        pytest.skip("end-to-end tests run against a running stack: CAVE_E2E=home or demo")
+    return value
 
 
 @pytest.fixture(autouse=True)
@@ -42,13 +57,51 @@ def network(socket_enabled: None) -> None:
 
 @dataclass
 class Stack:
-    """The checkout with its running stack."""
+    """The checkout with its running stack, the home's or the demo's."""
 
     root: Path
+    kind: str = "home"
+
+    @property
+    def env_file(self) -> Path:
+        return self.root / ("data/demo/demo.env" if self.kind == "demo" else ".env")
 
     @property
     def env(self) -> dict[str, str]:
-        return load_env(self.root / ".env")
+        return load_env(self.env_file)
+
+    @property
+    def compose(self) -> list[str]:
+        """``docker compose`` with this stack's project and files."""
+        if self.kind == "demo":
+            return [
+                "docker",
+                "compose",
+                "-p",
+                "cave-demo",
+                "-f",
+                "compose.yaml",
+                "-f",
+                "compose.sim.yaml",
+                "--env-file",
+                str(self.env_file),
+            ]
+        return ["docker", "compose"]
+
+    def control(self, method: str, path: str, body: Any = None) -> Any:
+        """The simulators' control API (sim/README.md)."""
+        request = urllib.request.Request(  # noqa: S310 - a fixed http://127.0.0.1 URL
+            CONTROL_API + path,
+            data=None if body is None else json.dumps(body).encode(),
+            headers={"Content-Type": "application/json"},
+            method=method,
+        )
+        with urllib.request.urlopen(request, timeout=10) as response:  # noqa: S310
+            return json.loads(response.read())
+
+    def device(self, device_id: str) -> dict[str, Any]:
+        result: dict[str, Any] = self.control("GET", f"/api/devices/{device_id}")
+        return result
 
     @property
     def data(self) -> Path:
@@ -159,8 +212,8 @@ class Stack:
 
 
 @pytest.fixture(scope="session")
-def stack() -> Stack:
-    return Stack(REPO)
+def stack(e2e_stack: str) -> Stack:
+    return Stack(REPO, e2e_stack)
 
 
 def _wait_until(condition: Callable[[], Any], what: str, timeout: float = 60.0) -> Any:
