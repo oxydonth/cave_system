@@ -1,0 +1,86 @@
+# The cave_heating configuration of the demo home (sim/demo/home.yaml), in the format of concept
+# section 5.1 and custom_components/cave_heating/README.md. `./cave demo` validates it and stores it
+# as the demo's applied copy; the end-to-end tests run their scenarios against it.
+#
+# The entity IDs are the ones the simulators produce (sim/README.md, "The demo home and its entity
+# IDs"); tests/demo checks every one. The schedules and the presence switch are created by
+# `cave bootstrap`, which `cave demo` runs. Timings are in seconds, so that a scenario takes
+# seconds instead of hours; the defaults suit real devices.
+version: 1
+
+# Presence from FRITZ!Box Tools needs a real FRITZ!Box (the simulated one has no TR-064), so the
+# demo has a switch instead: turn it off and the home is away after `away_delay`.
+presence: input_boolean.demo_someone_home
+away_delay: 5
+away_temperature: 16.0
+
+defaults:
+  comfort_temperature: 21.0
+  eco_temperature: 17.5
+  boost_temperature: 25.0
+  boost_duration: 30
+  override_max: 600
+  window_open_delay: 3
+  window_close_delay: 3
+
+rooms:
+  # Two Sonoff thermostats (TRV-ZBT, TRVZB) fed by a room sensor, and a window contact.
+  - id: living_room
+    name: Wohnzimmer
+    trvs:
+      - entity: climate.wohnzimmer_heizung_fenster
+        external_temperature: number.wohnzimmer_heizung_fenster_external_temperature_input
+        settings:
+          select.wohnzimmer_heizung_fenster_temperature_sensor_select: remote_temperature
+          switch.wohnzimmer_heizung_fenster_open_window: "off"
+      - entity: climate.wohnzimmer_heizung_tuer
+        external_temperature: number.wohnzimmer_heizung_tuer_external_temperature_input
+        settings:
+          select.wohnzimmer_heizung_tuer_temperature_sensor_select: remote_temperature
+          switch.wohnzimmer_heizung_tuer_open_window: "off"
+    temperature_sensor: sensor.wohnzimmer_temperature
+    humidity_sensor: sensor.wohnzimmer_humidity
+    windows:
+      - binary_sensor.wohnzimmer_fenster_contact
+    schedule: schedule.living_room_heating
+
+  # A Bosch thermostat (BTH-RA), its remote temperature fed by the room sensor.
+  - id: bedroom
+    name: Schlafzimmer
+    trvs:
+      - entity: climate.schlafzimmer_heizung
+        external_temperature: number.schlafzimmer_heizung_remote_temperature
+        settings:
+          switch.schlafzimmer_heizung_window_detection: "off"
+    temperature_sensor: sensor.schlafzimmer_temperature
+    humidity_sensor: sensor.schlafzimmer_humidity
+    windows:
+      - binary_sensor.schlafzimmer_fenster_contact
+    schedule: schedule.bedroom_heating
+
+  # A FRITZ!Smart Thermo 302 through the FRITZ!Box: slow by default.
+  - id: bathroom
+    name: Bad
+    trvs:
+      - entity: climate.bad_heizung
+    temperature_sensor: sensor.bad_temperature
+    humidity_sensor: sensor.bad_humidity
+    schedule: schedule.bathroom_heating
+
+timing:
+  debounce: 1
+  # A dial turned within this time after a start, or after a thermostat returns, is put back.
+  confirm_timeout: 20
+  # Longer than one FRITZ!Box poll (30 s) plus the box's own reporting delay in the demo.
+  confirm_timeout_slow: 90
+  resend_attempts: 2
+  retry_interval: 60
+  manual_settle: 5
+  command_budget_per_hour: 120
+  budget_exhausted_hours: 3
+  feed_threshold: 0.2
+  feed_min_interval: 10
+  feed_max_interval: 60
+  sensor_stale: 900
+  window_unavailable_grace: 30
+  presence_unavailable_grace: 30
