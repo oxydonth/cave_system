@@ -115,10 +115,10 @@ CAPABILITIES: Final[dict[str, Capability]] = {
         ZIGBEE_THERMOSTATS,
         _ZIGBEE_ONLY,
     ),
-    "battery_level": Capability("The battery level is available", "Every device", tuple(DEVICES)),
     "hold_for_device_check": _thermostats(
         "Held for device-check: nothing sent, nothing adopted, restored on release"
     ),
+    "battery_level": Capability("The battery level is available", "Every device", tuple(DEVICES)),
     # --- model-specific ---------------------------------------------------------------------
     "feed_reaches_external_input": _only(
         "The room temperature reaches the external input",
