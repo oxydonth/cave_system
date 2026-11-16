@@ -147,6 +147,21 @@ def test_client_reports_errors_with_status(ctx, fake_ha, write_token):
     assert raised.value.status == 401
 
 
+def test_client_error_carries_the_json_message_of_the_answer(ctx, write_token):
+    write_token()
+    problems = 'Room "office" (rooms[0]), field "name": is required. ' * 20
+
+    def refuse(method, url, headers, body, timeout):
+        return 400, json.dumps({"message": problems}).encode()
+
+    ctx.transport = refuse
+
+    with pytest.raises(HAError) as raised:
+        ctx.ha().call_service("cave_heating", "reload")
+    assert raised.value.status == 400
+    assert str(raised.value) == f"Home Assistant answered 400: {problems.strip()}"
+
+
 def test_client_reports_an_unreachable_home_assistant(ctx, fake_ha, write_token):
     write_token()
     fake_ha.down = True

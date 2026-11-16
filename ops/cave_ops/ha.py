@@ -46,6 +46,22 @@ def urllib_transport(
         return error.code, error.read()
 
 
+def _error_message(raw: bytes) -> str:
+    """What Home Assistant said: its JSON ``message`` when it has one, else the body as text.
+
+    A service that fails validation answers 400 with ``{"message": "..."}``; the message is what
+    a person needs, for example the problems of an invalid ``heating.yaml``.
+    """
+    text = raw.decode(errors="replace").strip()
+    try:
+        decoded = json.loads(text)
+    except ValueError:
+        decoded = None
+    if isinstance(decoded, dict) and isinstance(decoded.get("message"), str):
+        text = decoded["message"].strip()
+    return text[:2000]
+
+
 def read_token(paths: Paths) -> str | None:
     """The script token (``CAVE_DATA/homeassistant/.cave/token``), or ``None`` if there is none yet.
 
@@ -100,7 +116,7 @@ class HAClient:
         except (OSError, TimeoutError, ValueError, http.client.HTTPException) as error:
             raise HAUnreachable(f"cannot reach Home Assistant at {self._base}: {error}") from error
         if status >= 400:
-            raise HAError(status, raw.decode(errors="replace").strip()[:300])
+            raise HAError(status, _error_message(raw))
         if not raw:
             return None
         try:

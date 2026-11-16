@@ -1,4 +1,4 @@
-"""The one lock (``CAVE_DATA/.cave/lock``) that ``update``, ``backup`` and ``restore`` hold.
+"""The one lock (``CAVE_DATA/.cave/lock``) of ``apply``, ``update``, ``backup`` and ``restore``.
 
 It is an advisory ``flock``, so the operating system releases it when the holder dies, however
 it dies. A second holder fails at once instead of waiting.

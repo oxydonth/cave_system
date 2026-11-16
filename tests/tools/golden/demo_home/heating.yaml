@@ -1,0 +1,42 @@
+# The demo home of sim/demo/home.yaml, with the entity IDs listed in sim/README.md. The real
+# sim/demo/heating.yaml arrives with the demo work package; this one has the same rooms and
+# devices, and the timing values the demo is expected to use.
+version: 1
+away_delay: "00:00:10"
+timing:
+  confirm_timeout: 5
+rooms:
+  - id: living_room
+    name: Wohnzimmer
+    trvs:
+      - entity: climate.wohnzimmer_heizung_fenster
+        external_temperature: number.wohnzimmer_heizung_fenster_external_temperature_input
+        settings:
+          select.wohnzimmer_heizung_fenster_temperature_sensor_select: remote_temperature
+          switch.wohnzimmer_heizung_fenster_open_window: "off"
+      - entity: climate.wohnzimmer_heizung_tuer
+        external_temperature: number.wohnzimmer_heizung_tuer_external_temperature_input
+        settings:
+          select.wohnzimmer_heizung_tuer_temperature_sensor_select: remote_temperature
+          switch.wohnzimmer_heizung_tuer_open_window: "off"
+    temperature_sensor: sensor.wohnzimmer_temperature
+    humidity_sensor: sensor.wohnzimmer_humidity
+    windows:
+      - binary_sensor.wohnzimmer_fenster_contact
+  - id: bedroom
+    name: Schlafzimmer
+    trvs:
+      - entity: climate.schlafzimmer_heizung
+        external_temperature: number.schlafzimmer_heizung_remote_temperature
+        settings:
+          switch.schlafzimmer_heizung_window_detection: "off"
+    temperature_sensor: sensor.schlafzimmer_temperature
+    humidity_sensor: sensor.schlafzimmer_humidity
+    windows:
+      - binary_sensor.schlafzimmer_fenster_contact
+  - id: bathroom
+    name: Bad
+    trvs:
+      - entity: climate.bad_heizung
+    temperature_sensor: sensor.bad_temperature
+    humidity_sensor: sensor.bad_humidity

@@ -1,0 +1,6 @@
+version: 1
+rooms:
+  - id: office
+    name: Office
+    trvs:
+      - entity: climate.office_thermostat

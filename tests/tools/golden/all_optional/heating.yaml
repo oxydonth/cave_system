@@ -1,0 +1,50 @@
+version: 1
+presence:
+  - device_tracker.max_phone
+  - person.anna
+  - zone.home
+away_delay: "00:30:00"
+away_temperature: 16.0
+defaults:
+  comfort_temperature: 21.0
+  eco_temperature: 17.5
+  boost_temperature: 25.0
+  boost_duration: "00:30:00"
+  override_max: "06:00:00"
+  window_open_delay: "00:01:00"
+  window_close_delay: "00:02:00"
+timing:
+  debounce: 2
+rooms:
+  - id: living_room
+    name: Wohnzimmer
+    trvs:
+      - entity: climate.wohnzimmer_heizung_fenster
+        external_temperature: number.wohnzimmer_heizung_fenster_external_temperature_input
+        settings:
+          select.wohnzimmer_heizung_fenster_temperature_sensor_select: remote_temperature
+          switch.wohnzimmer_heizung_fenster_open_window: "off"
+      - entity: climate.wohnzimmer_heizung_tuer
+        external_temperature: number.wohnzimmer_heizung_tuer_external_temperature_input
+    temperature_sensor: sensor.wohnzimmer_temperature
+    humidity_sensor: sensor.wohnzimmer_humidity
+    windows:
+      - binary_sensor.wohnzimmer_fenster_contact
+      - binary_sensor.wohnzimmer_balkontuer_contact
+    schedule: schedule.living_room_heating
+    comfort_temperature: 22.0
+    window_open_delay: "00:00:30"
+  - id: bathroom
+    name: Bad
+    trvs:
+      - entity: climate.bad_heizung
+        slow: true
+    temperature_sensor: sensor.bad_temperature
+    humidity_sensor: sensor.bad_humidity
+    windows: binary_sensor.bad_fenster_contact
+    schedule: schedule.bathroom_heating
+    window_open_delay: "00:05:00"
+  - id: kids
+    name: "Kid's \"room\" | {{ 1 }}"
+    trvs:
+      - entity: climate.kinderzimmer

@@ -64,7 +64,7 @@ Rules for commands:
   talk to Home Assistant only through `ctx.ha()`, write output with `ctx.say()`/`ctx.warn()`, and
   wait with `ctx.sleep()`; then the fixtures replace all of them.
 * A command that uses Compose starts with `require_initialised(ctx)`.
-* `update`, `backup` and `restore` hold `ctx.lock(...)`.
+* `apply`, `update`, `backup` and `restore` hold `ctx.lock(...)`.
 * Report every outcome of a script (`update`, `backup`) through `notify()`.
 * Whatever needs Home Assistant's own Python packages runs in a one-off container, as
   `heating.validate()` does, never by importing Home Assistant here.
