@@ -23,7 +23,7 @@ from typing import Any
 from ..container import run_in_homeassistant
 from ..context import Context
 from ..errors import CaveError
-from ..health import wait_healthy
+from ..health import check_health, wait_healthy
 from ..paths import CONTAINER_TOOLS
 from ._common import require_initialised
 
@@ -138,8 +138,10 @@ def set_up_home_assistant(
     # tool gives the token file to the directory's owner.
     ctx.paths.token.parent.mkdir(mode=0o700, parents=True, exist_ok=True)
 
-    ctx.say("Waiting until the stack is healthy ...")
-    health = wait_healthy(ctx, timeout=timeout, api=False)
+    health = check_health(ctx, api=False)
+    if not health.healthy:
+        ctx.say(f"Waiting until the stack is healthy (now {health.describe()}) ...")
+        health = wait_healthy(ctx, timeout=timeout, api=False)
     if not health.healthy:
         raise CaveError(
             f"the stack is {health.describe()} after {timeout:.0f} s; "

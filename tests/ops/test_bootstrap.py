@@ -63,6 +63,7 @@ def test_bootstrap_runs_the_tool_in_the_home_assistant_image_with_the_settings_o
     result = run_cave("bootstrap")
 
     assert result.code == 0, result.err
+    assert "Waiting until" not in result.out  # healthy at once: nothing to wait for
     (call,) = fake_runner.matching(*TOOL)
     assert call.args[call.args.index("--entrypoint") + 1] == "python3"
     assert call.args[-2:] == ("homeassistant", "/cave/tools/bootstrap.py")
@@ -174,7 +175,7 @@ def test_it_waits_for_a_starting_stack_without_asking_the_api(
     fake_runner.on(["docker", "compose", "config", "--services"], out=SERVICES)
     fake_runner.on(
         ["docker", "compose", "ps"],
-        sequence=[(0, starting, ""), (0, HEALTHY, ""), (0, HEALTHY, "")],
+        sequence=[(0, starting, ""), (0, starting, ""), (0, HEALTHY, "")],
     )
     requests_before_the_tool = []
 
@@ -188,6 +189,7 @@ def test_it_waits_for_a_starting_stack_without_asking_the_api(
 
     assert result.code == 0, result.err
     assert clock.sleeps  # it waited
+    assert "Waiting until the stack is healthy (now not healthy: homeassistant" in result.out
     assert requests_before_the_tool == []
     assert ("GET", "/api/config", None) in fake_ha.requests  # asked afterwards, with the new token
 

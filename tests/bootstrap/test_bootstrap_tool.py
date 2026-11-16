@@ -253,6 +253,29 @@ async def test_a_second_run_does_not_log_in(home: Home) -> None:
     assert [t.client_name for t in user.refresh_tokens.values()] == [TOKEN_NAME]
 
 
+async def test_a_home_assistant_still_starting_is_waited_for(home: Home) -> None:
+    # Its HTTP server answers before start-up is over; the schedule helper may not be there yet.
+    assert (await home.run()).ok
+    original = Api.request
+    starting = {"left": 2}
+
+    async def still_starting(self: Api, method: str, path: str, **kwargs: Any) -> Reply:
+        reply = await original(self, method, path, **kwargs)
+        if path == "/api/config" and starting["left"] > 0:
+            starting["left"] -= 1
+            return Reply(200, {**reply.body, "state": "NOT_RUNNING"})
+        if path != "/api/config" and starting["left"] > 0 and method != "GET":
+            raise AssertionError(f"{method} {path} before Home Assistant was running")
+        return reply
+
+    with patch.object(Api, "request", still_starting):
+        run = await home.run()
+
+    assert run.ok, run.output
+    assert starting["left"] == 0
+    assert "waited until Home Assistant had finished starting" in run.output
+
+
 async def test_after_a_restart_without_onboarding_views_a_run_changes_nothing(home: Home) -> None:
     # Started with onboarding complete, Home Assistant does not register /api/onboarding at all.
     assert (await home.run()).ok
@@ -341,6 +364,143 @@ async def test_a_token_file_with_garbage_is_replaced(home: Home) -> None:
     assert home.hass.auth.async_validate_access_token(stored_token(home)) is not None
 
 
+async def _admin(hass: HomeAssistant, username: str, *, admin: bool = True) -> Any:
+    """A second person with a password login: an administrator, or an ordinary user."""
+    provider = hass.auth.auth_providers[0]
+    await provider.async_add_auth(username, "a-password-for-tests")
+    credentials = await provider.async_get_or_create_credentials({"username": username})
+    user = await hass.auth.async_create_user(
+        username.title(), group_ids=["system-admin" if admin else "system-users"]
+    )
+    await hass.auth.async_link_user(user, credentials)
+    return user
+
+
+async def _replace_stored_token(home: Home, user: Any, **token: Any) -> Any:
+    """Put an access token of ``user`` (a refresh token made with ``token``) into the file."""
+    refresh = await home.hass.auth.async_create_refresh_token(user, **token)
+    home.token_file.write_text(home.hass.auth.async_create_access_token(refresh) + "\n")
+    home.token_file.chmod(0o600)
+    return refresh
+
+
+async def _assert_replaced_by_the_owners_script_token(home: Home, run: Any, note: str) -> None:
+    assert run.ok, run.output
+    assert note in run.output
+    assert f"created the script token {TOKEN_NAME}" in run.output
+    stored = home.hass.auth.async_validate_access_token(stored_token(home))
+    assert stored is not None
+    assert stored.client_name == TOKEN_NAME
+    assert stored.token_type == TOKEN_TYPE_LONG_LIVED_ACCESS_TOKEN
+    assert stored.user.is_owner
+
+
+async def test_a_valid_token_with_another_name_is_replaced(home: Home) -> None:
+    assert (await home.run()).ok
+    other = await _replace_stored_token(
+        home,
+        await owner(home.hass),
+        client_name="a-token-for-something-else",
+        token_type=TOKEN_TYPE_LONG_LIVED_ACCESS_TOKEN,
+    )
+
+    run = await home.run()
+
+    await _assert_replaced_by_the_owners_script_token(
+        home, run, f"the stored token is not the {TOKEN_NAME} token"
+    )
+    assert home.hass.auth.async_get_refresh_token(other.id) is not None  # not ours to delete
+
+
+async def test_a_session_token_of_the_owner_is_replaced(home: Home) -> None:
+    assert (await home.run()).ok
+    # A login session's token, named like the script token: it expires within half an hour.
+    await _replace_stored_token(
+        home, await owner(home.hass), client_id=f"{home.url}/", client_name=TOKEN_NAME
+    )
+
+    run = await home.run()
+
+    await _assert_replaced_by_the_owners_script_token(
+        home, run, "the stored token is not a long-lived token"
+    )
+
+
+async def test_a_script_token_of_an_ordinary_user_is_replaced(home: Home) -> None:
+    assert (await home.run()).ok
+    bob = await _admin(home.hass, "bob", admin=False)
+    await _replace_stored_token(
+        home, bob, client_name=TOKEN_NAME, token_type=TOKEN_TYPE_LONG_LIVED_ACCESS_TOKEN
+    )
+
+    run = await home.run()
+
+    await _assert_replaced_by_the_owners_script_token(
+        home, run, "belongs to a user who is not an administrator"
+    )
+
+
+async def test_a_script_token_of_another_administrator_is_replaced(home: Home) -> None:
+    assert (await home.run()).ok
+    alice = await _admin(home.hass, "alice")
+    alices = await _replace_stored_token(
+        home, alice, client_name=TOKEN_NAME, token_type=TOKEN_TYPE_LONG_LIVED_ACCESS_TOKEN
+    )
+
+    run = await home.run()
+
+    await _assert_replaced_by_the_owners_script_token(
+        home, run, "the stored token belongs to 'alice', not to the owner 'max'"
+    )
+    assert home.hass.auth.async_get_refresh_token(alices.id) is not None  # alice's own
+    assert len(await script_tokens(home.hass)) == 2  # alice's and the owner's
+
+
+async def test_a_usable_token_file_of_the_wrong_owner_is_given_to_the_directory_owner(
+    home: Home, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    assert (await home.run()).ok
+    token = stored_token(home)
+    directory = home.token_file.parent.stat()
+    real_stat = Path.stat
+
+    def stat_as_root(path: Path, *args: Any, **kwargs: Any) -> Any:
+        result = real_stat(path, *args, **kwargs)
+        if path == home.token_file:  # as a file written by root in the container looks
+            return os.stat_result((result.st_mode, *result[1:4], 0, 0, *result[6:]))
+        return result
+
+    monkeypatch.setattr(Path, "stat", stat_as_root)
+    with patch("tools.bootstrap.os.chown") as chown:
+        run = await home.run()
+
+    assert run.ok, run.output
+    chown.assert_called_once_with(home.token_file, directory.st_uid, directory.st_gid)
+    assert f"gave {home.token_file} to the owner of its directory" in run.output
+    assert stored_token(home) == token  # the token itself is kept
+
+
+def test_a_new_token_file_is_given_to_the_directory_owner_when_root_writes_it(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    directory = tmp_path / ".cave"
+    directory.mkdir(mode=0o700)
+    real_stat = Path.stat
+
+    def directory_of_someone_else(path: Path, *args: Any, **kwargs: Any) -> Any:
+        result = real_stat(path, *args, **kwargs)
+        if path == directory:  # the user who runs ./cave, as root in the container sees it
+            return os.stat_result((*result[:4], 1234, 5678, *result[6:]))
+        return result
+
+    monkeypatch.setattr(Path, "stat", directory_of_someone_else)
+    with patch("tools.bootstrap.os.fchown") as fchown:
+        write_token_file(directory / "token", "new-token")
+
+    ((_, uid, gid),) = [call.args for call in fchown.call_args_list]
+    assert (uid, gid) == (1234, 5678)
+
+
 async def test_a_token_file_that_others_can_read_is_made_private(home: Home) -> None:
     assert (await home.run()).ok
     token = stored_token(home)
@@ -378,7 +538,8 @@ async def test_a_changed_owner_password_without_a_token_stops_with_a_clear_messa
 
     assert not run.ok
     assert "refused the login 'max' with the password from .env" in run.error
-    assert "never changes the owner's password" in run.error
+    assert "never changes the owner's account" in run.error
+    assert "same user name and password" in run.error
     assert "wrong-pass" not in run.output
     assert len(await people(home.hass)) == 1
 

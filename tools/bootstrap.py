@@ -408,6 +408,28 @@ class Bootstrap:
         )
         return done
 
+    async def wait_running(self, token: str) -> None:
+        """Wait until Home Assistant has finished starting.
+
+        Its HTTP server answers once the frontend is set up, which can be before the schedule
+        helper or MQTT are; ``/api/config`` reports ``RUNNING`` once start-up is over.
+        """
+        waited = False
+
+        async def running() -> bool:
+            nonlocal waited
+            config = await self.api.expect(
+                "GET", "/api/config", "reading the configuration", token=token
+            )
+            if config.get("state") == "RUNNING":
+                return True
+            waited = True
+            raise BootstrapError(f"Home Assistant is {config.get('state')}")
+
+        await wait_for(running, "Home Assistant to finish starting", self.settings.timeout)
+        if waited:
+            self.out.say("  note:    waited until Home Assistant had finished starting")
+
     # --- 2. a session
     def read_token_file(self) -> str | None:
         try:
@@ -426,21 +448,34 @@ class Bootstrap:
         if not (value.isascii() and value.isprintable()) or " " in value:
             stored.notes.append("the script token file does not hold a token")
             return stored
+        username: str | None = None
         try:
             async with WebSocket(self.session, self.settings.url, value) as ws:
                 stored.valid = True
                 user = await ws.call("auth/current_user")
                 tokens = await ws.call("auth/refresh_tokens")
+                if user.get("is_admin"):  # only an administrator may list the users
+                    accounts = await ws.call("config/auth/list")
+                    username = next(
+                        (a.get("username") for a in accounts if a.get("id") == user.get("id")),
+                        None,
+                    )
         except TokenRejected:
             stored.notes.append("Home Assistant no longer accepts the stored script token")
             return stored
         current = next((t for t in tokens if t.get("is_current")), None)
+        owner = self.settings.owner.username
         if current is None or current.get("client_name") != TOKEN_NAME:
             stored.notes.append(f"the stored token is not the {TOKEN_NAME} token")
         elif current.get("type") != LONG_LIVED:
             stored.notes.append("the stored token is not a long-lived token")
         elif not user.get("is_admin"):
             stored.notes.append("the stored token belongs to a user who is not an administrator")
+        elif username != owner:
+            stored.notes.append(
+                f"the stored token belongs to {username!r}, not to the owner {owner!r} "
+                "(CAVE_HA_OWNER_USER); it is replaced by one of the owner"
+            )
         else:
             stored.usable = True
         return stored
@@ -500,9 +535,10 @@ class Bootstrap:
             raise BootstrapError(
                 f"Home Assistant refused the login {owner.username!r} with the password from "
                 ".env (CAVE_HA_OWNER_USER, CAVE_HA_OWNER_PASSWORD). The owner exists already, so "
-                "the bootstrap needs that login to create the script token. If the password was "
-                "changed in Home Assistant, put the same password into .env; the bootstrap never "
-                "changes the owner's password."
+                "the bootstrap needs that login to create the script token. If the owner account "
+                "was created in the browser, or its user name or password changed in Home "
+                "Assistant, put the same user name and password into .env; the bootstrap never "
+                "changes the owner's account."
             )
         raise BootstrapError(
             f"the login as {owner.username!r} stopped at step {result.get('step_id')!r} "
@@ -1016,6 +1052,7 @@ class Bootstrap:
         try:
             if done.get("user"):
                 out.unchanged(f"the owner account exists (login {self.settings.owner.username!r})")
+            await self.wait_running(session.access_token)
             async with WebSocket(self.session, self.settings.url, session.access_token) as ws:
                 await self.core_settings(ws, session.access_token)
                 onboarded_now = await self.finish_onboarding(done, session.access_token)
