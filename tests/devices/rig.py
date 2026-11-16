@@ -34,6 +34,7 @@ from homeassistant.util.async_ import get_scheduled_timer_handles
 from pytest_homeassistant_custom_component.common import async_fire_time_changed_exact
 
 from cave_sim.home import parse_home
+from cave_sim.mqtt import topic_matches
 from cave_sim.testing import HOME_ASSISTANT_CLIENT, SimulatedHomeHandle
 from custom_components.cave_heating.const import DOMAIN
 
@@ -385,7 +386,12 @@ class Rig:
     # --- time ---------------------------------------------------------------------------------
 
     async def advance(self, seconds: float, step: float = MIN) -> None:
-        """Move time forward, stopping at every timer on the way and at least every ``step``."""
+        """Move time forward, stopping at every timer on the way and at least every ``step``.
+
+        What is already under way (a message a device just sent) is handled first, at the
+        current time, so it is not seen as arriving at the end of the first step.
+        """
+        await self.hass.async_block_till_done(wait_background_tasks=True)
         end = dt_util.utcnow() + timedelta(seconds=seconds)
         while (now := dt_util.utcnow()) < end:
             tick = min(end - now, timedelta(seconds=step))
@@ -418,10 +424,13 @@ class Rig:
 
     # --- what the devices received ----------------------------------------------------------
 
-    def _zigbee_messages(self, name: str) -> list[dict[str, Any]]:
+    def _zigbee_messages(self, name: str, start: int = 0) -> list[dict[str, Any]]:
+        """What Home Assistant published to the device's set topics, from log index ``start``."""
         messages = []
-        for message in self.sim.broker.messages(f"zigbee2mqtt/{name}/set/#"):
+        for message in self.sim.broker.log[start:]:
             if message.sender != HOME_ASSISTANT_CLIENT:
+                continue
+            if not topic_matches(f"zigbee2mqtt/{name}/set/#", message.topic):
                 continue
             prop = message.topic.removeprefix(f"zigbee2mqtt/{name}/set").strip("/")
             text = message.payload.decode()
@@ -473,18 +482,8 @@ class Rig:
 
     def writes(self, name: str, prop: str) -> list[Any]:
         """Values written to a Zigbee device's property since the last :meth:`mark`."""
-        start = self._marks.get("__writes__", 0)
-        values = []
-        for message in self.sim.broker.log[start:]:
-            if message.sender != HOME_ASSISTANT_CLIENT:
-                continue
-            if message.topic == f"zigbee2mqtt/{name}/set/{prop}":
-                values.append(json.loads(message.payload))
-            elif message.topic == f"zigbee2mqtt/{name}/set":
-                body = json.loads(message.payload)
-                if prop in body:
-                    values.append(body[prop])
-        return values
+        messages = self._zigbee_messages(name, self._marks.get("__writes__", 0))
+        return [message[prop] for message in messages if prop in message]
 
     def fritz_answers(self) -> list[int]:
         """The HTTP status the FRITZ!Box gave each ``sethkrtsoll``, since the start."""

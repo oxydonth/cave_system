@@ -17,12 +17,15 @@ from homeassistant.helpers import issue_registry as ir
 from custom_components.cave_heating.const import DOMAIN
 from tests.devices.capabilities import devices
 from tests.devices.rig import (
+    CONTACT_ID,
+    FRITZ_AIN,
     HOUR,
     MIN,
     MODELS,
     OFF,
     ROOM_CLIMATE,
     SEC,
+    SENSOR_ID,
     Rig,
     heat,
 )
@@ -199,3 +202,219 @@ async def test_unanswered_command_resent_then_flagged(rig: Rig, device: str) -> 
     assert rig.status(model) == "ok"
     assert not rig.problem()
     assert issues.async_get_issue(DOMAIN, f"unresponsive_{model.climate}") is None
+
+
+@pytest.mark.parametrize("device", devices("dial_becomes_room_override"))
+async def test_dial_becomes_room_override(rig: Rig, device: str) -> None:
+    """Concept 5.3 and 5.5: a dial turned on the device (after the start's exemption window) is a
+    hand change; manual_settle (45 s) after it, its target is the room's override. The turned
+    device itself receives nothing: it already has the target."""
+    model = MODELS[device]
+    await rig.start(model, contact=False, sensor=False)
+    await rig.past_start_window()
+    rig.mark()
+    await rig.device(lambda: rig.sim.home.turn_dial(model.device_id, 23.0))
+    assert rig.state(model.climate).attributes["temperature"] == 23.0
+    await rig.advance(40 * SEC)
+    assert rig.room()[2] == "comfort", "still collecting within manual_settle"
+    await rig.advance(10 * SEC)
+    assert rig.room() == (23.0, "none", "override")
+    assert rig.state(ROOM_CLIMATE).attributes["override_until"] is not None
+    await rig.advance(10 * MIN)
+    assert rig.commands(model) == []
+    assert rig.status(model) == "ok"
+
+
+MODE_CHANGES = {
+    "TRV-ZBT": ["off", "auto"],
+    "TRVZB": ["off", "auto"],
+    "BTH-RA": ["pause", "schedule"],
+    "FRITZ-302": ["off", "on"],
+}
+
+
+@pytest.mark.parametrize(
+    ("device", "mode"), devices("mode_changed_on_device_is_put_back", MODE_CHANGES)
+)
+async def test_mode_changed_on_device_is_put_back(rig: Rig, device: str, mode: str) -> None:
+    """Concept 5.5: only the target is adopted; a thermostat that changes its mode on its own is
+    put back with one command, and the room's target is unchanged.
+
+    Sonoff: system_mode off or auto. Bosch: operating_mode pause (off) or schedule (auto).
+    FRITZ!: the dial turned all the way down (mode off) or up (ON, no target); concept 5.6 says
+    the controller undoes it.
+    """
+    model = MODELS[device]
+    await rig.start(model, contact=False, sensor=False)
+    await rig.past_start_window()
+    rig.mark()
+    if model.zigbee:
+        await rig.device(lambda: rig.sim.home.set_device_mode(model.device_id, mode))
+    else:
+        await rig.device(lambda: rig.sim.home.turn_dial(model.device_id, mode))
+    await rig.advance(5 * SEC)
+    assert rig.commands(model) == heat(model, 21.0, with_mode=model.zigbee)
+    state = rig.state(model.climate)
+    assert (state.state, state.attributes["temperature"]) == ("heat", 21.0)
+    await rig.advance(2 * MIN)
+    assert rig.room() == (21.0, "comfort", "comfort"), "nothing adopted"
+    assert rig.commands(model) == heat(model, 21.0, with_mode=model.zigbee)
+    assert rig.status(model) == "ok"
+
+
+@pytest.mark.parametrize("device", devices("mode_never_set_to_heat_alone"))
+async def test_mode_never_set_to_heat_alone(rig: Rig, device: str) -> None:
+    """Concept 5.5: the mode is never set to heat on its own, because a FRITZ! thermostat would
+    then apply the FRITZ!Box's own temperatures. Through the room switched off, a window pause,
+    summer mode and the mode changed on the device, every climate call that asks for heat
+    carries the target, and the device ends at the room's target.
+
+    The room's comfort is 22.5 °C, so that it differs from the FRITZ!Box's own comfort
+    temperature (21 °C) and eco temperature (16 °C): a FRITZ! thermostat switched to heat alone
+    would end at one of those.
+    """
+    model = MODELS[device]
+    await rig.start(model, sensor=False)
+    await rig.set_comfort(22.5)
+    await rig.past_start_window()
+    rig.mark()
+    await rig.room_off()
+    await rig.advance(5 * SEC)
+    await rig.room_on()
+    await rig.advance(5 * SEC)
+    rig.sim.home.set_window(CONTACT_ID, True)
+    await rig.advance(2 * MIN)
+    rig.sim.home.set_window(CONTACT_ID, False)
+    await rig.advance(3 * MIN)
+    await rig.home_mode("off")
+    await rig.advance(5 * SEC)
+    await rig.home_mode("auto")
+    await rig.advance(5 * SEC)
+    if model.zigbee:
+        off = "pause" if model.key == "BTH-RA" else "off"
+        await rig.device(lambda: rig.sim.home.set_device_mode(model.device_id, off))
+    else:
+        await rig.device(lambda: rig.sim.home.turn_dial(model.device_id, "off"))
+    await rig.advance(1 * MIN)
+    calls = rig.controller_calls(model.climate)
+    assert [data for service, data in calls if service == "set_hvac_mode"] == [
+        {"hvac_mode": "off"}
+    ] * 3, "set_hvac_mode only ever switches off"
+    heat_calls = [data for _, data in calls if data.get("hvac_mode") == "heat"]
+    assert len(heat_calls) == 4, "after room off, the window, home mode off and the device"
+    assert all(data.get("temperature") == 22.5 for data in heat_calls)
+    assert rig.state(model.climate).attributes["temperature"] == 22.5
+    on_device = {("target", 22.5), ("mode", "heat"), ("mode", "off")}
+    assert set(rig.commands(model)) <= on_device, "never the device's own temperatures"
+    if not model.zigbee:
+        box = rig.sim.home.fritzbox.thermostats[FRITZ_AIN]
+        assert {box.komfort / 2, box.absenk / 2}.isdisjoint({22.5})
+
+
+@pytest.mark.parametrize("device", devices("offline_and_back"))
+async def test_offline_and_back(rig: Rig, device: str) -> None:
+    """Concept 5.4 and 5.5: an unavailable thermostat is skipped (nothing is sent), shows as
+    unavailable on the problem sensor, and its room is unavailable when it was the only one. When
+    it returns, its first report is not a hand change, even with a dial turned meanwhile: it is
+    brought in line with one command.
+
+    Zigbee: unavailable at once (Zigbee2MQTT's availability). FRITZ!: the box reports it absent.
+    """
+    model = MODELS[device]
+    await rig.start(model, contact=False, sensor=False)
+    await rig.past_start_window()
+    rig.mark()
+    await rig.device(lambda: rig.sim.home.set_online(model.device_id, False))
+    assert rig.state(model.climate).state == "unavailable"
+    assert rig.status(model) == "unavailable"
+    assert rig.problem()
+    assert rig.state(ROOM_CLIMATE).state == "unavailable"
+    await rig.set_comfort(22.0)
+    await rig.advance(30 * MIN)
+    assert rig.commands(model) == [], "nothing is sent while it is unavailable"
+
+    rig.sim.home.turn_dial(model.device_id, 24.0)
+    await rig.device(lambda: rig.sim.home.set_online(model.device_id, True))
+    await rig.advance(5 * SEC)
+    assert rig.commands(model) == heat(model, 22.0)
+    assert rig.state(model.climate).attributes["temperature"] == 22.0
+    await rig.advance(2 * MIN)
+    assert rig.room() == (22.0, "comfort", "comfort"), "the dial turned while away is not adopted"
+    assert rig.status(model) == "ok"
+    assert not rig.problem()
+    assert rig.commands(model) == heat(model, 22.0)
+
+
+@pytest.mark.parametrize("device", devices("dial_turned_while_silent"))
+async def test_dial_turned_while_silent(rig: Rig, device: str) -> None:
+    """A Zigbee device that falls silent stays available for 25 hours (Zigbee2MQTT). A dial
+    turned meanwhile is reported when it answers again. It never was unavailable, so no
+    exemption window applies: by concept 5.5 the report is a hand change and becomes the room's
+    override, and the device receives nothing."""
+    model = MODELS[device]
+    await rig.start(model, contact=False, sensor=False)
+    await rig.past_start_window()
+    rig.mark()
+    rig.sim.home.set_silent(model.device_id, True)
+    rig.sim.home.turn_dial(model.device_id, 23.5)
+    await rig.advance(1 * HOUR)
+    assert rig.state(model.climate).attributes["temperature"] == 21.0, "not heard yet"
+    assert rig.state(model.climate).state == "heat", "still available"
+    rig.sim.home.set_silent(model.device_id, False)
+    await rig.advance(50 * SEC)
+    assert rig.room() == (23.5, "none", "override")
+    assert rig.commands(model) == []
+    assert rig.status(model) == "ok"
+
+
+@pytest.mark.parametrize("device", devices("battery_level"))
+async def test_battery_level(rig: Rig, device: str) -> None:
+    """Concept 6: the maintenance view lists every battery sensor Home Assistant knows. Each
+    device has one, and a new level reaches Home Assistant."""
+    if device in MODELS:
+        model = MODELS[device]
+        await rig.start(model, sensor=False, contact=False, heating=False)
+        device_id, entity_id = model.device_id, model.battery
+    else:
+        climate = device == "SNZB-02P"
+        await rig.start(sensor=climate, contact=not climate, heating=False)
+        device_id = SENSOR_ID if climate else CONTACT_ID
+        entity_id = f"sensor.{device_id}_battery"
+    assert float(rig.state(entity_id).state) > 50
+    assert rig.state(entity_id).attributes["device_class"] == "battery"
+    await rig.device(lambda: rig.sim.home.set_battery(device_id, 15, low=True))
+    assert float(rig.state(entity_id).state) == 15
+
+
+@pytest.mark.parametrize("device", devices("hold_for_device_check"))
+async def test_hold_for_device_check(rig: Rig, device: str) -> None:
+    """Concept 5.5, hold: the sequence ``cave device-check`` runs. While held, the controller
+    sends the thermostat nothing and adopts nothing from it: a target half a degree higher, set
+    directly on the thermostat, is neither corrected nor adopted, and a room change is not sent.
+    Release brings it in line, and nothing the check did is adopted."""
+    model = MODELS[device]
+    await rig.start(model, contact=False, sensor=False)
+    await rig.past_start_window()
+    rig.mark()
+    await rig.hold(model, "00:45:00")
+    assert rig.status(model) == "held"
+    assert not rig.problem(), "a hold is a status, not a problem"
+    await rig.call("climate", "set_temperature", entity_id=model.climate, temperature=21.5)
+    await rig.refresh_fritzbox()
+    assert rig.state(model.climate).attributes["temperature"] == 21.5
+    await rig.set_comfort(22.0)
+    await rig.advance(10 * MIN)
+    assert rig.room() == (22.0, "comfort", "comfort"), "nothing adopted from a held thermostat"
+    assert rig.state(model.climate).attributes["temperature"] == 21.5
+    await rig.call("climate", "set_temperature", entity_id=model.climate, temperature=21.0)
+    await rig.refresh_fritzbox()
+    own = heat(model, 21.5) + heat(model, 21.0)
+    assert rig.commands(model) == own, "only the check's own commands"
+
+    await rig.release(model)
+    await rig.advance(5 * SEC)
+    assert rig.commands(model) == [*own, *heat(model, 22.0)]
+    await rig.advance(10 * MIN)
+    assert rig.room() == (22.0, "comfort", "comfort")
+    assert rig.status(model) == "ok"
+    assert rig.commands(model) == [*own, *heat(model, 22.0)]

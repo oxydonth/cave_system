@@ -222,13 +222,30 @@ CAPABILITIES: Final[dict[str, Capability]] = {
 }
 
 
-def devices(capability: str, variants: Mapping[str, Iterable[Any]] | None = None) -> list[Any]:
+def devices(
+    capability: str,
+    variants: Mapping[str, Iterable[Any]] | None = None,
+    findings: Mapping[str, str] | None = None,
+) -> list[Any]:
     """The parameters of ``test_<capability>``: every device, the inapplicable ones skipped.
 
     ``variants`` gives several cases per device (``{"TRV-ZBT": ["off", "auto"], ...}``); a test
     with variants takes two arguments, the device and the variant, with IDs ``<device>-<variant>``.
+
+    ``findings`` maps a test ID to a finding: a case in which the integration or a simulator does
+    not do what the concept requires. The test still asserts the concept, and is marked as a
+    strict expected failure (``xfail``) whose reason starts with ``finding:``, so the pipeline
+    stays green while the finding is open, the matrix shows it, and the mark has to go as soon as
+    the finding is fixed.
     """
     import pytest  # here, so that the matrix script needs no pytest
+
+    findings = findings or {}
+
+    def marks(test_id: str) -> tuple[Any, ...]:
+        if test_id not in findings:
+            return ()
+        return (pytest.mark.xfail(reason=f"finding: {findings[test_id]}", strict=True),)
 
     entry = CAPABILITIES[capability]
     params: list[Any] = []
@@ -236,14 +253,16 @@ def devices(capability: str, variants: Mapping[str, Iterable[Any]] | None = None
         applies = device in entry.applies
         skip = () if applies else (pytest.mark.skip(reason=f"n/a: {entry.reason(device)}"),)
         if variants is None:
-            params.append(pytest.param(device, id=device, marks=skip))
+            params.append(pytest.param(device, id=device, marks=skip or marks(device)))
         elif applies:
-            params.extend(
-                pytest.param(device, variant, id=f"{device}-{variant}")
-                for variant in variants[device]
-            )
+            for variant in variants[device]:
+                test_id = f"{device}-{variant}"
+                params.append(pytest.param(device, variant, id=test_id, marks=marks(test_id)))
         else:
             params.append(pytest.param(device, None, id=device, marks=skip))
+    unknown = set(findings) - {param.id for param in params}
+    if unknown:
+        raise ValueError(f"findings for unknown test IDs: {sorted(unknown)}")
     return params
 
 
