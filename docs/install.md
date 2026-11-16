@@ -135,7 +135,12 @@ without a browser:
   services → Helpers; the bootstrap never touches a schedule that exists;
 * the script token: a long-lived access token named `cave-scripts` in
   `CAVE_DATA/homeassistant/.cave/token`, mode 0600 and owned by the user who runs `./cave`, which
-  `apply`, `status`, `update` and the health check use.
+  `apply`, `status`, `update` and the health check use;
+* and it removes the integrations Home Assistant's onboarding adds by itself (Radio Browser,
+  Google Translate text-to-speech, Shopping list): this system keeps nothing that reaches the
+  internet when used. Only the entries onboarding created go; one you add later yourself stays.
+
+To try everything without hardware first, see [the demo](demo.md).
 
 Run it again whenever you like: it changes only what is missing, so a second run changes nothing,
 and an interrupted run is finished by the next. It repairs a deleted or revoked script token (the
