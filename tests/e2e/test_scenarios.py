@@ -17,6 +17,7 @@ from pathlib import Path
 from typing import Any
 
 import pytest
+import pytest_socket
 
 from cave_ops.commands.demo import PRESENCE_SWITCH
 from custom_components.cave_heating.schema import load_file
@@ -135,6 +136,9 @@ class Home:
 @pytest.fixture(scope="module")
 def home(stack: Any, wait_until: Callable[..., Any]) -> Home:
     """The demo, brought to a known state: everyone home, every schedule on, all at comfort."""
+    # Home Assistant's test plugin blocks sockets before each test, and its `socket_enabled`
+    # fixture (conftest's `network`) is set up after module fixtures like this one.
+    pytest_socket.enable_socket()
     home = Home(stack, wait_until)
     home.wait_until(
         lambda: all(home.api.get_state(f"climate.cave_{room}") for room in ROOMS),
