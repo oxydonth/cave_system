@@ -203,6 +203,12 @@ CAPABILITIES: Final[dict[str, Capability]] = {
         ("SNZB-04P",),
         {**dict.fromkeys(THERMOSTATS, NOT_A_SENSOR), "SNZB-02P": "a climate sensor, no contact"},
     ),
+    "contact_returns_closed_after_grace": _only(
+        "Answering again closed after the grace: nothing changes, nothing is sent",
+        "Sensors",
+        ("SNZB-04P",),
+        {**dict.fromkeys(THERMOSTATS, NOT_A_SENSOR), "SNZB-02P": "a climate sensor, no contact"},
+    ),
     # --- rooms built from each thermostat model ---------------------------------------------
     "room_comfort_and_eco_by_schedule": Capability(
         "Room: comfort and eco by schedule", "Rooms", THERMOSTATS, _ROOMS
