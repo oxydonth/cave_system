@@ -16,8 +16,8 @@ owned by someone else.
 
 from __future__ import annotations
 
+import json
 import os
-import posixpath
 import pwd
 import shutil
 import stat
@@ -112,30 +112,80 @@ def remove_stale_git_locks(ctx: Context) -> None:
             lock.unlink()
 
 
-def check_out_exactly(ctx: Context, commit: str, other: str) -> str | None:
+def check_out_exactly(
+    ctx: Context, commit: str, other: str, *, remove_added: bool
+) -> tuple[str | None, list[str]]:
     """Make the checkout exactly ``commit``, whatever an interrupted checkout of ``other`` left:
-    Git's lock files, HEAD where it was, files of both in the working tree. Returns ``None``, or
-    what failed.
+    Git's lock files, HEAD where it was, files of both in the working tree.
+
+    With ``remove_added`` (only when a checkout of ``other`` may have run), a file that ``other``
+    adds is removed if, and only if, its content is ``other``'s own: the owner's untracked files
+    are never touched, even where ``other`` has a file of the same name. Returns what failed (or
+    ``None``) and the paths that were left in place.
     """
     remove_stale_git_locks(ctx)
     done = git(ctx, "checkout", "--force", "--detach", commit)
     if not done.ok:
         done = git(ctx, "reset", "--hard", commit)
     if not done.ok:
-        return done.output.strip()[-300:] or f"exit status {done.returncode}"
-    # Files that only ``other`` has are untracked now; remove exactly those, nothing else.
+        return done.output.strip()[-300:] or f"exit status {done.returncode}", []
+    if not remove_added:
+        return None, []
     added = git(ctx, "diff", "--name-only", "--diff-filter=A", "-z", commit, other)
     if not added.ok:
-        return f"the files {other} added could not be listed: {added.output.strip()[-300:]}"
-    for name in filter(None, added.stdout.split("\0")):
-        path = ctx.paths.root / name
-        if os.path.lexists(path) and not path.is_dir():
+        return f"the files {other} added could not be listed: {added.output.strip()[-300:]}", []
+    present = [
+        name
+        for name in filter(None, added.stdout.split("\0"))
+        if os.path.lexists(ctx.paths.root / name)
+    ]
+    regular = [name for name in present if (ctx.paths.root / name).is_file()]
+    kept = [name for name in present if name not in regular]
+    if regular:
+        here = git(ctx, "hash-object", "--", *regular)
+        theirs = git(ctx, "rev-parse", *(f"{other}:{name}" for name in regular))
+        if not here.ok or not theirs.ok:
+            return None, present
+        for name, mine, released in zip(
+            regular, here.stdout.split(), theirs.stdout.split(), strict=False
+        ):
+            if mine != released:
+                kept.append(name)
+                continue
+            path = ctx.paths.root / name
             path.unlink()
             parent = path.parent
             while parent != ctx.paths.root and not any(parent.iterdir()):
                 parent.rmdir()
                 parent = parent.parent
-    return None
+    return None, sorted(kept)
+
+
+def entries_elsewhere(ctx: Context) -> list[str]:
+    """State entries on another file system than ``CAVE_DATA`` itself: the snapshot could not be
+    put back by renaming them."""
+    data = ctx.paths.data
+    home = device_of(data)
+    return [entry for entry in state_entries(data) if device_of(data / entry) != home]
+
+
+def device_of(path: Path) -> int:
+    """The file system a path is on; a function so that tests can pretend."""
+    return path.lstat().st_dev
+
+
+RESTORE_MARKER = "restore.json"
+
+
+def restore_in_progress(ctx: Context) -> str | None:
+    """The archive of a restore that was interrupted while moving the state in, or ``None``."""
+    marker = ops_dir(ctx) / RESTORE_MARKER
+    try:
+        return str(json.loads(marker.read_text(encoding="utf-8")).get("archive", "an archive"))
+    except FileNotFoundError:
+        return None
+    except (OSError, ValueError):
+        return "an archive"
 
 
 def give_to_checkout_owner(ctx: Context, path: Path) -> None:
@@ -253,9 +303,21 @@ class UnsafeArchive(CaveError):
         super().__init__(f"refusing archive member {member!r}: {why}")
 
 
-def _escapes(relative: str) -> bool:
-    """Whether a normalised relative path leaves its root."""
-    return relative == ".." or relative.startswith("../") or relative.startswith("/")
+def safe_link_target(target: str) -> bool:
+    """The one rule for symbolic links in a backup: relative, and no ``..`` anywhere.
+
+    Such a link can only point at or below its own directory. Together with "nothing in the
+    archive lies below a link" it cannot resolve outside the tree, whatever other links its path
+    passes through and in whatever order they are created. The state of Home Assistant,
+    Mosquitto and Zigbee2MQTT needs nothing else: none of them keeps links in its data as this
+    system configures them (Zigbee2MQTT's ``log/current`` link exists only with
+    ``advanced.log_symlink_current``, which the template leaves off, and points at a sibling
+    log directory). ``backup`` leaves out any link that breaks the rule, so every archive it
+    writes can be restored.
+    """
+    if not target or target.startswith("/"):
+        return False
+    return ".." not in PurePosixPath(target).parts
 
 
 def check_member(member: tarfile.TarInfo, prefix: str = "") -> PurePosixPath:
@@ -275,12 +337,11 @@ def check_member(member: tarfile.TarInfo, prefix: str = "") -> PurePosixPath:
             raise UnsafeArchive(member.name, f"not below {prefix}/") from error
     if not (member.isdir() or member.isreg() or member.issym()):
         raise UnsafeArchive(member.name, "only directories, files and symbolic links are allowed")
-    if member.issym():
-        if not member.linkname or member.linkname.startswith("/"):
-            raise UnsafeArchive(member.name, f"the link to {member.linkname!r} leaves the target")
-        resolved = posixpath.normpath(posixpath.join(str(path.parent), member.linkname))
-        if _escapes(resolved):
-            raise UnsafeArchive(member.name, f"the link to {member.linkname} leaves the target")
+    if member.issym() and not safe_link_target(member.linkname):
+        raise UnsafeArchive(
+            member.name,
+            f"the link to {member.linkname!r} is absolute or contains '..'; backups have none",
+        )
     return path
 
 
@@ -364,11 +425,18 @@ def extract(
         if not _inside(path.parent, target):
             raise UnsafeArchive(member.name, "its directory resolves outside the target")
         os.symlink(member.linkname, path)
-        if not _inside(path, target):
-            path.unlink()
-            raise UnsafeArchive(member.name, f"the link to {member.linkname} resolves outside")
         if is_root():
             os.lchown(path, *owner_of(member))
+    # Once the whole tree exists, every link in it must resolve inside it. (The rule above
+    # already guarantees this; checking the finished tree does not depend on that reasoning.)
+    for current, dirs, files in os.walk(target):
+        for name in (*dirs, *files):
+            path = Path(current) / name
+            if path.is_symlink() and not _inside(path, target):
+                raise UnsafeArchive(
+                    str(path.relative_to(target)),
+                    f"it resolves outside, to {os.path.realpath(path)}",
+                )
     for path, member in reversed(directories):
         if is_root():
             os.chown(path, *owner_of(member))

@@ -59,6 +59,15 @@ def run(ctx: Context, args: argparse.Namespace) -> int:
             f"({record.switch.phase}, started {record.switch.started}) was interrupted. "
             "`sudo ./cave update --recover` finishes it; it also runs at boot.",
         )
+    restoring = _server.restore_in_progress(ctx)
+    if restoring is not None and not (holder and "restore" in holder):
+        healthy = False
+        _line(
+            ctx,
+            "INTERRUPTED",
+            f"a restore of {restoring} was interrupted; the state may be half restored. Run the "
+            "same `sudo ./cave restore` again.",
+        )
     if record.last_result:
         last = record.last_result
         _line(ctx, "Last update", f"{last.get('time')}: {last.get('message')}")

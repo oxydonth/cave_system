@@ -135,20 +135,23 @@ def test_no_archive_writes_outside_its_target(tmp_path, members):
     assert outside == []
 
 
-def test_a_link_that_resolves_outside_is_refused_even_when_written_last(tmp_path):
-    target = tmp_path / "t"
-    target.mkdir()
+def test_the_finished_tree_is_checked_even_without_the_link_rule(tmp_path, monkeypatch):
+    """The final check does not depend on the rule for link targets: with the rule switched
+    off, the reviewer's chain (each link harmless alone, created before the link it passes
+    through exists) is still refused once the whole tree is there."""
+    monkeypatch.setattr(_server, "safe_link_target", lambda target: True)
+    target = tmp_path / "a" / "b" / "t"
+    target.mkdir(parents=True)
     members = [
-        ("a", tarfile.SYMTYPE, ".", b""),
-        ("b", tarfile.DIRTYPE, "", b""),
-        ("b/c", tarfile.SYMTYPE, "../a/..", b""),
+        ("x", tarfile.DIRTYPE, "", b""),
+        ("homeassistant", tarfile.SYMTYPE, "x/s/x/s/../..", b""),
+        ("x/s", tarfile.SYMTYPE, "..", b""),
     ]
     with (
         tarfile.open(fileobj=tar_bytes(members)) as tar,
         pytest.raises(_server.UnsafeArchive, match="resolves outside"),
     ):
         _server.extract(tar, tar.getmembers(), target)
-    assert not (target / "b" / "c").is_symlink()
 
 
 def test_links_inside_the_target_are_restored(tmp_path):

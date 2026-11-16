@@ -37,7 +37,7 @@ from ..health import wait_healthy
 from ..notify import notify
 from ..paths import Paths
 from . import _archives, _releases, _server
-from ._update_state import Switch, now
+from ._update_state import BEFORE_SWITCH, Switch, now
 from ._update_state import load as load_update_record
 from ._update_state import save as save_update_record
 
@@ -213,6 +213,14 @@ def _restore(
             f"on {existing}. Nothing was changed."
         )
 
+    elsewhere = _server.entries_elsewhere(ctx) if data.is_dir() else []
+    if elsewhere:
+        raise CaveError(
+            f"{', '.join(elsewhere)} in {data} is on another file system than the rest of the "
+            "state; the restore moves entries by renaming and cannot replace it. Nothing was "
+            "changed."
+        )
+
     was_running = ctx.paths.env_file.is_file()
     if was_running:
         ctx.say("Stopping the stack ...")
@@ -224,30 +232,42 @@ def _restore(
             )
 
     info = ctx.paths.root.stat()
+    marker = ops / _server.RESTORE_MARKER
     try:
-        if switch is not None:
-            ctx.say(f"Checking out {switch.from_label}, the release before the interrupted update")
-            failed = _server.check_out_exactly(ctx, switch.from_commit, switch.to_commit)
-            if failed is not None:
-                raise CaveError(f"{switch.from_label} could not be checked out: {failed}")
         ctx.say(f"Unpacking into {staging} ...")
         staging.mkdir(parents=True, mode=0o700)
         archive.extract(staging, archive.owners(info.st_uid, info.st_gid))
         _server.sync()
-    except (OSError, tarfile.TarError, EOFError, CaveError) as error:
-        # Nothing of the state was touched yet: clean up and start what was running.
-        _server.remove(staging)
-        again = ""
-        if was_running:
-            started = ctx.compose("up", "--detach", "--force-recreate", timeout=900.0)
-            again = (
-                " The stack was started again unchanged."
-                if started.ok
-                else f" The stack could NOT be started again: {started.output.strip()[-300:]}"
+        # Only now, with everything unpacked: the release from before an interrupted update, and
+        # the marker that makes an interrupted move visible (`status`) and stops `update` and
+        # `backup` until the restore is run again.
+        if switch is not None:
+            ctx.say(f"Checking out {switch.from_label}, the release before the interrupted update")
+            failed, kept = _server.check_out_exactly(
+                ctx,
+                switch.from_commit,
+                switch.to_commit,
+                remove_added=switch.phase != BEFORE_SWITCH,
             )
-        message = f"The restore failed while unpacking: {error}. Nothing was restored.{again}"
-        notify(ctx, TITLE, message)
-        raise CaveError(message) from error
+            if failed is not None:
+                raise CaveError(f"{switch.from_label} could not be checked out: {failed}")
+            if kept:
+                ctx.warn("Left in place, not the update's files: " + ", ".join(kept))
+        _server.write_atomic(marker, json.dumps({"archive": str(archive.path)}).encode(), 0o644)
+        if switch is not None:
+            # From here on the restore, not the update's snapshot, decides the state: a recovery
+            # must never put that snapshot back over the restored state.
+            record = load_update_record(ctx)
+            record.failed.setdefault(
+                switch.to_release,
+                {"time": now(), "reason": "interrupted, then superseded by a restore"},
+            )
+            record.switch = None
+            save_update_record(ctx, record)
+    except (OSError, tarfile.TarError, EOFError, CaveError) as error:
+        _server.remove(staging)
+        marker.unlink(missing_ok=True)
+        return _unpack_failed(ctx, args, error, was_running)
 
     aside = ops / f"before-restore-{stamp}"
     counter = 1
@@ -275,13 +295,6 @@ def _restore(
     _server.sync()
     abandoned = ""
     if switch is not None:
-        record = load_update_record(ctx)
-        record.failed.setdefault(
-            switch.to_release,
-            {"time": now(), "reason": "interrupted, then superseded by a restore"},
-        )
-        record.switch = None
-        save_update_record(ctx, record)
         abandoned = (
             f" The interrupted update to {switch.to_release} was abandoned: {switch.from_label} "
             "is checked out."
@@ -298,6 +311,7 @@ def _restore(
         info = ctx.paths.root.stat()
         os.chown(env_file, info.st_uid, info.st_gid)
     ctx.env.update(load_env(env_file))
+    marker.unlink(missing_ok=True)
     # As `init` does: Docker would create a missing mount source as root inside the checkout.
     tools = ctx.paths.root / "tools"
     if not tools.exists():
@@ -326,3 +340,33 @@ def _restore(
     (ctx.say if health.healthy else ctx.warn)(message)
     notify(ctx, TITLE, message)
     return 0 if health.healthy else 1
+
+
+def _unpack_failed(
+    ctx: Context, args: argparse.Namespace, error: BaseException, was_running: bool
+) -> int:
+    """Nothing of the state was touched. Start what was running; if an update was interrupted,
+    finish that update's way back instead, because its release and state belong together."""
+    pending = load_update_record(ctx).switch
+    head = f"The restore failed while unpacking: {error}. Nothing was restored."
+    if pending is not None:
+        from .update import _Update
+
+        recover = argparse.Namespace(force=False, auto=False, recover=True, timeout=args.timeout)
+        status = _Update(ctx, recover).finish_interrupted()
+        message = (
+            f"{head} The interrupted update to {pending.to_release} was finished instead (exit "
+            f"status {status}, see its own message)."
+        )
+    elif was_running:
+        started = ctx.compose("up", "--detach", "--force-recreate", timeout=900.0)
+        message = (
+            f"{head} The stack was started again unchanged."
+            if started.ok
+            else f"{head} The stack could NOT be started again: {started.output.strip()[-300:]}"
+        )
+    else:
+        message = head
+    ctx.warn(message)
+    notify(ctx, TITLE, message)
+    return 1

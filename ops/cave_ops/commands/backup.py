@@ -67,6 +67,15 @@ def run(ctx: Context, args: argparse.Namespace) -> int:
                 ctx.warn(message)
                 notify(ctx, TITLE, message)
                 return 1
+            restoring = _server.restore_in_progress(ctx)
+            if restoring is not None:
+                message = (
+                    f"No backup was made: a restore of {restoring} was interrupted and the state "
+                    "may be half restored. Run the same `sudo ./cave restore` again."
+                )
+                ctx.warn(message)
+                notify(ctx, TITLE, message)
+                return 1
             return _backup(ctx, directory, keep, copy_to)
     except LockBusy as busy:
         message = f"No backup was made: {busy}."
@@ -88,6 +97,7 @@ def write_archive(ctx: Context, target: Path) -> dict[str, Any]:
     release, release_tag = _release(ctx)
     databases: list[str] = []
     unreadable: list[str] = []
+    left_out: list[str] = []
     env_info = ctx.paths.env_file.stat()
     owner = ctx.paths.root.stat()
     with (
@@ -98,7 +108,13 @@ def write_archive(ctx: Context, target: Path) -> dict[str, Any]:
         _archives.add_file(archive, "env", ctx.paths.env_file, env_info)
         entries = _server.state_entries(data)
         count = _archives.add_tree(
-            archive, data, _server.walk_entries(data, entries), spool, databases, unreadable
+            archive,
+            data,
+            _server.walk_entries(data, entries),
+            spool,
+            databases,
+            unreadable,
+            left_out,
         )
         manifest: dict[str, Any] = {
             "format": _archives.FORMAT,
@@ -110,6 +126,7 @@ def write_archive(ctx: Context, target: Path) -> dict[str, Any]:
             "owner": {"uid": owner.st_uid, "gid": owner.st_gid},
             "databases": databases,
             "unreadable_databases": unreadable,
+            "links_left_out": left_out,
             "entries": count,
         }
         manifest_file = spool / "manifest.json"
@@ -151,6 +168,11 @@ def _backup(ctx: Context, directory: Path, keep: int, copy_to: Path | None) -> i
         message += (
             f"; WARNING: {', '.join(manifest['unreadable_databases'])} could not be read as a "
             "SQLite database (damaged?) and was archived as it is"
+        )
+    if manifest["links_left_out"]:
+        message += (
+            f"; {len(manifest['links_left_out'])} symbolic link(s) pointing outside their "
+            f"directory were left out ({', '.join(manifest['links_left_out'][:3])})"
         )
     if removed:
         message += f"; {len(removed)} older archive(s) removed, {keep} kept"

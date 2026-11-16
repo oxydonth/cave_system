@@ -31,6 +31,7 @@ from pathlib import Path
 from typing import Any
 
 from ..errors import CaveError
+from ._server import safe_link_target
 
 PREFIX = "cave-backup-"
 SUFFIX = ".tar.gz"
@@ -175,6 +176,7 @@ def add_tree(
     spool: Path,
     databases: list[str],
     unreadable: list[str],
+    left_out: list[str],
 ) -> int:
     """Add every path of ``paths`` (below ``data``) as ``data/<relative>``; return the count.
 
@@ -182,7 +184,9 @@ def add_tree(
     (a log) cannot break the archive. A file that disappears meanwhile is left out. A SQLite
     database that cannot be copied online (a damaged one, such as the
     ``home-assistant_v2.db.corrupt.*`` Home Assistant keeps) is archived as it is and listed in
-    ``unreadable``, so that it cannot stop the backup of everything else.
+    ``unreadable``, so that it cannot stop the backup of everything else. A symbolic link that is
+    absolute or contains ``..`` is left out and listed in ``left_out``: ``restore`` refuses such
+    links (``_server.safe_link_target``), and no service keeps one in its state.
     """
     count = 0
     for path in paths:
@@ -193,8 +197,13 @@ def add_tree(
             if stat.S_ISDIR(info.st_mode):
                 archive.addfile(_info(name, info, tarfile.DIRTYPE))
             elif stat.S_ISLNK(info.st_mode):
+                link = os.readlink(path)
+                if not safe_link_target(link):
+                    # `restore` refuses such a link; leaving it out keeps the archive restorable.
+                    left_out.append(f"{relative} -> {link}")
+                    continue
                 entry = _info(name, info, tarfile.SYMTYPE)
-                entry.linkname = os.readlink(path)
+                entry.linkname = link
                 archive.addfile(entry)
             elif stat.S_ISREG(info.st_mode):
                 if is_sidecar(path):

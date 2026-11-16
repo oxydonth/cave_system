@@ -97,7 +97,8 @@ def test_the_checks_use_the_exported_release_and_a_project_of_their_own(server, 
     assert exported.endswith(".cave/ops/tmp/release/compose.yaml")
     assert all(call.env["CAVE_DATA"] == str(server.data) for call in checks)
     validate = [call for call in checks if "custom_components.cave_heating.validate" in call.args]
-    assert validate[0].args[-1] == "/config/cave/.applied/heating.yaml"
+    # Through the shared heating.validate(): a staged copy of the applied file's bytes.
+    assert validate[0].args[-1].startswith("/config/cave/.validating-")
 
 
 def test_only_the_last_two_snapshots_are_kept(server, run_cave):

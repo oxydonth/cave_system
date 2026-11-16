@@ -32,7 +32,7 @@ import dataclasses
 import os
 import signal
 import tarfile
-from collections.abc import Iterator
+from collections.abc import Callable, Iterator
 from contextlib import contextmanager
 from pathlib import Path
 from types import FrameType
@@ -42,7 +42,7 @@ from ..context import Context
 from ..errors import CaveError
 from ..ha import read_token
 from ..health import Health, check_health, wait_healthy
-from ..heating import VALIDATOR_MODULE
+from ..heating import validation_result
 from ..lock import Lock, LockBusy
 from ..notify import notify
 from ..paths import CONTAINER_CONFIG
@@ -99,6 +99,21 @@ def add_arguments(parser: argparse.ArgumentParser) -> None:
         metavar="SECONDS",
         help="how long a started release may take to become healthy (default 900)",
     )
+
+
+def could_not_run(result: Result, what: str) -> str | None:
+    """Why a check in the new image did not run at all, or ``None`` when it ran and rejected.
+
+    The validator and Home Assistant's ``check_config`` exit with 1 for a file they reject and
+    write no traceback. Anything else (124 a timeout, 125-127 Docker or the command, 2 the
+    validator called wrongly, a traceback, a missing module) says nothing about the file.
+    """
+    output = result.output
+    if "No module named" in output:
+        return f"the {what} is not in this release"
+    if result.returncode == 1 and "Traceback" not in output:
+        return None
+    return COULD_NOT_RUN.get(result.returncode, f"exit status {result.returncode}")
 
 
 def auto_updates_off(env: dict[str, str]) -> bool:
@@ -187,12 +202,23 @@ class _Update:
         self.ctx = ctx
         self.args = args
         self.record = state.load(ctx)
+        self.notes: list[str] = []
+        self.cleanup: Callable[[], None] | None = None
 
     # ---------------------------------------------------------------------------- the run
     def run(self) -> int:
         ctx, args, record = self.ctx, self.args, self.record
         if record.problem:
             ctx.warn(record.problem)
+        restoring = _server.restore_in_progress(ctx)
+        if restoring is not None:
+            return self.conclude(
+                None,
+                "refused",
+                NOT_UPDATED,
+                f"Not updating: a restore of {restoring} was interrupted, and the state may be "
+                "half restored. Run the same `sudo ./cave restore` again. Nothing was changed.",
+            )
         if record.switch is not None:
             return self.finish_interrupted()
         if args.recover:
@@ -298,6 +324,16 @@ class _Update:
                     "`sudo ./cave update` by hand to update anyway.",
                 )
             ctx.warn(f"Warning: {message}.")
+
+        elsewhere = _server.entries_elsewhere(ctx)
+        if elsewhere:
+            return self.not_updated(
+                tag,
+                "refused",
+                f"Not updating to {tag}: {', '.join(elsewhere)} in {ctx.paths.data} is on another "
+                "file system than the rest of the state, so the snapshot could not be put back by "
+                f"renaming. Nothing was changed. See {OPERATIONS}, 'Which user'.",
+            )
 
         dirty = _server.git(ctx, "status", "--porcelain", "--untracked-files=no")
         if not dirty.ok or dirty.stdout.strip():
@@ -405,35 +441,38 @@ class _Update:
             )
 
         ctx.say(f"Validating the applied heating.yaml with {tag} ...")
-        applied = ctx.paths.container_path(ctx.paths.heating_applied)
-        if not ctx.paths.heating_applied.is_file() or applied is None:
+        if not ctx.paths.heating_applied.is_file():
             return self.not_updated(
                 tag,
                 "refused",
                 f"Not updating to {tag}: {ctx.paths.heating_applied} does not exist. Run "
                 "`sudo -u cave ./cave apply`. Nothing was changed.",
             )
-        validated = run_in_homeassistant(
-            release_ctx, ["-m", VALIDATOR_MODULE, applied], workdir=CONTAINER_CONFIG
-        )
+        validated, messages = validation_result(release_ctx, ctx.paths.heating_applied)
         if not validated.ok:
             return self.check_failed(
-                tag, validated, "it does not accept the applied heating.yaml", "validator"
+                tag,
+                validated,
+                "it does not accept the applied heating.yaml",
+                "validator",
+                messages,
             )
         return None
 
-    def check_failed(self, tag: str, result: Result, rejected: str, what: str) -> int:
+    def check_failed(
+        self,
+        tag: str,
+        result: Result,
+        rejected: str,
+        what: str,
+        messages: tuple[str, ...] | None = None,
+    ) -> int:
         """A check in the new image failed: a rejection (exit 1 from a check that ran) is
         remembered; a check that could not run at all (Docker, a timeout, a missing module) is
         not, and the next night tries again."""
         output = result.output
-        could_not_run = (
-            result.returncode != 1 or "No module named" in output or "Traceback" in output
-        )
-        if could_not_run:
-            reason = COULD_NOT_RUN.get(result.returncode, f"exit status {result.returncode}")
-            if "No module named" in output:
-                reason = f"the {what} is not in this release"
+        reason = could_not_run(result, what)
+        if reason is not None:
             return self.not_updated(
                 tag,
                 "check-could-not-run",
@@ -441,7 +480,8 @@ class _Update:
                 "This says nothing about your configuration. Nothing was changed; the next run "
                 "tries again.",
             )
-        lines = [line.strip() for line in output.splitlines() if line.strip()]
+        lines = list(messages) if messages else [line.strip() for line in output.splitlines()]
+        lines = [line.strip() for line in lines if line.strip()]
         detail = " / ".join(lines[-10:]) or "no message"
         if what == "validator":
             advice = (
@@ -568,22 +608,24 @@ class _Update:
             )
         elif switch.snapshot is None:
             problems.append("there is no snapshot to put back")
-        elif not switch.restored:
+        elif state.snapshot_put_back(ctx, switch.snapshot):
+            # An earlier run put it back already (the disk is the record of that).
+            switch.restored = True
+        else:
             ctx.say(f"Putting back the snapshot {switch.snapshot} ...")
             try:
                 state.restore_snapshot(ctx, switch.snapshot)
             except (OSError, ValueError, KeyError) as error:
                 problems.append(
                     f"the snapshot {switch.snapshot} could not be put back ({error}); the state "
-                    f"is what {switch.to_release} left behind"
+                    f"is partly what {switch.to_release} left behind"
                 )
             else:
                 switch.restored = True
                 self.save_quietly()
-                try:
-                    state.discard_after_restore(ctx, switch.snapshot)
-                except OSError as error:
-                    ctx.warn(f"What the snapshot replaced could not be removed: {error}")
+        if switch.restored and switch.snapshot is not None:
+            # Removed only once the outcome is recorded (see conclude).
+            self.cleanup = lambda name=switch.snapshot: state.discard_after_restore(ctx, name)
         problems += self.check_out_previous()
         started, health = self.start()
         # Keep the update in flight, so that the next run (boot, ExecStopPost, the next night,
@@ -609,6 +651,14 @@ class _Update:
             f"An update from {switch.from_label} to {switch.to_release}, started "
             f"{switch.started}, was interrupted ({switch.phase}). Finishing it first."
         )
+        if (
+            switch.phase != state.BEFORE_SWITCH
+            and switch.snapshot is not None
+            and state.snapshot_put_back(self.ctx, switch.snapshot)
+        ):
+            done = self.way_back_already_done()
+            if done is not None:
+                return done
         last = self.record.last_result or {}
         if last.get("outcome") == "broken" and last.get("release") == switch.to_release:
             # Not an interruption: the way back of an earlier run could not finish.
@@ -623,11 +673,46 @@ class _Update:
             )
         return self.roll_back("it was interrupted (killed or a power cut) during the switch")
 
+    def way_back_already_done(self) -> int | None:
+        """The snapshot is back, the previous release checked out and healthy: an earlier way back
+        finished but could not record it (a full disk). Record it now, without stopping anything.
+        ``None`` when that is not the case and the way back has to run."""
+        ctx, switch = self.ctx, self._switch()
+        head = _server.git(ctx, "rev-parse", "--verify", "HEAD")
+        if not head.ok or head.stdout.strip() != switch.from_commit:
+            return None
+        if not check_health(ctx).healthy:
+            return None
+        switch.restored = True
+        if switch.snapshot is not None:
+            self.cleanup = lambda name=switch.snapshot: state.discard_after_restore(ctx, name)
+        return self.conclude(
+            switch.to_release,
+            "rolled-back",
+            ROLLED_BACK,
+            f"Update to {switch.to_release} failed earlier and was rolled back: the previous "
+            f"release {switch.from_label} with the state from before the update runs healthy. "
+            "That could not be recorded then (a full disk?); it is now. Nothing was stopped.",
+        )
+
     def check_out_previous(self) -> list[str]:
-        """Check out exactly the previous release, whatever an interrupted checkout left."""
+        """Check out exactly the previous release, whatever an interrupted checkout left.
+
+        Files are removed only after a forward checkout may have run (the switch had begun),
+        and only those whose content is the new release's own.
+        """
         switch = self._switch()
         self.ctx.say(f"Checking out {switch.from_label} ...")
-        error = _server.check_out_exactly(self.ctx, switch.from_commit, switch.to_commit)
+        error, kept = _server.check_out_exactly(
+            self.ctx,
+            switch.from_commit,
+            switch.to_commit,
+            remove_added=switch.phase != state.BEFORE_SWITCH,
+        )
+        if kept:
+            self.notes.append(
+                "left in place, because they are not the new release's files: " + ", ".join(kept)
+            )
         if error is None:
             return []
         return [
@@ -712,6 +797,8 @@ class _Update:
         record = self.record
         if not keep_switch:
             record.switch = None
+        if self.notes:
+            message += " Note: " + "; ".join(self.notes) + "."
         try:
             state.prune_snapshots(self.ctx)  # after every outcome, the newest two are kept
         except OSError as error:
@@ -728,6 +815,12 @@ class _Update:
             message += (
                 " (The update record could not be written; `cave status` may be out of date.)"
             )
+        elif not keep_switch and self.cleanup is not None:
+            # Only now that the outcome is recorded may the used-up snapshot go.
+            try:
+                self.cleanup()
+            except OSError as error:
+                self.ctx.warn(f"The used-up snapshot could not be removed: {error}")
         (self.ctx.say if status == OK else self.ctx.warn)(message)
         notify(self.ctx, TITLE, message)
         return status

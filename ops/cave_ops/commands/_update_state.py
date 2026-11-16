@@ -214,6 +214,18 @@ def restore_snapshot(ctx: Context, name: str) -> None:
     _server.sync()
 
 
+def snapshot_put_back(ctx: Context, name: str) -> bool:
+    """Whether snapshot ``name`` has been put back completely: the disk says so, not the record,
+    which a full disk may have kept from saying it. A directory without its manifest, or whose
+    ``data/`` holds none of its entries any more, has been used up."""
+    source = snapshots_dir(ctx) / name
+    try:
+        entries = json.loads((source / "snapshot.json").read_text(encoding="utf-8"))["entries"]
+    except FileNotFoundError:
+        return True
+    return not any(os.path.lexists(source / "data" / entry) for entry in entries)
+
+
 def discard_after_restore(ctx: Context, name: str) -> None:
     """Remove what ``restore_snapshot`` set aside, and the used-up snapshot."""
     _server.remove(_server.ops_dir(ctx) / "discard")

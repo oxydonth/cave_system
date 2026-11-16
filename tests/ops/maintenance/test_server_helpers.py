@@ -74,8 +74,11 @@ def member(name, kind=tarfile.REGTYPE, link=""):
         (member("data/../../etc/passwd"), "leaves the target"),
         (member("data/dev", tarfile.CHRTYPE), "only directories, files and symbolic links"),
         (member("data/hard", tarfile.LNKTYPE, "data/x"), "only directories"),
-        (member("data/a/link", tarfile.SYMTYPE, "/etc/shadow"), "leaves the target"),
-        (member("data/a/link", tarfile.SYMTYPE, "../../../etc"), "leaves the target"),
+        (member("data/a/link", tarfile.SYMTYPE, "/etc/shadow"), "absolute or contains '..'"),
+        (member("data/a/link", tarfile.SYMTYPE, "../../../etc"), "absolute or contains '..'"),
+        # `..` is refused anywhere in a link target, even where it would stay inside
+        (member("data/a/link", tarfile.SYMTYPE, "../b"), "absolute or contains '..'"),
+        (member("data/a/link", tarfile.SYMTYPE, "c/../d"), "absolute or contains '..'"),
         (member("elsewhere/file"), "not below data/"),
     ],
 )
@@ -86,7 +89,7 @@ def test_archive_members_that_could_escape_are_refused(entry, why):
 
 def test_archive_members_inside_are_accepted():
     assert str(_server.check_member(member("data/a/b"), "data")) == "a/b"
-    link = member("data/a/link", tarfile.SYMTYPE, "../b")
+    link = member("data/a/link", tarfile.SYMTYPE, "./b/c")
     assert str(_server.check_member(link, "data")) == "a/link"
 
 

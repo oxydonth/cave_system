@@ -20,6 +20,7 @@ from typing import TYPE_CHECKING
 
 from .container import run_in_homeassistant
 from .paths import CONTAINER_CONFIG
+from .runner import Result
 
 if TYPE_CHECKING:
     from .context import Context
@@ -66,7 +67,7 @@ def store_applied(ctx: Context, source: Path | bytes) -> bool:
     return True
 
 
-def _validate_snapshot(ctx: Context, content: bytes, label: str) -> tuple[bool, tuple[str, ...]]:
+def _validate_snapshot(ctx: Context, content: bytes, label: str) -> tuple[Result, tuple[str, ...]]:
     """Validate ``content`` by running the validator on a staged copy of exactly these bytes.
 
     The staged file has a name of its own for every run, so two runs at the same time (``apply``
@@ -88,7 +89,15 @@ def _validate_snapshot(ctx: Context, content: bytes, label: str) -> tuple[bool, 
         staged.unlink(missing_ok=True)
     # The person edited `label`, not the staged copy: name the file they know.
     lines = (line.rstrip().replace(container_file, label) for line in result.output.splitlines())
-    return result.ok, tuple(line for line in lines if line.strip())
+    return result, tuple(line for line in lines if line.strip())
+
+
+def validation_result(ctx: Context, source: Path | None = None) -> tuple[Result, tuple[str, ...]]:
+    """Like ``validate``, but returns the validator's ``Result`` itself, for callers that must
+    tell a rejection (exit status 1 from a validator that ran) from a validator that could not
+    run at all (a Docker failure, a timeout, a release without the validator): ``update``."""
+    source = ctx.paths.heating if source is None else source
+    return _validate_snapshot(ctx, source.read_bytes(), str(source))
 
 
 def validate(ctx: Context, source: Path | None = None) -> tuple[bool, tuple[str, ...]]:
@@ -100,8 +109,8 @@ def validate(ctx: Context, source: Path | None = None) -> tuple[bool, tuple[str,
     exit status counts as invalid, including a container that could not run; its output is
     the message, with the staged file's name replaced by ``source``.
     """
-    source = ctx.paths.heating if source is None else source
-    return _validate_snapshot(ctx, source.read_bytes(), str(source))
+    result, messages = validation_result(ctx, source)
+    return result.ok, messages
 
 
 def validate_and_store(ctx: Context, source: Path | None = None) -> ApplyResult:
@@ -113,7 +122,8 @@ def validate_and_store(ctx: Context, source: Path | None = None) -> ApplyResult:
     """
     source = ctx.paths.heating if source is None else source
     content = source.read_bytes()
-    ok, messages = _validate_snapshot(ctx, content, str(source))
+    result, messages = _validate_snapshot(ctx, content, str(source))
+    ok = result.ok
     if not ok:
         return ApplyResult(False, messages)
     changed = store_applied(ctx, content)
