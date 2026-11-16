@@ -214,7 +214,8 @@ class WindowPause:
 
     A pause restored after a restart (``paused`` set before any contact is known) ends by the
     same rule once the contacts report: a contact not heard from yet keeps it, and one that is
-    first heard from as unavailable, or does not exist yet, is treated as silent while open.
+    first heard from as unavailable, or does not exist yet, is treated as silent while open. A
+    reload keeps the contacts' state; a contact it adds is not treated so.
     """
 
     def __init__(
@@ -231,10 +232,15 @@ class WindowPause:
         self.contacts = tuple(contacts)
         self.paused = False
         self._contacts: dict[str, _ContactTrack] = {}
+        # Contacts a reload added: never seen open, so the rule for a restored pause does not
+        # apply to them (concept 5.4: an unavailable contact counts as closed).
+        self._added: frozenset[str] = frozenset()
 
     def carry_over(self, previous: WindowPause) -> None:
         """A reload: keep whether the pause is in effect and what each kept contact said."""
         self.paused = previous.paused
+        contacts = frozenset(self.contacts)
+        self._added = (contacts - frozenset(previous.contacts)) | (previous._added & contacts)
         self._contacts = {
             entity_id: track
             for entity_id, track in previous._contacts.items()
@@ -258,7 +264,12 @@ class WindowPause:
         )
         previous_closed = previous.closed_since if previous is not None else None
         open_since = previous.open_since if was_open and previous is not None else None
-        if previous is None and state in (Contact.SILENT, Contact.MISSING) and self.paused:
+        if (
+            previous is None
+            and state in (Contact.SILENT, Contact.MISSING)
+            and self.paused
+            and entity_id not in self._added
+        ):
             # First heard from as unavailable, or not existing yet, while a restored pause is
             # in effect: like a contact that went silent while open.
             state = Contact.SILENT

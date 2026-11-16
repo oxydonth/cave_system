@@ -16,7 +16,7 @@ from __future__ import annotations
 import logging
 import math
 from collections.abc import Callable, Mapping
-from dataclasses import dataclass, field, fields
+from dataclasses import dataclass, field, fields, replace
 from datetime import datetime, timedelta
 from pathlib import Path
 from typing import Any, Final
@@ -76,6 +76,7 @@ from .driver import (
 from .logic import (
     UNAVAILABLE_STATES,
     AwayTracker,
+    Boost,
     Decision,
     HomeMode,
     Override,
@@ -305,6 +306,14 @@ class HeatingRuntime:
         if stored.get("mode") == RoomMode.OFF:
             state.mode = RoomMode.OFF
         state.hand = hand_from_dict(stored.get("hand"), dt_util.utcnow())
+        if isinstance(state.hand, Boost):
+            # A boost stored before its temperature was rounded (5.2: 0.5 K steps).
+            state.hand = replace(
+                state.hand,
+                temperature=round_target(
+                    state.hand.temperature, TEMPERATURE_STEP, MIN_TEMPERATURE, MAX_TEMPERATURE
+                ),
+            )
         return state
 
     def _log_file_differences(self) -> None:
