@@ -335,6 +335,7 @@ class SimulatedHome:
                 "window_open_until": thermostat.window_open_end or None,
             },
             "valve_opening": round(thermostat.opening, 3),
+            "set_commands": thermostat.set_commands,
         }
 
     def state(self) -> dict[str, Any]:

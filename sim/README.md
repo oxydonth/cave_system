@@ -192,6 +192,7 @@ Requests and responses are JSON. Unknown room or device: 404; invalid request: 4
 | `state` | all | Zigbee: the device's own registers, keyed like Zigbee2MQTT's properties. FRITZ!: `target_temperature` (°C, `"off"` or `"on"`), `reported_target_temperature` (what the box reports), `comfort_temperature`, `eco_temperature`, `temperature`, `battery`, `battery_low`, `lock` (as reported, including summer and holiday), `device_lock`, `window_open_until` (Unix time or `null`) |
 | `zigbee2mqtt_state` | Zigbee | What Zigbee2MQTT has cached and publishes on `zigbee2mqtt/<name>`, without `last_seen`, `linkquality` and `update`. It differs from `state` while the device is silent, and after a value the device ignored or rounded |
 | `valve_opening` | thermostats | 0 to 1 |
+| `set_commands` | FRITZ! thermostats | How many `sethkrtsoll` requests the box has received for it since the simulator started, refused ones included; a dial turn is not one. The end-to-end tests use it to tell one command from a resent one. |
 | `internal_temperature`, `regulation_temperature` | Zigbee thermostats | What the own sensor reads; what the valve regulates on (and the device reports as `local_temperature`) |
 | `external_received`, `returns_on_feed` | TRV-ZBT, TRVZB | Unix time of the last accepted external temperature (or `null`); whether the device returns to it by itself |
 | `remote_received` | BTH-RA | Unix time of the last accepted remote temperature (or `null`) |

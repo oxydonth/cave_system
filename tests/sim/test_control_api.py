@@ -89,6 +89,23 @@ async def test_take_a_device_offline_and_back(api: Api) -> None:
     assert device["available"] is False
 
 
+async def test_a_fritz_thermostat_shows_the_set_commands_it_received(api: Api) -> None:
+    status, device = await api.get("/api/devices/bad_heizung")
+    assert (status, device["set_commands"]) == (200, 0)
+    # Two set commands, as the FRITZ!Box receives them from Home Assistant's client.
+    box = api.home.fritzbox
+    thermostat = box.thermostats["13979 0000001"]
+    box._sethkrtsoll(thermostat, "44")
+    box._sethkrtsoll(thermostat, "44")
+    # A dial turned on the device is not a command the box received.
+    await api.post("/api/devices/bad_heizung/dial", {"target": 19.0})
+
+    _, device = await api.get("/api/devices/bad_heizung")
+    assert device["set_commands"] == 2
+    _, state = await api.get("/api/state")
+    assert state["devices"]["bad_heizung"]["set_commands"] == 2
+
+
 async def test_turn_a_dial(api: Api) -> None:
     _, device = await api.post("/api/devices/wohnzimmer_heizung_tuer/dial", {"target": 23.2})
     assert device["state"]["occupied_heating_setpoint"] == 23.0

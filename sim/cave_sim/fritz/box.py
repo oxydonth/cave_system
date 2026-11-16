@@ -95,6 +95,7 @@ class FritzThermostat:
     fw_version: str = "05.16"
     product_name: str = "FRITZ!Smart Thermo 302"
     pending: list[Timer] = field(default_factory=list)
+    set_commands: int = 0  # sethkrtsoll requests the box received for it, refused ones included
 
     @property
     def ain(self) -> str:
@@ -317,6 +318,7 @@ class FakeFritzBox:
         return Response(400, "400 Bad Request")
 
     def _sethkrtsoll(self, thermostat: FritzThermostat, param: str) -> Response:
+        thermostat.set_commands += 1
         try:
             value = int(param)
         except ValueError:
