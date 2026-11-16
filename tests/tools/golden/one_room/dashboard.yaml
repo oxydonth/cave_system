@@ -68,7 +68,9 @@ views:
     - type: markdown
       content: |
         {% set ns = namespace(rows=[]) %}
-        {% for s in states.sensor | selectattr('attributes.device_class', 'eq', 'battery') %}
+        {% for s in states.sensor
+           | selectattr('attributes.device_class', 'defined')
+           | selectattr('attributes.device_class', 'eq', 'battery') %}
         {% if is_number(s.state) %}
         {% set unit = s.attributes.unit_of_measurement | default('%', true) %}
         {% set ns.rows = ns.rows + [[s.state | float(0), s.name, s.state ~ ' ' ~ unit]] %}
@@ -76,7 +78,9 @@ views:
         {% set ns.rows = ns.rows + [[101, s.name, s.state]] %}
         {% endif %}
         {% endfor %}
-        {% for s in states.binary_sensor | selectattr('attributes.device_class', 'eq', 'battery') %}
+        {% for s in states.binary_sensor
+           | selectattr('attributes.device_class', 'defined')
+           | selectattr('attributes.device_class', 'eq', 'battery') %}
         {% set ns.rows = ns.rows + [[0 if s.state == 'on' else 102, s.name,
            'low' if s.state == 'on' else ('ok' if s.state == 'off' else s.state)]] %}
         {% endfor %}
@@ -120,8 +124,14 @@ views:
       icon: mdi:alert-circle
     - type: markdown
       content: |
-        {% macro room(entity, name) -%}
+        {% set rooms = [
+          ["binary_sensor.cave_office_problem", "Office"],
+        ] -%}
+        {% set ns = namespace(shown=0) -%}
+        {% for entity, name in rooms -%}
         {% set s = states(entity) -%}
+        {% if s != 'off' -%}
+        {% set ns.shown = ns.shown + 1 -%}
         {% if s == 'on' -%}
         **{{ name }}**: needs attention
         {% for message in state_attr(entity, 'messages') or [] -%}
@@ -130,12 +140,13 @@ views:
         {% for thermostat, status in (state_attr(entity, 'thermostats') or {}).items() -%}
         - {{ thermostat }}: {{ status }}
         {% endfor -%}
-        {% elif s == 'off' -%}
-        **{{ name }}**: ok
         {% else -%}
         **{{ name }}**: {{ s }}
         {% endif -%}
-        {% endmacro -%}
-        {{ room("binary_sensor.cave_office_problem", "Office") }}
+        {% endif -%}
+        {% endfor -%}
+        {% if ns.shown == 0 -%}
+        All rooms are ok.
+        {% endif -%}
       entity_id:
       - binary_sensor.cave_office_problem

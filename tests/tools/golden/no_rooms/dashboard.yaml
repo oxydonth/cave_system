@@ -41,7 +41,9 @@ views:
     - type: markdown
       content: |
         {% set ns = namespace(rows=[]) %}
-        {% for s in states.sensor | selectattr('attributes.device_class', 'eq', 'battery') %}
+        {% for s in states.sensor
+           | selectattr('attributes.device_class', 'defined')
+           | selectattr('attributes.device_class', 'eq', 'battery') %}
         {% if is_number(s.state) %}
         {% set unit = s.attributes.unit_of_measurement | default('%', true) %}
         {% set ns.rows = ns.rows + [[s.state | float(0), s.name, s.state ~ ' ' ~ unit]] %}
@@ -49,7 +51,9 @@ views:
         {% set ns.rows = ns.rows + [[101, s.name, s.state]] %}
         {% endif %}
         {% endfor %}
-        {% for s in states.binary_sensor | selectattr('attributes.device_class', 'eq', 'battery') %}
+        {% for s in states.binary_sensor
+           | selectattr('attributes.device_class', 'defined')
+           | selectattr('attributes.device_class', 'eq', 'battery') %}
         {% set ns.rows = ns.rows + [[0 if s.state == 'on' else 102, s.name,
            'low' if s.state == 'on' else ('ok' if s.state == 'off' else s.state)]] %}
         {% endfor %}

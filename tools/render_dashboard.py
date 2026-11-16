@@ -318,7 +318,9 @@ def _home_section(home: Home) -> dict[str, Any]:
 
 BATTERY_TEMPLATE = """\
 {% set ns = namespace(rows=[]) %}
-{% for s in states.sensor | selectattr('attributes.device_class', 'eq', 'battery') %}
+{% for s in states.sensor
+   | selectattr('attributes.device_class', 'defined')
+   | selectattr('attributes.device_class', 'eq', 'battery') %}
 {% if is_number(s.state) %}
 {% set unit = s.attributes.unit_of_measurement | default('%', true) %}
 {% set ns.rows = ns.rows + [[s.state | float(0), s.name, s.state ~ ' ' ~ unit]] %}
@@ -326,7 +328,9 @@ BATTERY_TEMPLATE = """\
 {% set ns.rows = ns.rows + [[101, s.name, s.state]] %}
 {% endif %}
 {% endfor %}
-{% for s in states.binary_sensor | selectattr('attributes.device_class', 'eq', 'battery') %}
+{% for s in states.binary_sensor
+   | selectattr('attributes.device_class', 'defined')
+   | selectattr('attributes.device_class', 'eq', 'battery') %}
 {% set ns.rows = ns.rows + [[0 if s.state == 'on' else 102, s.name,
    'low' if s.state == 'on' else ('ok' if s.state == 'off' else s.state)]] %}
 {% endfor %}
@@ -362,11 +366,33 @@ All devices are available.
 """
 
 
+_MARKDOWN_SPECIAL = "\\*_[]<>&`~#|"
+
+
+def markdown_text(text: str) -> str:
+    """``text`` as plain Markdown text: whitespace folded, every formatting character escaped."""
+    folded = " ".join(text.split())
+    return "".join(f"\\{char}" if char in _MARKDOWN_SPECIAL else char for char in folded)
+
+
 def problem_template(rooms: Sequence[Room]) -> str:
-    """The template that lists each room's problem sensor with its two attributes."""
-    lines = [
-        "{% macro room(entity, name) -%}",
+    """The template that lists the rooms that need attention, with their two attributes.
+
+    A room whose problem sensor is off is left out, so with twenty rooms the person reads the
+    one that matters. Names are escaped for Markdown here and passed as Jinja string literals.
+    """
+    lines = ["{% set rooms = ["]
+    for room in rooms:
+        entity = json.dumps(f"binary_sensor.cave_{room.id}_problem")
+        name = json.dumps(markdown_text(room.name), ensure_ascii=False)
+        lines.append(f"  [{entity}, {name}],")
+    lines += [
+        "] -%}",
+        "{% set ns = namespace(shown=0) -%}",
+        "{% for entity, name in rooms -%}",
         "{% set s = states(entity) -%}",
+        "{% if s != 'off' -%}",
+        "{% set ns.shown = ns.shown + 1 -%}",
         "{% if s == 'on' -%}",
         "**{{ name }}**: needs attention",
         "{% for message in state_attr(entity, 'messages') or [] -%}",
@@ -375,16 +401,15 @@ def problem_template(rooms: Sequence[Room]) -> str:
         "{% for thermostat, status in (state_attr(entity, 'thermostats') or {}).items() -%}",
         "- {{ thermostat }}: {{ status }}",
         "{% endfor -%}",
-        "{% elif s == 'off' -%}",
-        "**{{ name }}**: ok",
         "{% else -%}",
         "**{{ name }}**: {{ s }}",
         "{% endif -%}",
-        "{% endmacro -%}",
+        "{% endif -%}",
+        "{% endfor -%}",
+        "{% if ns.shown == 0 -%}",
+        "All rooms are ok.",
+        "{% endif -%}",
     ]
-    for room in rooms:
-        entity = json.dumps(f"binary_sensor.cave_{room.id}_problem")
-        lines.append(f"{{{{ room({entity}, {json.dumps(room.name, ensure_ascii=False)}) }}}}")
     return "\n".join(lines) + "\n"
 
 

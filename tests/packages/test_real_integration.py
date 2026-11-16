@@ -198,7 +198,7 @@ async def test_the_maintenance_view_shows_a_real_rooms_problem(
         return [line for line in str(text).splitlines() if line.strip()]
 
     await home.advance(freezer, 2 * MIN)
-    assert shown_lines() == ["**Wohnzimmer**: ok"]
+    assert shown_lines() == ["All rooms are ok."]
 
     trv.set_available(False)
     await home.advance(freezer, 2 * MIN)

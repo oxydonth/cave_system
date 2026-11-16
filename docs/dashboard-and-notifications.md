@@ -26,7 +26,7 @@ The comfort, eco and away temperatures are changed here, on the cards, and not i
 |---|---|
 | Batteries | Every battery sensor Home Assistant knows, lowest first: percentage sensors and low-battery flags. The generator knows no device names; the card asks Home Assistant, so a newly paired device appears without regenerating |
 | Unavailable devices | Every device all of whose entities are unavailable |
-| Rooms needing attention | Each room's problem sensor: `ok`, or `needs attention` with the sensor's `messages` and the state of each thermostat from its `thermostats` attribute |
+| Rooms needing attention | The rooms whose problem sensor is not `off`: `needs attention` with the sensor's `messages` and the state of each thermostat from its `thermostats` attribute. "All rooms are ok." when there is none |
 
 A home without rooms still has both views; the room view says that no rooms are configured yet.
 
@@ -61,6 +61,13 @@ reports exactly what is left, and exits with status 1:
 | The dashboard could not be generated | The applied copy is new and the heating follows it. The dashboard file is untouched: it is the previous one and does not match. The generator's message is shown | Fix the cause it names and run `./cave apply` again |
 | Home Assistant is not running, or has no `cave_heating.reload` | Applied copy and dashboard are new. Home Assistant loads the applied copy when it starts | `./cave up`, or `./cave restart homeassistant` |
 | Home Assistant refused the reload | Applied copy and dashboard are new; the running configuration stays in effect, and its answer is shown | Fix what it names, or restart Home Assistant |
+| Home Assistant did not accept the script token | Applied copy and dashboard are new; Home Assistant was not told | `./cave bootstrap` creates a new token; or restart Home Assistant |
+
+`apply` holds the one lock of `update`, `backup` and `restore` for its whole run, so two runs
+cannot interleave and `apply` cannot change the applied copy between an update's check of it and
+the restart that follows. When another command holds the lock, `apply` says which one and
+changes nothing. When the state directory cannot be read or written, it says so in one line and
+changes nothing.
 
 Running `./cave apply` again with an unchanged file regenerates the dashboard and reloads
 anyway, which repairs a dashboard that went missing.
@@ -119,13 +126,14 @@ them in a real Home Assistant against stand-in entities.
 Everything that tells a person something goes through `script.cave_notify`. It always creates a
 persistent notification (the bell in the Home Assistant sidebar), and when the helper
 **Notify service** (`input_text.cave_notify_service`) is not empty it sends the same title and
-message to that service as well.
+message to that notify action as well.
 
 | Field | Meaning |
 |---|---|
 | `title` | Headline |
 | `message` | What happened |
 | `notification_id` | Optional. A later call with the same id replaces the earlier notification |
+| `copy` | Optional, true by default. `false` shows the notification in the UI only |
 
 From an automation or script in Home Assistant:
 
@@ -149,41 +157,87 @@ curl -sS -X POST \
 ### Sending a copy to the phone
 
 Install the Home Assistant app on the phone, then open **Settings, Devices & services,
-Helpers**, choose **Notify service** and enter the name of the phone's notify service, which
+Helpers**, choose **Notify service** and enter the name of the phone's notify action, which
 you find under **Developer tools, Actions** by searching for `notify.mobile_app`. For example
 `notify.mobile_app_pixel_8`; the part before the dot may be left out. Leave the helper empty to
 send nothing but the persistent notification.
 
-A wrong or unknown name does not stop anything: the persistent notification is created first,
-the script finishes normally, and the failed attempt is written to the Home Assistant log as an
+Only a notify action is ever called. Any other name (`script.cave_notify`, which would notify
+for ever, or `homeassistant.restart`) is written to the log as a warning and ignored. A notify
+action that does not exist or fails does not stop anything either: the persistent notification is
+created first, the script finishes normally, and the failed attempt is written to the log as an
 error of the automation "Cave: send a notification copy".
 
 ### What notifies, and when
 
-The thresholds and durations are the first block of
-`homeassistant/packages/cave_notifications.yaml`, with a comment each. Change a value there and
-restart Home Assistant. Five sensors named `sensor.cave_attention_*` check once a minute, so a
+Five sensors named `sensor.cave_attention_*` check once a minute what needs attention, so a
 notification appears within a minute of its condition being met. Each notification appears once,
 is dismissed again when the condition ends, and does not return once you have dismissed it,
 unless the condition ends and starts again.
 
 | Notification | Condition | Default |
 |---|---|---|
-| Low battery | A battery sensor of any device, in percent or as a low-battery flag, is at or below the limit | 20 % |
+| Low battery | A battery sensor of a device in the home, in percent or as a low-battery flag, is at or below the limit. It ends when the level is at or above the clearing level. The battery of a phone with the Home Assistant app is not checked | 20 %, clears at 30 % |
 | Device unavailable | Every entity of a device has been unavailable for this long. Zigbee2MQTT itself waits 25 hours before it marks a battery device unavailable | 60 minutes |
 | Window left open | A room's `binary_sensor.cave_<room>_window_open` has been on for this long. That sensor turns on only after the room's window delay | 30 minutes |
-| High humidity | A humidity sensor is above the limit; it clears, and may notify again, only when it is below the second value | 70 %, clears below 65 % |
-| Heating problem | A room's `binary_sensor.cave_<room>_problem` has been on for this long; the message lists what is wrong | 10 minutes |
+| High humidity | A humidity sensor in a room is above the limit; it ends, and may notify again, only when it is below the second value. A room is an area that holds a `climate.cave_<room>`, so put the room's humidity sensor in the area of its room; a sensor in the garden or the cellar is not asked | 70 %, ends below 65 % |
+| Heating problem | A room's `binary_sensor.cave_<room>_problem` has been on for this long; the message lists what is wrong. `held` and `pending` thermostats do not turn that sensor on | 10 minutes |
 
 Texts are in English and name the room by its Home Assistant area where the entity has one.
-Restarting Home Assistant clears persistent notifications; conditions that still hold are not
-announced again, because the sensors remember what they reported.
+
+**Changing the limits.** Under **Settings, Devices & services, Helpers** there is one helper per
+number, named `Notify: ...`, with the default in its name. Type a number to change it; leave it
+empty to use the default. The helpers have no `initial` value, so what you enter survives
+restarts and updates, and the package itself, which every update replaces, is never edited. The
+defaults are the first block of `homeassistant/packages/cave_notifications.yaml`.
+
+| Helper | Default | Meaning |
+|---|---|---|
+| `input_text.cave_notify_battery_below` | 20 | Battery at or below this percentage notifies |
+| `input_text.cave_notify_battery_clear_above` | 30 | A battery notification ends at or above this |
+| `input_text.cave_notify_unavailable_minutes` | 60 | Minutes before an unavailable device notifies |
+| `input_text.cave_notify_window_open_minutes` | 30 | Minutes of window pause before it notifies |
+| `input_text.cave_notify_humidity_above` | 70 | Humidity above this percentage notifies |
+| `input_text.cave_notify_humidity_clear_below` | 65 | A humidity notification ends below this |
+| `input_text.cave_notify_problem_minutes` | 10 | Minutes of room problem before it notifies |
+
+**Many at once.** When more than three new entries of one kind appear in the same minute, which
+is what a Zigbee coordinator going offline looks like, the phone gets one summary
+("12 new: ...") and the UI still gets one notification per entry. Recoveries are never sent to
+the phone.
+
+**Restarts.** Home Assistant keeps persistent notifications in memory only, so every restart,
+and with it every nightly update, empties the bell. What happens next:
+
+- The sensors remember what they had reported. When Home Assistant has started, the
+  notifications of everything that is still reported are created again, in the UI only: the
+  phone is not told a second time.
+- An entry that was reported stays while its entity is `unknown` or `unavailable`, which every
+  Zigbee device is for a minute or two after a start, and a window pause or a room problem that
+  was reported stays while its sensor is on, however young its state looks after the restart.
+  So a problem that goes on is not announced again because the restart made it look new.
+- A condition that ended while Home Assistant was down is dismissed at the first check. A new
+  condition is announced as usual, with the full time limit counted from the start.
+- After a restart, a device that was silent before the restart counts its hour from the start
+  again if it was not reported before.
+
+### Entities of the package
+
+Besides `script.cave_notify`, `input_text.cave_notify_service` and the seven limit helpers above,
+the package creates the sensors `sensor.cave_attention_battery`, `_unavailable`, `_windows`,
+`_humidity` and `_problems` (state: how many entries; attribute `entries`: key to sentence), and
+three automations: "Cave: notify about what needs attention", "Cave: show reported notifications
+again after a restart" and "Cave: send a notification copy", which listens for the event
+`cave_notify_copy`.
 
 ### Testing it
 
 `tests/packages/test_cave_notifications.py` loads the package into a Home Assistant test
 instance, creates stand-in entities with the IDs of concept section 5.2, changes their states and
-moves the clock, and asserts which notifications appear and which do not:
+moves the clock, and asserts which notifications appear and which do not.
+`tests/packages/test_restarts_and_limits.py` does the same across simulated restarts (entities
+`unknown`, restored sensors, young `last_changed`, an empty UI), with thirty devices at once, and
+with the helpers:
 
 ```sh
 uv run pytest tests/packages
@@ -193,5 +247,6 @@ uv run pytest tests/packages
 `heating.yaml`: the window and problem notifications come from the integration's own
 `binary_sensor.cave_<room>_window_open` and `_problem`, every `cave_*` entity of the generated
 dashboard exists in the integration, and the maintenance card shows the real `messages` and
-`thermostats` attributes. The pipeline's `stack` job runs `./cave apply` against the starter
-configuration with the real validator and checks that the placeholder dashboard was replaced.
+`thermostats` attributes. The pipeline's `stack` job runs `./cave apply` with the real validator
+and generator: the starter configuration, a valid file with a room, a well-formed invalid file,
+and a held lock.

@@ -32,16 +32,23 @@ def home(ctx, run_cave, fake_ha):
     return ctx.paths
 
 
-def containers(fake_runner, home, *, validator=(0, ""), generator=(0, ""), real_generator=None):
+def containers(
+    fake_runner, home, *, validator=(0, ""), generator=(0, ""), real_generator=None, log=None
+):
     """Declare the two one-off containers `apply` starts: the validator, then the generator.
 
     ``validator`` and ``generator`` are ``(status, output)``. A generator that succeeds writes a
-    marker dashboard, or, with ``real_generator`` (a path), runs that script instead.
+    marker dashboard, or, with ``real_generator`` (a path), runs that script instead. ``log`` is
+    a list that gets ``"validate"`` and ``"generate"`` when the containers run.
     """
 
     def generate(call):
         if call.args[-3] != GENERATOR_PATH:
+            if log is not None:
+                log.append("validate")
             return
+        if log is not None:
+            log.append("generate")
         source = home.heating_applied  # /config/cave/.applied/heating.yaml
         assert call.args[-2] == "/config/cave/.applied/heating.yaml"
         assert call.args[-1] == "/config/dashboards/heating.yaml"
@@ -69,7 +76,11 @@ def files(snapshot, root):
     """Every file below ``root`` with its mode, size and time. Directories are left out: the
     validator stages a copy of the edited file in ``cave/`` for its run and removes it again,
     which touches that directory's own modification time and nothing else."""
-    return {name: info for name, info in snapshot(root).items() if (root / name).is_file()}
+    return {
+        name: info
+        for name, info in snapshot(root).items()
+        if (root / name).is_file() and name != ".cave/lock"  # the lock file names its holder
+    }
 
 
 def edit(home, text=VALID):
@@ -96,14 +107,24 @@ def test_a_valid_file_is_stored_the_dashboard_regenerated_and_cave_heating_reloa
 
 
 def test_the_steps_run_in_order_validate_then_generate_then_reload(
-    run_cave, home, fake_runner, fake_ha, write_token
+    ctx, run_cave, home, fake_runner, fake_ha, write_token
 ):
+    """One log for the containers and for Home Assistant's API, so that the order is the order."""
     edit(home)
     write_token()
-    containers(fake_runner, home)
+    log = []
+    containers(fake_runner, home, log=log)
 
-    run_cave("apply")
+    def recording(method, url, headers, body, timeout):
+        if method == "POST" and url.endswith("/api/services/cave_heating/reload"):
+            log.append("reload")
+        return fake_ha(method, url, headers, body, timeout)
 
+    ctx.transport = recording
+
+    assert run_cave("apply").code == 0
+
+    assert log == ["validate", "generate", "reload"]
     validator, generator = fake_runner.matching(*CONTAINER)
     assert validator.args[-2] == "custom_components.cave_heating.validate"
     assert validator.args[-1].startswith("/config/cave/")  # the bytes of the edited file
@@ -114,9 +135,19 @@ def test_the_steps_run_in_order_validate_then_generate_then_reload(
         "/config/dashboards/heating.yaml",
     )
     assert generator.args[:6] == ("docker", "compose", "run", "--rm", "--no-deps", "-T")
-    assert [call.args[-1].startswith("/config/") for call in fake_runner.calls] == [True, True]
-    assert fake_runner.calls[0] is validator
-    assert [r[:2] for r in fake_ha.requests][-1] == ("POST", "/api/services/cave_heating/reload")
+
+
+def test_nothing_after_validation_runs_when_the_file_is_invalid(
+    ctx, run_cave, home, fake_runner, fake_ha, write_token
+):
+    edit(home, "rooms: [")
+    write_token()
+    log = []
+    containers(fake_runner, home, validator=(1, "line 1: not valid YAML\n"), log=log)
+
+    assert run_cave("apply").code == 1
+
+    assert log == ["validate"]
 
 
 def test_the_generator_receives_the_applied_copy_not_the_edited_file(
@@ -377,6 +408,130 @@ def test_apply_is_listed_by_help(run_cave):
     result = run_cave("help")
 
     assert "apply" in result.out
+
+
+# ------------------------------------------------------------------------------------- the lock
+def test_apply_holds_the_lock_of_update_backup_and_restore_for_its_whole_run(
+    ctx, run_cave, home, fake_runner, fake_ha, write_token
+):
+    edit(home)
+    write_token()
+    seen = []
+
+    def holder(call):
+        seen.append(ctx.paths.lock_file.read_text())
+
+    fake_runner.on(CONTAINER, side_effect=holder)
+
+    run_cave("apply")
+
+    assert len(seen) == 2  # during the validator and during the generator
+    assert all(text.startswith("`cave apply`") for text in seen)
+    ctx.lock("update").acquire()  # and it was let go of afterwards
+
+
+def test_a_busy_lock_is_reported_with_its_holder_and_nothing_is_changed(
+    ctx, run_cave, home, fake_runner, fake_ha, write_token, snapshot
+):
+    edit(home, VALID + "# edited while an update runs\n")
+    write_token()
+    before = files(snapshot, home.data)
+    update = ctx.lock("update")
+    update.acquire()
+
+    result = run_cave("apply")
+
+    update.release()
+    assert result.code == 1
+    assert "`cave update`" in result.err
+    assert "is running" in result.err
+    assert "Nothing was changed" in result.err
+    assert fake_runner.calls == []  # not even the validator ran
+    assert fake_ha.requests == []
+    assert files(snapshot, home.data) == before
+
+
+def test_an_apply_blocks_an_update_while_it_runs_and_not_afterwards(
+    ctx, run_cave, home, fake_runner, write_token
+):
+    edit(home)
+    write_token()
+    from cave_ops.lock import LockBusy
+
+    def try_update(call):
+        with pytest.raises(LockBusy):
+            ctx.lock("update").acquire()
+
+    fake_runner.on(CONTAINER, side_effect=try_update)
+
+    assert run_cave("apply").code == 0
+
+    lock = ctx.lock("update")
+    lock.acquire()
+    lock.release()
+
+
+# ------------------------------------------------------------------- file system and the token
+def test_a_state_directory_that_cannot_be_written_gives_one_line_not_a_traceback(
+    ctx, run_cave, home, fake_runner, write_token, monkeypatch
+):
+    edit(home)
+    write_token()
+    containers(fake_runner, home)
+    applied_dir = home.heating_applied.parent
+
+    def refuse(*args, **kwargs):
+        raise PermissionError(13, "Permission denied", str(applied_dir))
+
+    monkeypatch.setattr("cave_ops.heating.tempfile.mkstemp", refuse)
+
+    result = run_cave("apply")
+
+    assert result.code == 1
+    assert "Traceback" not in result.err
+    assert "Permission denied" in result.err
+    assert str(applied_dir) in result.err
+    assert "Nothing was changed" in result.err
+    assert result.err.count("\n") == 2
+    assert home.dashboard.read_text() == OLD_DASHBOARD
+    ctx.lock("update").acquire()  # the lock was let go of
+
+
+def test_an_edited_file_that_cannot_be_read_gives_one_line_not_a_traceback(
+    run_cave, home, fake_runner, write_token
+):
+    edit(home)
+    write_token()
+    home.heating.chmod(0o000)
+    containers(fake_runner, home)
+    try:
+        result = run_cave("apply")
+    finally:
+        home.heating.chmod(0o644)
+
+    if result.code == 0:
+        pytest.skip("this user can read a file with no permissions (root)")
+    assert result.code == 1
+    assert "Traceback" not in result.err
+    assert "Nothing was changed" in result.err
+
+
+def test_a_token_that_home_assistant_does_not_accept_is_reported_as_that(
+    run_cave, home, fake_runner, fake_ha, write_token
+):
+    edit(home)
+    write_token("a-token-that-was-revoked")
+    containers(fake_runner, home)
+
+    result = run_cave("apply")
+
+    assert result.code == 1
+    assert "did not accept the script token" in result.out
+    assert "./cave bootstrap" in result.out
+    assert "reload refused" not in result.out
+    assert "stays in effect" not in result.out
+    assert "Applied copy:    updated" in result.out
+    assert "Dashboard:       regenerated" in result.out
 
 
 # ----------------------------------------------------------- with the real dashboard generator

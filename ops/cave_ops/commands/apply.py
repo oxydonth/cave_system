@@ -1,5 +1,11 @@
 """``cave apply``: make an edited ``cave/heating.yaml`` take effect.
 
+It holds the lock of concept section 4.5, the same one as ``update``, ``backup`` and ``restore``,
+for its whole run. So two ``apply`` runs cannot interleave (one rendering the dashboard of a copy
+the other has just replaced), and ``apply`` cannot change the applied copy between an update's
+check of it against the new release and the restart that follows. When the lock is taken it says
+who holds it and changes nothing.
+
 Three steps, in this order (concept sections 4.4 and 5.1):
 
 1. Validate the edited file and store it as the applied copy, through the shared function
@@ -32,6 +38,7 @@ from ..context import Context
 from ..errors import CaveError
 from ..ha import HAError, HAUnreachable
 from ..heating import validate_and_store
+from ..lock import LockBusy
 from ..paths import CONTAINER_CONFIG, CONTAINER_TOOLS
 from ._common import require_initialised
 
@@ -103,6 +110,14 @@ def _reload(ctx: Context, outcome: _Outcome) -> None:
         )
         outcome.needs_attention = True
     except HAError as error:
+        if error.status == 401:
+            outcome.home_assistant = (
+                "not told: Home Assistant did not accept the script token "
+                f"({ctx.paths.token}). `./cave bootstrap` creates a new one. The applied copy "
+                f"is stored and is loaded when Home Assistant restarts: `{RESTART_COMMAND}`"
+            )
+            outcome.needs_attention = True
+            return
         # Home Assistant's own words, in full: for an invalid applied copy they are the problems.
         ctx.warn(str(error))
         outcome.home_assistant = (
@@ -119,7 +134,23 @@ def run(ctx: Context, args: argparse.Namespace) -> int:
     require_initialised(ctx)
     if not ctx.paths.heating.is_file():
         raise CaveError(f"{ctx.paths.heating} does not exist; run `./cave init` first")
+    try:
+        with ctx.lock("apply"):
+            return _apply(ctx)
+    except LockBusy as error:
+        ctx.warn(str(error))
+        ctx.warn("Nothing was changed.")
+        return 1
+    except OSError as error:
+        # The state directory is read-only or owned by someone else, or the file cannot be read.
+        # Both happen before the applied copy is replaced, and that is done in one step.
+        where = f" ({error.filename})" if error.filename else ""
+        ctx.warn(f"cannot read or write the state directory{where}: {error.strerror or error}")
+        ctx.warn("Nothing was changed.")
+        return 1
 
+
+def _apply(ctx: Context) -> int:
     result = validate_and_store(ctx)
     if not result.ok:
         ctx.warn(f"{ctx.paths.heating} is not valid:")

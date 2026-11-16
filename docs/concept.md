@@ -229,7 +229,7 @@ Whatever needs Home Assistant's own Python packages runs inside the Home Assista
 | Home description | Edited file: `CAVE_DATA/homeassistant/cave/heating.yaml`. Applied copy: `cave/.applied/heating.yaml` next to it, written only through one shared function that validates first, used by `init`, `apply` and `demo`. `cave_heating` reads only the applied copy. |
 | Validator | `python -m custom_components.cave_heating.validate <file>`, run in a one-off Home Assistant container with `/config` as the working directory, so it also works while Home Assistant is down. Exit status 0 means valid; otherwise the messages name the room and field. |
 | Paths in the Home Assistant container | `/config` is the state directory; the integration is at `/config/custom_components/cave_heating`; `tools/` is at `/cave/tools`. |
-| Lock | One lock file, `CAVE_DATA/.cave/lock`, held by `update`, `backup` and `restore`, so they never overlap. |
+| Lock | One lock file, `CAVE_DATA/.cave/lock`, held by `apply`, `update`, `backup` and `restore`, so they never overlap. |
 | Heating dashboard | YAML mode, URL path `cave-heating`, file `/config/dashboards/heating.yaml`. |
 | Home Assistant version | The image tag in `compose.yaml` and the hassfest image tag in the pipeline equal the `homeassistant` version locked in `uv.lock`. A check enforces it. |
 

@@ -35,7 +35,10 @@ def _maintenance_cards(home: str) -> dict[str, dict[str, Any]]:
 
 def _render(hass: HomeAssistant, card: dict[str, Any]) -> list[str]:
     """The non-empty lines the card shows."""
-    text = Template(card["content"], hass).async_render(parse_result=False)
+    # The markdown card renders its content with `strict: true` (frontend, hui-markdown-card):
+    # an undefined attribute raises there, the subscription fails, and the card shows the
+    # template's own source. So the tests render the same way.
+    text = Template(card["content"], hass).async_render(parse_result=False, strict=True)
     return [line for line in str(text).splitlines() if line.strip()]
 
 
@@ -170,7 +173,6 @@ async def test_problem_card_shows_each_rooms_messages_and_thermostats(hass: Home
         "- Window contact is unavailable",
         "- climate.wohnzimmer_heizung_fenster: unresponsive",
         "- climate.wohnzimmer_heizung_tuer: ok",
-        "**Schlafzimmer**: ok",
         "**Bad**: unavailable",
     ]
 
@@ -184,17 +186,37 @@ async def test_problem_card_before_the_integration_has_created_its_entities(
     assert lines == ["**Office**: unknown"]
 
 
-async def test_problem_card_survives_a_room_name_full_of_template_syntax(
+async def test_problem_card_lists_only_the_rooms_that_are_not_ok(hass: HomeAssistant) -> None:
+    """With many rooms the person reads the one that matters, and a line when none does."""
+    card = _maintenance_cards("demo_home")["Rooms needing attention"]
+    for room in ("living_room", "bedroom", "bathroom"):
+        hass.states.async_set(f"binary_sensor.cave_{room}_problem", "off")
+
+    assert _render(hass, card) == ["All rooms are ok."]
+
+    hass.states.async_set("binary_sensor.cave_bedroom_problem", "on", {"messages": ["x"]})
+    assert _render(hass, card) == ["**Schlafzimmer**: needs attention", "- x"]
+
+
+async def test_problem_card_shows_a_room_name_as_text_not_as_markdown_or_template(
     hass: HomeAssistant,
 ) -> None:
-    """A name with quotes, a pipe and braces is shown as text and is not evaluated."""
-    hass.states.async_set("binary_sensor.cave_kids_problem", "off")
+    """Quotes, a pipe, braces and Markdown characters in a name are text; none is evaluated."""
+    hass.states.async_set("binary_sensor.cave_kids_problem", "on", {"messages": []})
 
-    cards = _maintenance_cards("all_optional")
-    lines = _render(hass, cards["Rooms needing attention"])
+    lines = _render(hass, _maintenance_cards("all_optional")["Rooms needing attention"])
 
-    assert 'Kid\'s "room" | {{ 1 }}' in "\n".join(lines)
-    assert '**Kid\'s "room" | {{ 1 }}**: ok' in lines
+    assert '**Kid\'s "room" \\| {{ 1 }}**: needs attention' in lines
+
+
+def test_markdown_text_escapes_what_markdown_would_format() -> None:
+    """The escaping is a function of its own so that the card stays text."""
+    from tools.render_dashboard import markdown_text
+
+    assert markdown_text("a_b *c* <b>d</b> [e](f) `g` # h") == (
+        "a\\_b \\*c\\* \\<b\\>d\\</b\\> \\[e\\](f) \\`g\\` \\# h"
+    )
+    assert markdown_text("  two\nlines  ") == "two lines"
 
 
 @pytest.mark.parametrize("home", ["no_rooms", "one_room", "all_optional", "demo_home"])
