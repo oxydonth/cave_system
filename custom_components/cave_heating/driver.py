@@ -282,7 +282,11 @@ class ThermostatDriver:
         if returned:
             self._lost()
             self.exempt_until = now + self.timing.confirm_timeout
-        target_changed = previous is None or not same(previous.target, report.target)
+        # Two reports without a target (a FRITZ! in summer or holiday mode) are no change.
+        target_changed = previous is None or not (
+            same(previous.target, report.target)
+            or (previous.target is None and report.target is None)
+        )
         reported_back = target_changed and self._consume(report.target)
         # The report of the last command in flight: nothing is waiting any more.
         emptied = reported_back and not self.queue

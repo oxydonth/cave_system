@@ -355,7 +355,7 @@ class HeatingRuntime:
         )
         if previous is not None:
             # A reload keeps what the room was doing.
-            windows.paused = previous.windows.paused
+            windows.carry_over(previous.windows)
             room.decision = previous.decision
             room.refused_settings = dict(previous.refused_settings)
             # Owed settings are kept only while the file still lists them for that thermostat.
@@ -1255,8 +1255,12 @@ class HeatingRuntime:
     def boost(
         self, room: RoomRuntime, duration: timedelta | None, temperature: float | None
     ) -> None:
-        """``cave_heating.boost``."""
+        """``cave_heating.boost``; a temperature is rounded to the room's 0.5 K step (5.2)."""
         self.refuse_if_off(room)
+        if temperature is not None:
+            temperature = round_target(
+                temperature, TEMPERATURE_STEP, MIN_TEMPERATURE, MAX_TEMPERATURE
+            )
         room.state.start_boost(
             dt_util.utcnow(),
             duration or room.config.boost_duration,

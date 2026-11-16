@@ -232,14 +232,29 @@ class WindowPause:
         self.paused = False
         self._contacts: dict[str, _ContactTrack] = {}
 
+    def carry_over(self, previous: WindowPause) -> None:
+        """A reload: keep whether the pause is in effect and what each kept contact said."""
+        self.paused = previous.paused
+        self._contacts = {
+            entity_id: track
+            for entity_id, track in previous._contacts.items()
+            if entity_id in self.contacts
+        }
+
     def update(self, entity_id: str, state: Contact, changed: datetime) -> None:
         """Record a contact's state and when it began."""
         previous = self._contacts.get(entity_id)
         if previous is not None and previous.state is state:
             return
+        # A contact silent while open counts as open only for its grace; after that the opening
+        # is over, and a contact that answers again starts afresh.
         was_open = previous is not None and (
             previous.state is Contact.OPEN
-            or (previous.state is Contact.SILENT and previous.silent_open)
+            or (
+                previous.state is Contact.SILENT
+                and previous.silent_open
+                and changed < previous.changed + self.grace
+            )
         )
         previous_closed = previous.closed_since if previous is not None else None
         open_since = previous.open_since if was_open and previous is not None else None
