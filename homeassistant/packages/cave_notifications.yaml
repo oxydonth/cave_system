@@ -46,8 +46,9 @@ template:
       # A room whose window pause (binary_sensor.cave_<room>_window_open) lasts this long
       # raises "window left open". The pause only starts after the room's window delay.
       window_open_minutes_default: 30
-      # A humidity sensor in a room (an area that holds a climate.cave_<room>) above this
-      # percentage raises "high humidity", a prompt to air the room.
+      # A room's humidity (the humidity_sensor of the room in heating.yaml, which
+      # climate.cave_<room> shows as its current_humidity) above this percentage raises
+      # "high humidity", a prompt to air the room. No area has to be assigned.
       humidity_above_default: 70
       # The notification ends, and may come again, only once the humidity is below this.
       humidity_clear_default: 65
@@ -150,23 +151,18 @@ template:
       humidity_entries: >-
         {% set before = state_attr('sensor.cave_attention_humidity', 'entries') %}
         {% set before = before if before is mapping else {} %}
-        {% set room_areas = states.climate
-           | selectattr('entity_id', 'search', '^climate[.]cave_')
-           | map(attribute='entity_id') | map('area_id') | reject('none') | list %}
         {% set ns = namespace(found={}) %}
-        {% for s in states.sensor
-           | selectattr('attributes.device_class', 'defined')
-           | selectattr('attributes.device_class', 'eq', 'humidity') %}
-        {% if area_id(s.entity_id) in room_areas %}
-        {% if s.state is is_number %}
-        {% if s.state | float > humidity_above
-           or (s.entity_id in before and s.state | float >= humidity_clear) %}
-        {% set ns.found = dict(ns.found, **{s.entity_id: area_name(s.entity_id)
-             ~ ': humidity is ' ~ s.state ~ ' %, time to air the room'}) %}
+        {% for s in states.climate
+           | selectattr('entity_id', 'search', '^climate[.]cave_') %}
+        {% set reading = s.attributes.get('current_humidity') %}
+        {% if reading is number %}
+        {% if reading > humidity_above
+           or (s.entity_id in before and reading >= humidity_clear) %}
+        {% set ns.found = dict(ns.found, **{s.entity_id: (area_name(s.entity_id) or s.name)
+             ~ ': humidity is ' ~ ('%g' | format(reading)) ~ ' %, time to air the room'}) %}
         {% endif %}
-        {% elif s.entity_id in before and s.state in ['unknown', 'unavailable'] %}
+        {% elif s.entity_id in before %}
         {% set ns.found = dict(ns.found, **{s.entity_id: before[s.entity_id]}) %}
-        {% endif %}
         {% endif %}
         {% endfor %}
         {{ ns.found }}
@@ -431,6 +427,13 @@ automation:
         id: problems
     variables:
       titles: *titles
+      # A sensor that has just been added (Home Assistant started, or the template entities
+      # were reloaded) has no earlier entries to compare with. That is not a change in the
+      # home: what it lists is shown in the UI, nothing is sent to the phone, nothing dismissed.
+      startup: >-
+        {{ trigger.from_state is none or trigger.to_state is none
+           or trigger.from_state.attributes.entries is not mapping
+           or trigger.to_state.attributes.entries is not mapping }}
       before: >-
         {{ trigger.from_state.attributes.entries
            if trigger.from_state is not none and trigger.from_state.attributes.entries is mapping
@@ -442,9 +445,9 @@ automation:
       appeared: "{{ after.keys() | reject('in', before.keys() | list) | list }}"
       disappeared: "{{ before.keys() | reject('in', after.keys() | list) | list }}"
       limit: >-
-        {{ trigger.to_state.attributes.group_limit | int(3)
+        {{ trigger.to_state.attributes.get('group_limit', 3) | int(3)
            if trigger.to_state is not none else 3 }}
-      grouped: "{{ appeared | count > limit }}"
+      grouped: "{{ not startup and appeared | count > limit }}"
       summary: >-
         {% set ns = namespace(sentences=[]) %}
         {% for key in appeared %}{% set ns.sentences = ns.sentences + [after[key]] %}{% endfor %}
@@ -460,16 +463,18 @@ automation:
                 title: "{{ titles[trigger.id] }}"
                 message: "{{ after[repeat.item] }}"
                 notification_id: "cave_{{ trigger.id }}_{{ repeat.item }}"
-                copy: "{{ not grouped }}"
+                copy: "{{ not (grouped or startup) }}"
       - if: "{{ grouped }}"
         then:
           - event: cave_notify_copy
             event_data:
               title: "{{ titles[trigger.id] }}"
               message: "{{ summary }}"
-      - repeat:
-          for_each: "{{ disappeared }}"
-          sequence:
-            - action: persistent_notification.dismiss
-              data:
-                notification_id: "cave_{{ trigger.id }}_{{ repeat.item }}"
+      - if: "{{ not startup }}"
+        then:
+          - repeat:
+              for_each: "{{ disappeared }}"
+              sequence:
+                - action: persistent_notification.dismiss
+                  data:
+                    notification_id: "cave_{{ trigger.id }}_{{ repeat.item }}"

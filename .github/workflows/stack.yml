@@ -220,6 +220,9 @@ jobs:
 
       - name: apply does not run while another cave command holds the lock
         run: |
+          # Name the holder the way `cave update` does, then hold the lock as it would.
+          holder="\`cave update\` (pid 1, since the pipeline)"
+          printf '%s\n' "${holder}" > data/.cave/lock
           flock --exclusive --nonblock data/.cave/lock sleep 8 &
           sleep 2
           sha256sum data/homeassistant/cave/.applied/heating.yaml > "${RUNNER_TEMP}/locked.sha"
@@ -228,6 +231,7 @@ jobs:
             exit 1
           fi
           cat "${RUNNER_TEMP}/apply-locked.txt"
+          grep -qF "${holder} is running" "${RUNNER_TEMP}/apply-locked.txt"
           grep -q 'Nothing was changed' "${RUNNER_TEMP}/apply-locked.txt"
           sha256sum --check "${RUNNER_TEMP}/locked.sha"
           wait

@@ -226,3 +226,56 @@ async def test_every_maintenance_template_renders_for_every_golden_home(
     """No generated template is a syntax error in Home Assistant's engine."""
     for card in _maintenance_cards(home).values():
         assert _render(hass, card)
+
+
+def _text(hass: HomeAssistant, card: dict[str, Any]) -> str:
+    """The card's text exactly as rendered, blank lines included (strict, as the card does)."""
+    return str(Template(card["content"], hass).async_render(parse_result=False, strict=True))
+
+
+async def test_problem_card_separates_rooms_with_a_blank_line(hass: HomeAssistant) -> None:
+    """Markdown reads a line after a list item as part of the item, so each room ends blank.
+
+    Without the blank line Bad and Kinder would appear inside Wohnzimmer's last bullet, which is
+    what a coordinator outage, with several rooms failing at once, would show.
+    """
+    card = _maintenance_cards("all_optional")["Rooms needing attention"]
+    hass.states.async_set(
+        "binary_sensor.cave_living_room_problem",
+        "on",
+        {"messages": ["m1", "m2"], "thermostats": {"climate.a1": "unresponsive"}},
+    )
+    hass.states.async_set("binary_sensor.cave_bathroom_problem", "unavailable")
+    hass.states.async_set("binary_sensor.cave_kids_problem", "off")
+
+    two = _text(hass, card)
+
+    assert two == (
+        "**Wohnzimmer**: needs attention\n"
+        "- m1\n"
+        "- m2\n"
+        "- climate.a1: unresponsive\n"
+        "\n"
+        "**Bad**: unavailable"
+    )
+
+    hass.states.async_set("binary_sensor.cave_kids_problem", "on", {"messages": ["m3"]})
+
+    three = _text(hass, card)
+
+    assert three == (
+        "**Wohnzimmer**: needs attention\n"
+        "- m1\n"
+        "- m2\n"
+        "- climate.a1: unresponsive\n"
+        "\n"
+        "**Bad**: unavailable\n"
+        "\n"
+        '**Kid\'s "room" \\| {{ 1 }}**: needs attention\n'
+        "- m3"
+    )
+    # Every room's name starts a block of its own: the line before it is blank, or it is first.
+    lines = three.split("\n")
+    for index, line in enumerate(lines):
+        if line.startswith("**") and index > 0:
+            assert lines[index - 1] == ""

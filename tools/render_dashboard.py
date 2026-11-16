@@ -404,7 +404,9 @@ def problem_template(rooms: Sequence[Room]) -> str:
         "{% else -%}",
         "**{{ name }}**: {{ s }}",
         "{% endif -%}",
-        "{% endif -%}",
+        # A blank line ends the room's list; without it Markdown reads the next room's name as
+        # a continuation of the last bullet.
+        '{{ "\\n" }}{% endif -%}',
         "{% endfor -%}",
         "{% if ns.shown == 0 -%}",
         "All rooms are ok.",

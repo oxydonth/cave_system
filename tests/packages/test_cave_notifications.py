@@ -23,15 +23,23 @@ from pytest_homeassistant_custom_component.common import (
     mock_restore_cache_with_extra_data,
 )
 
-from tests.packages.helpers import PACKAGE, Shown, advance, load_package, set_helper
+from tests.packages.helpers import (
+    PACKAGE,
+    Shown,
+    advance,
+    load_package,
+    room,
+    set_helper,
+    set_humidity,
+)
 
 BATTERY = {"device_class": "battery", "unit_of_measurement": "%", "friendly_name": "Hall contact"}
 
 
 @pytest.fixture
-async def shown(hass: HomeAssistant) -> Shown:
+async def shown(hass: HomeAssistant, freezer: FrozenDateTimeFactory) -> Shown:
     """Load the package and everything it needs; return what the UI would show."""
-    return await load_package(hass)
+    return await load_package(hass, freezer)
 
 
 @pytest.fixture
@@ -322,7 +330,7 @@ async def test_after_a_restart_what_was_already_reported_is_not_announced_again(
     hass.states.async_set("sensor.hall_contact_battery", "12", BATTERY)
     reported = {"sensor.hall_contact_battery": "Hall contact is at 12 %"}
     _restore_battery_sensor(hass, reported)
-    shown = await load_package(hass)
+    shown = await load_package(hass, freezer)
 
     await advance(hass, freezer, 3)
 
@@ -337,7 +345,7 @@ async def test_a_new_low_battery_after_a_restart_is_announced(
     hass.states.async_set("sensor.gate_battery", "9", {**BATTERY, "friendly_name": "Gate"})
     reported = {"sensor.hall_contact_battery": "Hall contact is at 12 %"}
     _restore_battery_sensor(hass, reported)
-    shown = await load_package(hass)
+    shown = await load_package(hass, freezer)
 
     await advance(hass, freezer, 3)
 
@@ -499,24 +507,7 @@ async def test_only_the_rooms_window_pause_sensors_count(
 # High humidity
 # ---------------------------------------------------------------------------------------------
 
-HUMIDITY = {
-    "device_class": "humidity",
-    "unit_of_measurement": "%",
-    "friendly_name": "Bath humidity",
-}
-
-
-def _room(hass: HomeAssistant, area_name: str, slug: str) -> None:
-    """A room as the integration makes it: a room thermostat placed in the area of its name."""
-    _room_window_sensor(hass, f"climate.cave_{slug}", area_name, "heat")
-
-
-def _in_area(hass: HomeAssistant, entity_id: str, area_name: str) -> None:
-    """Place an entity in an area (its state is set by the test)."""
-    area = ar.async_get(hass).async_get_or_create(area_name)
-    domain, object_id = entity_id.split(".")
-    er.async_get(hass).async_get_or_create(domain, "test", entity_id, suggested_object_id=object_id)
-    er.async_get(hass).async_update_entity(entity_id, area_id=area.id)
+HUMIDITY = {"device_class": "humidity", "unit_of_measurement": "%", "friendly_name": "Sensor"}
 
 
 async def test_high_humidity_prompts_once_and_clears_with_a_margin(
@@ -524,43 +515,51 @@ async def test_high_humidity_prompts_once_and_clears_with_a_margin(
 ) -> None:
     """Above 70 % it notifies; it stays until below 65 %, so a hovering reading says nothing new."""
     await set_helper(hass, "cave_notify_service", "notify.test_phone")
-    _room(hass, "Bad", "bathroom")
-    _in_area(hass, "sensor.bath_humidity", "Bad")
-    hass.states.async_set("sensor.bath_humidity", "69", HUMIDITY)
+    room(hass, "Bad", "bathroom", humidity=69)
     await advance(hass, freezer, 2)
     assert shown.current == {}
 
-    hass.states.async_set("sensor.bath_humidity", "71", HUMIDITY)
+    set_humidity(hass, "bathroom", 71)
     await advance(hass, freezer, 1)
     assert shown.titles == ["High humidity"]
     assert shown.messages == ["Bad: humidity is 71 %, time to air the room"]
 
-    for value in ("69", "72", "66", "70", "67"):
-        hass.states.async_set("sensor.bath_humidity", value, HUMIDITY)
+    for value in (69, 72, 66, 70, 67):
+        set_humidity(hass, "bathroom", value)
         await advance(hass, freezer, 1)
     assert shown.titles == ["High humidity"]
     assert len(phone) == 1
 
-    hass.states.async_set("sensor.bath_humidity", "64", HUMIDITY)
+    set_humidity(hass, "bathroom", 64)
     await advance(hass, freezer, 1)
     assert shown.current == {}
 
-    hass.states.async_set("sensor.bath_humidity", "75", HUMIDITY)
+    set_humidity(hass, "bathroom", 75)
     await advance(hass, freezer, 1)
     assert shown.titles == ["High humidity"]
     assert len(phone) == 2
 
 
-async def test_humidity_is_named_by_the_area_when_the_sensor_has_one(
+async def test_humidity_needs_no_area_on_the_sensor_and_is_named_by_the_room(
     hass: HomeAssistant, shown: Shown, freezer: FrozenDateTimeFactory
 ) -> None:
-    """A person reads "Bad", not the name of a Zigbee device."""
-    _room(hass, "Bad", "bathroom")
-    _in_area(hass, "sensor.bad_humidity", "Bad")
-    hass.states.async_set("sensor.bad_humidity", "80", HUMIDITY)
+    """The room's reading comes from its thermostat, so a Zigbee sensor without an area counts."""
+    room(hass, "Bad", "bathroom", humidity=80)
+    hass.states.async_set("sensor.bad_humidity", "80", HUMIDITY)  # no area, not asked
     await advance(hass, freezer, 1)
 
     assert shown.messages == ["Bad: humidity is 80 %, time to air the room"]
+
+
+async def test_a_room_without_a_reading_is_not_reported(
+    hass: HomeAssistant, shown: Shown, freezer: FrozenDateTimeFactory
+) -> None:
+    """No humidity sensor, or an unavailable one: the attribute is absent, nothing is said."""
+    room(hass, "Bad", "bathroom")
+    room(hass, "Flur", "hall")
+    await advance(hass, freezer, 5)
+
+    assert shown.current == {}
 
 
 async def test_other_percentages_are_not_humidity(

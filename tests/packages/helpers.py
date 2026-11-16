@@ -22,11 +22,13 @@ class Shown:
 
     def __init__(self, hass: HomeAssistant) -> None:
         self.current: dict[str, pn.Notification] = {}
+        self.removed: list[str] = []  # every id that was dismissed, in order
         pn.async_register_callback(hass, self._update)
 
     def _update(self, kind: pn.UpdateType, notifications: dict[str, pn.Notification]) -> None:
         if kind is pn.UpdateType.REMOVED:
             for notification_id in notifications:
+                self.removed.append(notification_id)
                 self.current.pop(notification_id, None)
         else:
             self.current.update(notifications)
@@ -44,8 +46,16 @@ def _fail(hass: HomeAssistant, name: str, config: Any, message: str, domain_conf
     raise AssertionError(f"package error: {name}: {message}")
 
 
-async def load_package(hass: HomeAssistant) -> Shown:
-    """Merge the package into the configuration and set up what it contains."""
+async def load_package(
+    hass: HomeAssistant, freezer: FrozenDateTimeFactory | None = None, *, settle: bool = True
+) -> Shown:
+    """Merge the package into the configuration and set up what it contains.
+
+    With a ``freezer`` (and ``settle``) a minute passes, so the sensors have made their first
+    evaluation when this returns and what a test then changes is a change of the home. That
+    first evaluation is the start-up case: what it finds is shown and not pushed. The restart
+    tests run it themselves, with the sensors restored, and pass nothing.
+    """
     assert await async_setup_component(hass, "persistent_notification", {})
     assert await async_setup_component(hass, "system_log", {})
     package = load_yaml_dict(str(PACKAGE))
@@ -53,7 +63,10 @@ async def load_package(hass: HomeAssistant) -> Shown:
     for domain in ("input_text", "script", "template", "automation"):
         assert await async_setup_component(hass, domain, config), domain
     await hass.async_block_till_done()
-    return Shown(hass)
+    shown = Shown(hass)
+    if settle and freezer is not None:
+        await advance(hass, freezer, 1)
+    return shown
 
 
 async def set_helper(hass: HomeAssistant, name: str, value: str) -> None:
@@ -82,7 +95,17 @@ def in_area(hass: HomeAssistant, entity_id: str, area_name: str) -> None:
     er.async_get(hass).async_update_entity(entity_id, area_id=area.id)
 
 
-def room(hass: HomeAssistant, area_name: str, slug: str) -> None:
+def room(hass: HomeAssistant, area_name: str, slug: str, humidity: float | None = None) -> None:
     """A room as the integration makes it: a room thermostat placed in the area of its name."""
     in_area(hass, f"climate.cave_{slug}", area_name)
-    hass.states.async_set(f"climate.cave_{slug}", "heat")
+    set_humidity(hass, slug, humidity)
+
+
+def set_humidity(hass: HomeAssistant, slug: str, humidity: float | str | None) -> None:
+    """The room thermostat with the reading of the room's humidity sensor.
+
+    The integration's ``current_humidity`` is the reading of the room's configured sensor, and
+    the attribute is absent while there is no reading (no sensor, or it is unavailable).
+    """
+    attributes = {} if humidity is None else {"current_humidity": humidity}
+    hass.states.async_set(f"climate.cave_{slug}", "heat", attributes)

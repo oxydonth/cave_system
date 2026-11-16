@@ -5,6 +5,8 @@ that uses the ``hass`` fixture needs them (see CLAUDE.md): the import of the int
 at import time, and the autouse ``enable_custom_integrations`` fixture.
 """
 
+import logging
+from collections.abc import Iterator
 from pathlib import Path
 
 import pytest
@@ -41,3 +43,21 @@ async def home(hass: HomeAssistant) -> FakeHome:
     fake = FakeHome(hass)
     await fake.async_setup()
     return fake
+
+
+@pytest.fixture(autouse=True)
+def no_logged_errors(caplog: pytest.LogCaptureFixture) -> Iterator[None]:
+    """A test run of the package logs no error, except the one failure it exists to test.
+
+    A template that raises, an action that fails: Home Assistant logs it and carries on, so
+    without this the package could be broken in a way no assertion notices. The one expected
+    error is a notify action that does not exist or fails, logged by the automation
+    "Cave: send a notification copy", because tests of a wrong name in the helper provoke it.
+    """
+    yield
+    errors = [
+        record.getMessage()
+        for record in caplog.records
+        if record.levelno >= logging.ERROR and "send a notification copy" not in record.getMessage()
+    ]
+    assert errors == []

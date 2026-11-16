@@ -16,6 +16,7 @@ import pytest
 import yaml
 from freezegun.api import FrozenDateTimeFactory
 from homeassistant.core import HomeAssistant
+from homeassistant.helpers import entity_registry as er
 from homeassistant.helpers.template import Template
 from homeassistant.setup import async_setup_component
 
@@ -38,7 +39,9 @@ HEATING = config(
 )
 
 
-async def start(home: FakeHome) -> tuple[FakeThermostat, Shown]:
+async def start(
+    home: FakeHome, freezer: FrozenDateTimeFactory | None = None
+) -> tuple[FakeThermostat, Shown]:
     """One room with one thermostat and a window contact, then the notifications package."""
     trv = await home.thermostat("climate.trv", target=21.0)
     home.set("binary_sensor.window", "off")
@@ -46,6 +49,8 @@ async def start(home: FakeHome) -> tuple[FakeThermostat, Shown]:
     await home.start(HEATING)
     trv.report(current=20.0)
     shown = await load_package(home.hass)
+    if freezer is not None:
+        await home.advance(freezer, MIN)  # the sensors' first evaluation
     return trv, shown
 
 
@@ -66,7 +71,7 @@ async def test_an_open_window_is_reported_after_half_an_hour_with_the_rooms_area
     hass: HomeAssistant, home: FakeHome, freezer: FrozenDateTimeFactory
 ) -> None:
     """The real window pause, from a real contact, named by the real room device's area."""
-    _, shown = await start(home)
+    _, shown = await start(home, freezer)
     await home.advance(freezer, 2 * MIN)
 
     home.set("binary_sensor.window", "on")
@@ -91,7 +96,7 @@ async def test_a_short_airing_is_not_reported(
     hass: HomeAssistant, home: FakeHome, freezer: FrozenDateTimeFactory
 ) -> None:
     """Ten minutes with the window open is a pause the integration makes and nobody reports."""
-    _, shown = await start(home)
+    _, shown = await start(home, freezer)
     home.set("binary_sensor.window", "on")
     await home.advance(freezer, 10 * MIN)
     assert home.state(WINDOW).state == "on"
@@ -106,7 +111,7 @@ async def test_a_real_problem_is_reported_with_the_integrations_own_messages(
     hass: HomeAssistant, home: FakeHome, freezer: FrozenDateTimeFactory
 ) -> None:
     """A thermostat that goes away turns the real problem sensor on; ten minutes on, it is said."""
-    trv, shown = await start(home)
+    trv, shown = await start(home, freezer)
     await home.advance(freezer, 2 * MIN)
     assert home.state(PROBLEM).state == "off"
 
@@ -132,7 +137,7 @@ async def test_pending_and_held_thermostats_do_not_notify(
     hass: HomeAssistant, home: FakeHome, freezer: FrozenDateTimeFactory
 ) -> None:
     """A held thermostat is a status, not a problem; nothing is reported however long it lasts."""
-    _, shown = await start(home)
+    _, shown = await start(home, freezer)
     await hass.services.async_call(
         "cave_heating",
         "hold",
@@ -187,7 +192,7 @@ async def test_the_maintenance_view_shows_a_real_rooms_problem(
     hass: HomeAssistant, home: FakeHome, freezer: FrozenDateTimeFactory, tmp_path: Path
 ) -> None:
     """The problem card reads the real `messages` and `thermostats` attributes."""
-    trv, _ = await start(home)
+    trv, _ = await start(home, freezer)
     source = tmp_path / "heating.yaml"
     source.write_text(yaml.safe_dump(HEATING, sort_keys=False))
     dashboard = yaml.safe_load(render_file(source))
@@ -256,3 +261,32 @@ async def test_what_the_real_reload_answers_over_rest_reaches_the_person_through
     assert "must list at least one thermostat" in text
     # The running configuration stays in effect.
     assert home.state("climate.cave_living_room").state != "unavailable"
+
+
+async def test_a_rooms_humidity_comes_from_its_thermostat_and_needs_no_area(
+    hass: HomeAssistant, home: FakeHome, freezer: FrozenDateTimeFactory
+) -> None:
+    """The room's configured humidity sensor is the thermostat's `current_humidity`.
+
+    The sensor here has no area at all, as a Zigbee2MQTT device has none until the owner
+    assigns one; an unavailable sensor makes the attribute disappear.
+    """
+    _, shown = await start(home, freezer)
+    assert hass.states.get("sensor.living_humidity") is not None
+    assert er.async_get(hass).async_get("sensor.living_humidity") is None  # not in any area
+    assert home.state("climate.cave_living_room").attributes["current_humidity"] == 50
+
+    home.set("sensor.living_humidity", "75", device_class="humidity", unit_of_measurement="%")
+    await home.advance(freezer, 2 * MIN)
+    assert home.state("climate.cave_living_room").attributes["current_humidity"] == 75
+    assert shown.titles == ["High humidity"]
+    assert shown.messages == ["Wohnzimmer: humidity is 75 %, time to air the room"]
+
+    home.set("sensor.living_humidity", "unavailable")
+    await home.advance(freezer, 2 * MIN)
+    assert "current_humidity" not in home.state("climate.cave_living_room").attributes
+    assert shown.titles == ["High humidity"], "kept while there is no reading"
+
+    home.set("sensor.living_humidity", "55", device_class="humidity", unit_of_measurement="%")
+    await home.advance(freezer, 2 * MIN)
+    assert shown.current == {}

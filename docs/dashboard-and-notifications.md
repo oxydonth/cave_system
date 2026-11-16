@@ -172,15 +172,16 @@ error of the automation "Cave: send a notification copy".
 
 Five sensors named `sensor.cave_attention_*` check once a minute what needs attention, so a
 notification appears within a minute of its condition being met. Each notification appears once,
-is dismissed again when the condition ends, and does not return once you have dismissed it,
-unless the condition ends and starts again.
+is dismissed again when the condition ends, and does not return while Home Assistant keeps
+running once you have dismissed it, unless the condition ends and starts again. A restart is
+different: see "Restarts" below, where what you dismissed comes back.
 
 | Notification | Condition | Default |
 |---|---|---|
 | Low battery | A battery sensor of a device in the home, in percent or as a low-battery flag, is at or below the limit. It ends when the level is at or above the clearing level. The battery of a phone with the Home Assistant app is not checked | 20 %, clears at 30 % |
 | Device unavailable | Every entity of a device has been unavailable for this long. Zigbee2MQTT itself waits 25 hours before it marks a battery device unavailable | 60 minutes |
 | Window left open | A room's `binary_sensor.cave_<room>_window_open` has been on for this long. That sensor turns on only after the room's window delay | 30 minutes |
-| High humidity | A humidity sensor in a room is above the limit; it ends, and may notify again, only when it is below the second value. A room is an area that holds a `climate.cave_<room>`, so put the room's humidity sensor in the area of its room; a sensor in the garden or the cellar is not asked | 70 %, ends below 65 % |
+| High humidity | The humidity of a room is above the limit; it ends, and may notify again, only when it is below the second value. The room's humidity is the `current_humidity` of `climate.cave_<room>`, which is the reading of the `humidity_sensor` named for the room in `heating.yaml`, so no area has to be assigned to the sensor. A room without a `humidity_sensor`, a sensor that belongs to no room (the garden, the cellar) and an unavailable sensor give no notification | 70 %, ends below 65 % |
 | Heating problem | A room's `binary_sensor.cave_<room>_problem` has been on for this long; the message lists what is wrong. `held` and `pending` thermostats do not turn that sensor on | 10 minutes |
 
 Texts are in English and name the room by its Home Assistant area where the entity has one.
@@ -211,7 +212,9 @@ and with it every nightly update, empties the bell. What happens next:
 
 - The sensors remember what they had reported. When Home Assistant has started, the
   notifications of everything that is still reported are created again, in the UI only: the
-  phone is not told a second time.
+  phone is not told a second time. This includes a notification you had dismissed: the bell
+  shows everything that still holds after every restart, and so after every nightly update,
+  until the condition ends. Dismissals are not remembered across a restart.
 - An entry that was reported stays while its entity is `unknown` or `unavailable`, which every
   Zigbee device is for a minute or two after a start, and a window pause or a room problem that
   was reported stays while its sensor is on, however young its state looks after the restart.
@@ -220,6 +223,10 @@ and with it every nightly update, empties the bell. What happens next:
   condition is announced as usual, with the full time limit counted from the start.
 - After a restart, a device that was silent before the restart counts its hour from the start
   again if it was not reported before.
+
+**Reloading.** Reloading the template entities (Developer tools, YAML) removes and adds the five
+sensors. That is treated like a start: what they list is shown, nothing is dismissed and nothing
+is sent to the phone.
 
 ### Entities of the package
 

@@ -223,7 +223,7 @@ views:
         {% else -%}
         **{{ name }}**: {{ s }}
         {% endif -%}
-        {% endif -%}
+        {{ "\n" }}{% endif -%}
         {% endfor -%}
         {% if ns.shown == 0 -%}
         All rooms are ok.

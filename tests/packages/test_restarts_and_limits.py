@@ -7,6 +7,7 @@ and the start event is fired.
 """
 
 from typing import Any
+from unittest.mock import patch
 
 import pytest
 from freezegun.api import FrozenDateTimeFactory
@@ -22,7 +23,16 @@ from pytest_homeassistant_custom_component.common import (
     mock_restore_cache_with_extra_data,
 )
 
-from tests.packages.helpers import PACKAGE, Shown, advance, in_area, load_package, room, set_helper
+from tests.packages.helpers import (
+    PACKAGE,
+    Shown,
+    advance,
+    in_area,
+    load_package,
+    room,
+    set_helper,
+    set_humidity,
+)
 
 BATTERY = {"device_class": "battery", "unit_of_measurement": "%", "friendly_name": "Hall contact"}
 HUMIDITY = {"device_class": "humidity", "unit_of_measurement": "%", "friendly_name": "Sensor"}
@@ -232,14 +242,12 @@ async def test_after_a_restart_a_device_that_is_only_slow_to_connect_is_not_repo
 async def test_after_a_restart_high_humidity_that_goes_on_is_not_announced_again(
     hass: HomeAssistant, freezer: FrozenDateTimeFactory, phone: list[ServiceCall]
 ) -> None:
-    room(hass, "Bad", "bathroom")
-    in_area(hass, "sensor.bath_humidity", "Bad")
-    hass.states.async_set("sensor.bath_humidity", "unknown", HUMIDITY)
+    room(hass, "Bad", "bathroom")  # the humidity sensor has not reported yet: no reading
     text = "Bad: humidity is 80 %, time to air the room"
-    shown = await restart(hass, {"humidity": {"sensor.bath_humidity": text}})
+    shown = await restart(hass, {"humidity": {"climate.cave_bathroom": text}})
     await advance(hass, freezer, 2)
 
-    hass.states.async_set("sensor.bath_humidity", "72", HUMIDITY)
+    set_humidity(hass, "bathroom", 72)
     await advance(hass, freezer, 3)
 
     assert shown.messages == [text], "the one notification, as it was reported"
@@ -273,6 +281,76 @@ async def test_a_new_condition_after_a_restart_is_still_announced(
 
 
 # ---------------------------------------------------------------------------------------------
+# Reloading the template entities, and the first evaluation
+# ---------------------------------------------------------------------------------------------
+
+
+async def test_reloading_the_template_entities_does_not_push_what_is_reported_again(
+    hass: HomeAssistant, freezer: FrozenDateTimeFactory, phone: list[ServiceCall]
+) -> None:
+    """Developer tools, YAML, "Template entities": the sensors are removed and added again.
+
+    That is not a change in the home. What they list is shown, nothing is dismissed and the
+    phone hears nothing a second time.
+    """
+    shown = await load_package(hass, freezer)
+    await use_phone(hass)
+    hass.states.async_set("sensor.hall_contact_battery", "12", BATTERY)
+    await advance(hass, freezer, 2)
+    assert len(phone) == 1
+    assert shown.titles == ["Low battery"]
+
+    package = load_yaml_dict(str(PACKAGE))
+    reloaded = {"homeassistant": {"packages": {"cave_notifications": package}}}
+    with patch("homeassistant.config.load_yaml_config_file", return_value=reloaded):
+        await hass.services.async_call("template", "reload", blocking=True)
+        await hass.async_block_till_done()
+    await advance(hass, freezer, 5)
+
+    assert len(phone) == 1, "no second push"
+    assert shown.removed == [], "nothing was dismissed"
+    assert shown.titles == ["Low battery"]
+    assert hass.states.get("sensor.cave_attention_battery") is not None
+
+
+async def test_what_exists_when_the_sensors_are_first_added_is_shown_and_not_pushed(
+    hass: HomeAssistant, freezer: FrozenDateTimeFactory, phone: list[ServiceCall]
+) -> None:
+    """A first install, or a first evaluation without restored entries, is the start-up case."""
+    hass.states.async_set("sensor.hall_contact_battery", "12", BATTERY)
+    shown = await load_package(hass)
+    await use_phone(hass)
+
+    await advance(hass, freezer, 3)
+
+    assert shown.titles == ["Low battery"]
+    assert phone == []
+    assert shown.removed == []
+
+    hass.states.async_set("sensor.gate_battery", "9", {**BATTERY, "friendly_name": "Gate"})
+    await advance(hass, freezer, 2)
+    assert [call.data["message"] for call in phone] == ["Gate is at 9 %"], "later ones are news"
+
+
+async def test_the_automation_copes_with_a_sensor_without_a_group_limit(
+    hass: HomeAssistant, freezer: FrozenDateTimeFactory, phone: list[ServiceCall]
+) -> None:
+    """A state that has `entries` but no `group_limit` (an older state) does not fail the run."""
+    shown = await load_package(hass, freezer)
+    await use_phone(hass)
+    hass.states.async_set("sensor.cave_attention_humidity", "0", {"entries": {}})
+    hass.states.async_set(
+        "sensor.cave_attention_humidity",
+        "1",
+        {"entries": {"climate.cave_x": "X: humidity is 80 %, time to air the room"}},
+    )
+    await hass.async_block_till_done()
+
+    assert shown.titles == ["High humidity"]
+    assert len(phone) == 1
+
+
+# ---------------------------------------------------------------------------------------------
 # The phone's own battery, and batteries that hover
 # ---------------------------------------------------------------------------------------------
 
@@ -281,7 +359,7 @@ async def test_the_battery_of_a_phone_with_the_app_is_not_a_home_device(
     hass: HomeAssistant, freezer: FrozenDateTimeFactory, phone: list[ServiceCall]
 ) -> None:
     """The Companion app's battery sensor has the device class battery; it is nobody's radiator."""
-    shown = await load_package(hass)
+    shown = await load_package(hass, freezer)
     await use_phone(hass)
     # `integration_entities('mobile_app')` asks which integration added an entity; Home Assistant
     # records that for every entity a platform adds, and the test records it by hand.
@@ -304,7 +382,7 @@ async def test_a_battery_hovering_around_the_limit_notifies_once(
     hass: HomeAssistant, freezer: FrozenDateTimeFactory, phone: list[ServiceCall]
 ) -> None:
     """21, 20, 21, 20, ... every half hour is one notification, not one per dip."""
-    shown = await load_package(hass)
+    shown = await load_package(hass, freezer)
     await use_phone(hass)
     for value in ("21", "20", "21", "20", "21", "20", "24", "29"):
         hass.states.async_set("sensor.hall_contact_battery", value, BATTERY)
@@ -331,7 +409,7 @@ async def test_a_coordinator_outage_is_one_push_and_one_notification_per_device(
     hass: HomeAssistant, freezer: FrozenDateTimeFactory, phone: list[ServiceCall]
 ) -> None:
     """Thirty devices that vanish together: thirty entries in the UI, one summary on the phone."""
-    shown = await load_package(hass)
+    shown = await load_package(hass, freezer)
     await use_phone(hass)
     for number in range(30):
         add_device(hass, f"Sensor {number:02d}", {f"sensor.zigbee_{number:02d}": "20"})
@@ -363,7 +441,7 @@ async def test_up_to_three_new_entries_are_pushed_one_by_one_more_as_one_summary
     count: int,
     pushes: int,
 ) -> None:
-    shown = await load_package(hass)
+    shown = await load_package(hass, freezer)
     await use_phone(hass)
     for number in range(count):
         hass.states.async_set(f"sensor.b{number}_battery", "10", BATTERY)
@@ -379,20 +457,18 @@ async def test_up_to_three_new_entries_are_pushed_one_by_one_more_as_one_summary
 # ---------------------------------------------------------------------------------------------
 
 
-async def test_only_humidity_sensors_in_the_area_of_a_room_prompt_to_air(
+async def test_only_the_humidity_of_a_room_prompts_to_air(
     hass: HomeAssistant, freezer: FrozenDateTimeFactory, phone: list[ServiceCall]
 ) -> None:
-    """A cellar, a garden and a sensor without an area are not rooms with a thermostat."""
-    shown = await load_package(hass)
+    """A cellar, a garden and a sensor that belongs to no room have no room thermostat."""
+    shown = await load_package(hass, freezer)
     await use_phone(hass)
-    room(hass, "Bad", "bathroom")
-    in_area(hass, "sensor.bath_humidity", "Bad")
+    room(hass, "Bad", "bathroom", humidity=92)
+    room(hass, "Flur", "hall")  # a room without a humidity sensor
     in_area(hass, "sensor.cellar_humidity", "Keller")
-    in_area(hass, "sensor.garden_humidity", "Garten")
     for entity in ("bath", "cellar", "garden", "nowhere"):
-        hass.states.async_set(
-            f"sensor.{entity}_humidity", "92", {**HUMIDITY, "friendly_name": entity}
-        )
+        attributes = {**HUMIDITY, "friendly_name": entity}
+        hass.states.async_set(f"sensor.{entity}_humidity", "92", attributes)
 
     await advance(hass, freezer, 3)
 
@@ -427,7 +503,7 @@ async def test_an_empty_or_unset_helper_means_the_default(
     hass: HomeAssistant, freezer: FrozenDateTimeFactory, value: str | None
 ) -> None:
     """Twenty percent is the limit when the helper says nothing: empty, or never set."""
-    shown = await load_package(hass)
+    shown = await load_package(hass, freezer)
     if value is not None:
         await set_helper(hass, "cave_notify_battery_below", value)
     hass.states.async_set("sensor.a_battery", "25", {**BATTERY, "friendly_name": "A"})
@@ -441,7 +517,7 @@ async def test_an_empty_or_unset_helper_means_the_default(
 async def test_text_that_is_not_a_number_is_refused_by_the_helper_and_the_default_stands(
     hass: HomeAssistant, freezer: FrozenDateTimeFactory
 ) -> None:
-    shown = await load_package(hass)
+    shown = await load_package(hass, freezer)
 
     with pytest.raises(ValueError, match="does not match expected pattern"):
         await set_helper(hass, "cave_notify_battery_below", "garbage")
@@ -454,7 +530,7 @@ async def test_text_that_is_not_a_number_is_refused_by_the_helper_and_the_defaul
 async def test_the_battery_limit_the_owner_enters_is_the_one_used(
     hass: HomeAssistant, freezer: FrozenDateTimeFactory
 ) -> None:
-    shown = await load_package(hass)
+    shown = await load_package(hass, freezer)
     await set_helper(hass, "cave_notify_battery_below", "30")
     await set_helper(hass, "cave_notify_battery_clear_above", "50")
     hass.states.async_set("sensor.a_battery", "25", {**BATTERY, "friendly_name": "A"})
@@ -474,7 +550,7 @@ async def test_the_battery_limit_the_owner_enters_is_the_one_used(
 async def test_the_durations_the_owner_enters_are_the_ones_used(
     hass: HomeAssistant, freezer: FrozenDateTimeFactory
 ) -> None:
-    shown = await load_package(hass)
+    shown = await load_package(hass, freezer)
     await set_helper(hass, "cave_notify_window_open_minutes", "5")
     await set_helper(hass, "cave_notify_problem_minutes", "2")
     await set_helper(hass, "cave_notify_unavailable_minutes", "10")
@@ -500,11 +576,9 @@ async def test_the_durations_the_owner_enters_are_the_ones_used(
 async def test_the_humidity_limits_the_owner_enters_are_the_ones_used(
     hass: HomeAssistant, freezer: FrozenDateTimeFactory
 ) -> None:
-    shown = await load_package(hass)
+    shown = await load_package(hass, freezer)
     await set_helper(hass, "cave_notify_humidity_above", "60")
-    room(hass, "Bad", "bathroom")
-    in_area(hass, "sensor.bath_humidity", "Bad")
-    hass.states.async_set("sensor.bath_humidity", "61", HUMIDITY)
+    room(hass, "Bad", "bathroom", humidity=61)
 
     await advance(hass, freezer, 2)
 
@@ -515,7 +589,7 @@ async def test_the_group_limit_travels_with_the_entries(
     hass: HomeAssistant, freezer: FrozenDateTimeFactory
 ) -> None:
     """The group limit travels with the entries, so the automation needs no second copy."""
-    await load_package(hass)
+    await load_package(hass, freezer)
     await advance(hass, freezer, 1)
     state: Any = hass.states.get("sensor.cave_attention_battery")
     assert state is not None
