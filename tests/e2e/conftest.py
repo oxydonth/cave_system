@@ -205,7 +205,9 @@ def mask_in_job_log(token_file: Path) -> None:
         return
     token = token_file.read_text(encoding="utf-8").strip()
     if token:
-        print(f"::add-mask::{token}")  # noqa: T201 - a workflow command; the runner hides it
+        # On a line of its own: pytest -v writes the test name first, and the runner reads
+        # workflow commands only at the start of a line.
+        print(f"\n::add-mask::{token}", flush=True)  # noqa: T201 - a workflow command
 
 
 @pytest.fixture(scope="session")
