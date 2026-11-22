@@ -1,0 +1,12 @@
+# Installed and enabled by scripts/provision-host.sh. See docs/operations.md.
+[Unit]
+Description=cave_system: nightly backup
+
+[Timer]
+OnCalendar=*-*-* 02:30
+RandomizedDelaySec=10min
+# A backup missed while the server was off is made after the next start; it stops nothing.
+Persistent=true
+
+[Install]
+WantedBy=timers.target

@@ -1,0 +1,29 @@
+# Installed by scripts/provision-host.sh; started by cave-update.timer. See docs/operations.md.
+[Unit]
+Description=cave_system: install the newest release (cave update)
+Documentation=https://github.com/oxydonth/cave_system/blob/main/docs/operations.md
+Requires=docker.service
+After=docker.service network-online.target
+Wants=network-online.target
+# Nothing to do before `./cave init` has run.
+ConditionPathExists=/opt/cave/.env
+
+[Service]
+Type=oneshot
+# Root: the state directory holds files that the containers own, which only root can copy and
+# put back with their owners. Git runs as the owner of the checkout (docs/operations.md).
+User=root
+WorkingDirectory=/opt/cave
+# Root must not leave bytecode in the checkout: __pycache__ owned by root there would stop
+# the service user's Git from removing a module directory in a later release.
+Environment=PYTHONDONTWRITEBYTECODE=1
+# --auto: does nothing when CAVE_AUTO_UPDATE=0 in .env.
+ExecStart=/opt/cave/cave update --auto
+# However the run ended (finished, failed, killed, timed out), finish an interrupted switch, so
+# that the stack is never left stopped. Does nothing when the update finished.
+ExecStopPost=/opt/cave/cave update --recover
+# Pulling the images on a slow line, then up to 15 minutes for each start.
+TimeoutStartSec=3h
+# A SIGTERM during the switch rolls back first, and ExecStopPost may have to do the
+# whole way back: stop (twice), start (twice), wait up to 15 minutes.
+TimeoutStopSec=90min

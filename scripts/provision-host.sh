@@ -4,6 +4,8 @@
 #   * Docker Engine and the Compose plugin, from Docker's own package repository
 #   * Git, an SSH client and Python 3 (the `cave` command needs Python 3.11 or newer)
 #   * the service user (home /var/lib/cave-home), /opt/cave (the checkout) and /var/lib/cave (the state)
+#   * the systemd units of scripts/systemd: the nightly update and backup, which run as root, and
+#     the recovery of an interrupted update at boot (docs/operations.md)
 #
 # Idempotent: every step first looks whether it is already done. Run it as root:
 #
@@ -25,6 +27,10 @@ DOCKER_KEYRING=/etc/apt/keyrings/docker.asc
 # The fingerprint Docker publishes for its package signing key.
 DOCKER_KEY_FINGERPRINT=9DC858229FC7DD38854AE2D88D81803C0EBFCD88
 DOCKER_SOURCES=/etc/apt/sources.list.d/docker.sources
+# The units next to this script; absent when the script was copied to the server on its own.
+UNITS_DIR=$(cd "$(dirname "$0")" && pwd)/systemd
+UNIT_FILES="cave-update.service cave-update.timer cave-backup.service cave-backup.timer cave-recover.service"
+ENABLED_UNITS="cave-update.timer cave-backup.timer cave-recover.service"
 DOCKER_PACKAGES="docker-ce docker-ce-cli containerd.io docker-buildx-plugin docker-compose-plugin"
 DRY_RUN=0
 
@@ -115,7 +121,7 @@ DOCKER_DEB_URL=https://download.docker.com/linux/debian
 ARCH=$(dpkg --print-architecture 2>/dev/null || echo arm64)
 
 # --- packages
-say "[1/5] Base packages"
+say "[1/6] Base packages"
 missing=""
 for pkg in ca-certificates curl git gnupg openssh-client python3; do
   if dpkg -s "$pkg" >/dev/null 2>&1; then
@@ -136,7 +142,7 @@ key_fingerprint() {
   gpg --show-keys --with-colons "$1" 2>/dev/null | awk -F: '/^fpr:/ { print $10; exit }'
 }
 
-say "[2/5] Docker's package repository"
+say "[2/6] Docker's package repository"
 SOURCES_TEXT="Types: deb
 URIs: $DOCKER_DEB_URL
 Suites: $OS_CODENAME
@@ -174,7 +180,7 @@ else
   fi
 fi
 
-say "[3/5] Docker Engine and the Compose plugin"
+say "[3/6] Docker Engine and the Compose plugin"
 if dpkg -s docker-ce docker-compose-plugin >/dev/null 2>&1; then
   say "  installed"
 else
@@ -192,7 +198,7 @@ if command -v systemctl >/dev/null 2>&1; then
   fi
 fi
 
-say "[4/5] Service user '$SERVICE_USER'"
+say "[4/6] Service user '$SERVICE_USER'"
 if id -u "$SERVICE_USER" >/dev/null 2>&1; then
   say "  exists"
 else
@@ -204,7 +210,7 @@ else
   run usermod -aG docker "$SERVICE_USER"
 fi
 
-say "[5/5] Directories"
+say "[5/6] Directories"
 # The checkout is readable by everyone; the state and the backups hold secrets and are not.
 for entry in "$APP_DIR:0755" "$DATA_DIR:0750" "$BACKUP_DIR:0750"; do
   dir=${entry%%:*}
@@ -215,6 +221,40 @@ for entry in "$APP_DIR:0755" "$DATA_DIR:0750" "$BACKUP_DIR:0750"; do
     run install -d -o "$SERVICE_USER" -g "$SERVICE_USER" -m "$mode" "$dir"
   fi
 done
+
+say "[6/6] systemd units for the nightly update and backup"
+UNITS_INSTALLED=0
+if [ ! -d "$UNITS_DIR" ]; then
+  say "  skipped: $UNITS_DIR does not exist (the script was copied on its own)."
+  say "  Run $APP_DIR/scripts/provision-host.sh again once the repository is cloned there."
+elif ! command -v systemctl >/dev/null 2>&1; then
+  say "  skipped: this system has no systemd"
+else
+  changed=0
+  for unit in $UNIT_FILES; do
+    if cmp -s "$UNITS_DIR/$unit" "/etc/systemd/system/$unit"; then
+      say "  $unit: up to date"
+    else
+      run install -m 0644 "$UNITS_DIR/$unit" "/etc/systemd/system/$unit"
+      changed=1
+    fi
+  done
+  if [ "$changed" -eq 1 ]; then
+    run systemctl daemon-reload
+  fi
+  for unit in $ENABLED_UNITS; do
+    if [ "$DRY_RUN" -eq 0 ] && systemctl is-enabled --quiet "$unit" 2>/dev/null; then
+      say "  $unit: enabled"
+    else
+      # Timers are started as well; the recovery runs at every boot and after every update.
+      case "$unit" in
+        *.timer) run systemctl enable --now "$unit" ;;
+        *) run systemctl enable "$unit" ;;
+      esac
+    fi
+  done
+  UNITS_INSTALLED=1
+fi
 
 if [ "$DRY_RUN" -eq 1 ]; then
   say "Dry run finished: nothing was changed."
@@ -236,3 +276,8 @@ Done. Next, as the service user:
 
 See docs/install.md.
 EOF
+if [ "$UNITS_INSTALLED" -eq 0 ]; then
+  say ""
+  say "The nightly update and backup are not installed yet: run $APP_DIR/scripts/provision-host.sh"
+  say "again after cloning (docs/operations.md)."
+fi

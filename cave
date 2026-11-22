@@ -18,8 +18,13 @@ def _main() -> int:
         )
         return 1
 
+    import os
     from pathlib import Path
 
+    # Run as root (`sudo ./cave update`), Python would leave root-owned __pycache__ directories
+    # in the service user's checkout, which its Git could then not remove in a later release.
+    if os.geteuid() == 0:
+        sys.dont_write_bytecode = True
     root = Path(__file__).resolve().parent
     sys.path.insert(0, str(root / "ops"))
     from cave_ops.cli import main

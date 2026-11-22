@@ -3,6 +3,8 @@
 The command-line tool that operates the stack (concept section 4.4). Python, **standard library
 only**, and it must run on Python 3.11 or newer, because it runs on the server's own Python. The
 entry point is `./cave` in the repository root; it stops with a clear message on an older Python.
+Run as root (`update`, `backup`, `restore`), it writes no bytecode, so that no root-owned
+`__pycache__` appears in the service user's checkout.
 
 Ruff and mypy check `ops/` and `cave` against Python 3.11 (`ops/ruff.toml`, `make typecheck`), and
 the tests in `tests/ops/` run on 3.11 (`make test-py311`) and on 3.14 with the rest of the suite.
@@ -24,8 +26,8 @@ each part (`tests/ops/conftest.py`).
 | `health.py` | `check_health(ctx)` and `wait_healthy(ctx, timeout=, interval=)`: "Healthy" as defined in concept section 4.5, returning `Health(healthy, problems)`. Without the script token it proves: every container of the active profiles runs and passes its health check, which for Home Assistant includes that it logged "Home Assistant initialized". It does not prove that Home Assistant is out of recovery mode. With the token it also requires `/api/config` to report `state` RUNNING, no `recovery_mode`/`safe_mode`, and `cave_heating` set up. |
 | `notify.py` | `notify(ctx, title, message)`: the notification contract of concept section 4.5 (`script.cave_notify` called with the fields `title` and `message`, else `persistent_notification.create`, always also the journal). Never raises. |
 | `container.py` | `run_in_homeassistant(ctx, command, entrypoint=, workdir=, capture=)`: a one-off command in the pinned Home Assistant image with the service's mounts (`/config`, `/cave/tools`); for everything that needs Home Assistant's own Python packages. |
-| `heating.py` | `validate_and_store(ctx, source=None) -> ApplyResult`: reads the file **once**, validates a staged copy of exactly those bytes in a one-off container, and only if it passes stores those same bytes as the applied copy. Also `validate()` and `store_applied(ctx, path_or_bytes)`. |
-| `lock.py` | `Lock(path, command)` and `ctx.lock(command)`: the one lock of concept section 4.5, `with ctx.lock("update"): ...`. Raises `LockBusy` naming the holder. |
+| `heating.py` | `validate_and_store(ctx, source=None) -> ApplyResult`: reads the file **once**, validates a staged copy of exactly those bytes in a one-off container, and only if it passes stores those same bytes as the applied copy. Also `validate()`, `validation_result()` (the validator's `Result` itself, to tell a rejection from a validator that could not run) and `store_applied(ctx, path_or_bytes)`. |
+| `lock.py` | `Lock(path, command)` and `ctx.lock(command)`: the one lock of concept section 4.5, `with ctx.lock("update"): ...`. Raises `LockBusy` naming the holder. Root and the service user take it in either order: it needs no write access to the file (a read-only holder only cannot write its name), and root gives `.cave` and the lock file to the owner of `CAVE_DATA` (a linked `.cave` is refused). `held_by(path)` says who holds it without taking it (for `status`). |
 | `mosquitto.py` | `password_line(user, password)`: a line of the broker's password file; `accepts(text, user, password)`: whether a password file lets that login in. |
 | `versioncheck.py` | The version check behind `make versions`. |
 | `errors.py` | `CaveError`: raise it for failures the user can act on. |
@@ -64,7 +66,10 @@ Rules for commands:
   talk to Home Assistant only through `ctx.ha()`, write output with `ctx.say()`/`ctx.warn()`, and
   wait with `ctx.sleep()`; then the fixtures replace all of them.
 * A command that uses Compose starts with `require_initialised(ctx)`.
-* `apply`, `update`, `backup` and `restore` hold `ctx.lock(...)`.
+* `apply`, `bootstrap`, `update`, `backup` and `restore` hold `ctx.lock(...)`; `apply`, `bootstrap`
+  and `backup` also refuse while `_update_state.maintenance_pending(ctx)` names an interrupted
+  update or a restore that stopped half-way. `demo` (its own state) and `device-check` (no state
+  of its own) take no lock.
 * Report every outcome of a script (`update`, `backup`) through `notify()`.
 * Whatever needs Home Assistant's own Python packages runs in a one-off container, as
   `heating.validate()` does, never by importing Home Assistant here.
@@ -101,6 +106,19 @@ home's state.
 * `script.cave_notify` is called with the fields `title` and `message`.
 * `init` stores the starter as the applied copy without the validator. Once the validator has
   merged, a later work package may switch `init` to `validate_and_store`.
+
+## Update, backup and restore
+
+`update`, `status`, `backup` and `restore` share helpers that only they use, in
+`commands/_server.py` (which user may run them, Git as the owner of the checkout,
+`check_out_exactly` after an interrupted checkout, copying files with their owners, and
+`extract`, which checks an archive as a whole and never writes outside its target; use it for
+every archive that root unpacks), `commands/_update_state.py` (the update record
+and the snapshots), `commands/_archives.py` (backup archives, SQLite's online backup) and
+`commands/_releases.py` (release tags; also run by the pipeline's release job). Their working
+files live in `CAVE_DATA/.cave/ops/`, which neither a snapshot nor a backup contains. Every other
+entry of `CAVE_DATA`, including the rest of `CAVE_DATA/.cave/`, is in both. docs/operations.md
+explains them to the owner; their tests are in `tests/ops/maintenance/`.
 
 ## Recipes
 

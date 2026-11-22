@@ -24,8 +24,10 @@ from ..container import run_in_homeassistant
 from ..context import Context
 from ..errors import CaveError
 from ..health import check_health, wait_healthy
+from ..lock import LockBusy
 from ..paths import CONTAINER_TOOLS
 from ._common import require_initialised
+from ._update_state import maintenance_pending
 
 HELP = "First-run setup of Home Assistant: owner, settings, integrations, schedules, script token"
 
@@ -118,7 +120,20 @@ def check_token_file(ctx: Context) -> None:
 
 def run(ctx: Context, args: argparse.Namespace) -> int:
     require_initialised(ctx)
-    return set_up_home_assistant(ctx, settings_from_env(ctx.env, args.timeout), args.timeout)
+    # The home's state changes here (the owner account, integrations, the script token), so it
+    # holds the lock of concept section 4.5 like apply, update, backup and restore, and does not
+    # run into an interrupted update or a half-done restore.
+    try:
+        with ctx.lock("bootstrap"):
+            pending = maintenance_pending(ctx)
+            if pending is not None:
+                raise CaveError(f"not bootstrapping: {pending}. Nothing was changed")
+            return set_up_home_assistant(
+                ctx, settings_from_env(ctx.env, args.timeout), args.timeout
+            )
+    except LockBusy as error:
+        ctx.warn(f"{error}. Nothing was changed.")
+        return 1
 
 
 def set_up_home_assistant(

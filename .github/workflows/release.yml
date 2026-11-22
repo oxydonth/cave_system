@@ -1,0 +1,59 @@
+name: Release
+
+# A green `main` becomes a release (concept section 9): the tag vYYYY.MM.DD.N (the date in UTC,
+# N counting that day's releases) and a GitHub Release with generated notes, which the server's
+# nightly `cave update` installs. Called from ci.yml for pushes to main only, after `ci-ok`.
+#
+# Nothing is created when the commit already has a release tag (a re-run), or when the newest
+# release already contains it (a later commit's run finished first; tagging this one now would
+# give older code a newer tag). The decision is made by
+# ops/cave_ops/commands/_releases.py, which the tests in tests/ops/maintenance cover. If two runs
+# race for the same tag, GitHub refuses the second; re-running that job then finds its commit
+# contained in the newer release and creates nothing.
+
+on:
+  workflow_call:
+
+permissions:
+  contents: read
+
+jobs:
+  release:
+    name: release
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    permissions:
+      contents: write
+    defaults:
+      run:
+        # bash -eo pipefail: a planner that fails must fail the job, not vanish behind `tee`.
+        shell: bash
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          # Every commit and tag, to see which commits are released already.
+          fetch-depth: 0
+          persist-credentials: false
+
+      - name: Decide the tag
+        id: plan
+        run: |
+          PYTHONPATH=ops python3 -m cave_ops.commands._releases plan \
+            --head "${GITHUB_SHA}" --date "$(date -u +%F)" | tee -a "${GITHUB_OUTPUT}"
+
+      - name: Create the release
+        if: steps.plan.outputs.tag != ''
+        env:
+          GH_TOKEN: ${{ github.token }}
+          GH_REPO: ${{ github.repository }}
+          TAG: ${{ steps.plan.outputs.tag }}
+        run: |
+          gh release create "${TAG}" --target "${GITHUB_SHA}" --title "${TAG}" --generate-notes
+          echo "Released ${TAG}" >> "${GITHUB_STEP_SUMMARY}"
+
+      - name: Nothing to release
+        if: steps.plan.outputs.tag == ''
+        env:
+          REASON: ${{ steps.plan.outputs.reason }}
+        run: |
+          echo "No release: ${REASON}" | tee -a "${GITHUB_STEP_SUMMARY}"
