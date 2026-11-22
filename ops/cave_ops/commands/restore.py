@@ -37,6 +37,7 @@ from ..errors import CaveError
 from ..health import wait_healthy
 from ..notify import notify
 from ..paths import Paths, default_data_dir
+from ..records import clear_stopped, note_stopped
 from . import _archives, _releases, _server
 from ._update_state import BEFORE_SWITCH, Switch, complete_undo, now
 from ._update_state import load as load_update_record
@@ -279,7 +280,7 @@ def _restore(
     data = ctx.paths.data
     stamp = datetime.datetime.now(datetime.UTC).strftime("%Y%m%dT%H%M%SZ")
     ops = _server.ops_dir(ctx)
-    _server.clear_not_started(ctx)
+    clear_stopped(ctx.paths)
     staging = ops / "restore-staging"
     _server.remove(staging)  # left by an interrupted restore
 
@@ -457,7 +458,7 @@ def _restore(
     # owner chose --no-start): until then the marker says so (`start_owed`), and the same command
     # or the boot's `cave update --recover` starts the stack.
     if args.no_start:
-        _server.note_not_started(ctx, f"the restore of {archive.path.name}")
+        note_stopped(ctx.paths, f"the restore of {archive.path.name} finished with --no-start")
         marker.unlink(missing_ok=True)
     else:
         series["start_owed"] = True
@@ -642,7 +643,7 @@ def undo(ctx: Context, args: argparse.Namespace) -> int:
     ops = _server.ops_dir(ctx)
     marker = ops / _server.RESTORE_MARKER
     with ctx.lock("restore"):
-        _server.clear_not_started(ctx)
+        clear_stopped(ctx.paths)
         series = _read_marker(marker)
         if series is None:
             raise CaveError(

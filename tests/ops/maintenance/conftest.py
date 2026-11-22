@@ -394,14 +394,13 @@ def tree(path: Path) -> dict[str, bytes]:
 
 @pytest.fixture
 def state_tree() -> Callable[[Path], dict[str, bytes]]:
-    """``state_tree(data)``: the state entries' files, without the commands' own ``.cave/ops``
-    and the lock."""
+    """``state_tree(data)``: the state entries' files, without the commands' own records: the
+    lock, ``.cave/ops``, the record of a stack stopped on purpose and the watch's memory."""
 
     def read(data: Path) -> dict[str, bytes]:
+        records = (".cave/ops/", ".cave/lock", ".cave/stopped.json", ".cave/watch.json")
         return {
-            name: content
-            for name, content in tree(data).items()
-            if not name.startswith((".cave/ops/", ".cave/lock"))
+            name: content for name, content in tree(data).items() if not name.startswith(records)
         }
 
     return read

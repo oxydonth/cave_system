@@ -1,4 +1,10 @@
-"""``cave up``: start the stack and wait until it is healthy."""
+"""``cave up``: start the stack and wait until it is healthy.
+
+Before it starts anything it removes the record of a stack stopped on purpose (``records.py``),
+which ``down``, a ``--no-start`` and a fresh ``init`` write: from now on a stack that is not
+running or not healthy is something ``cave watch`` reports, and ``cave status`` no longer says it
+was stopped on purpose.
+"""
 
 from __future__ import annotations
 
@@ -6,6 +12,7 @@ import argparse
 
 from ..context import Context
 from ..health import wait_healthy
+from ..records import clear_stopped
 from ._common import require_initialised
 
 HELP = "Create and start the containers of the active profiles, then wait until healthy"
@@ -26,6 +33,7 @@ def add_arguments(parser: argparse.ArgumentParser) -> None:
 
 def run(ctx: Context, args: argparse.Namespace) -> int:
     require_initialised(ctx)
+    clear_stopped(ctx.paths)
     # Always recreate: the code is bind-mounted, so Compose cannot see that a checkout changed
     # (concept section 4.2: "a changed checkout takes effect when the containers are recreated").
     started = ctx.compose("up", "--detach", "--force-recreate", capture=False)

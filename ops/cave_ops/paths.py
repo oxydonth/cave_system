@@ -17,6 +17,12 @@ SERVER_DATA_DIR = Path("/var/lib/cave")
 CONTAINER_CONFIG = "/config"
 CONTAINER_TOOLS = "/cave/tools"
 
+# The dashboard generator and the files it reads and writes, as the container sees them. `apply`
+# runs it for the home and `demo` for the demo's own state (concept sections 4.2 and 4.5).
+GENERATOR = f"{CONTAINER_TOOLS}/render_dashboard.py"
+APPLIED_IN_CONTAINER = f"{CONTAINER_CONFIG}/cave/.applied/heating.yaml"
+DASHBOARD_IN_CONTAINER = f"{CONTAINER_CONFIG}/dashboards/heating.yaml"
+
 
 def default_data_dir(root: Path, environ: Mapping[str, str]) -> Path:
     """Where ``CAVE_DATA`` points when ``.env`` does not say yet.
@@ -110,6 +116,16 @@ class Paths:
     @property
     def lock_file(self) -> Path:
         return self.data / ".cave" / "lock"
+
+    @property
+    def stopped_record(self) -> Path:
+        """The record of a stack stopped on purpose (``stopped.py``)."""
+        return self.data / ".cave" / "stopped.json"
+
+    @property
+    def watch_record(self) -> Path:
+        """What ``cave watch`` and the alerts have already said (``alert.py``)."""
+        return self.data / ".cave" / "watch.json"
 
     def container_path(self, host_path: Path) -> str | None:
         """The path of a file inside the Home Assistant container, if it is under ``/config``."""

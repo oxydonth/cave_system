@@ -34,11 +34,29 @@ CONCEPT_VARIABLES = [
     "CAVE_BACKUP_DIR",
     "CAVE_BACKUP_KEEP",
     "CAVE_BACKUP_COPY_TO",
+    "CAVE_ALERT_URL",
 ]
 
 
 def test_variables_are_exactly_those_of_the_concept():
     assert list(NAMES) == CONCEPT_VARIABLES
+
+
+def test_apply_updates_quotes_what_compose_would_read_otherwise():
+    """Issue #25: ``apply_updates`` wrote values unquoted, so a value with ``$``, `` #`` or a
+    space would have been read back differently by ``parse_env`` and by Docker Compose."""
+    text = "# header\nCAVE_FRITZ_PASSWORD=\nTZ=Europe/Berlin\n"
+    values = {
+        "CAVE_FRITZ_PASSWORD": "pa$$ word #1",
+        "CAVE_ALERT_URL": "http://ntfy.fritz.box/cave?auth=a#b",
+    }
+
+    updated = apply_updates(text, values)
+
+    assert "CAVE_FRITZ_PASSWORD='pa$$ word #1'" in updated
+    assert parse_env(updated)["CAVE_FRITZ_PASSWORD"] == "pa$$ word #1"
+    assert parse_env(updated)["CAVE_ALERT_URL"] == "http://ntfy.fritz.box/cave?auth=a#b"
+    assert parse_env(updated)["TZ"] == "Europe/Berlin"
 
 
 def test_env_example_is_the_rendered_table(repo_root):

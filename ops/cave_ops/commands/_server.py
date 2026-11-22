@@ -26,6 +26,7 @@ from collections.abc import Callable, Iterator
 from pathlib import Path, PurePosixPath
 from typing import Any
 
+from .. import records
 from ..context import Context
 from ..errors import CaveError
 from ..runner import Result
@@ -218,29 +219,6 @@ def restore_start_owed(ctx: Context) -> str | None:
     return f"{what} {series.get('archive', 'an archive')}"
 
 
-NOT_STARTED = "not-started.json"
-"""A note that a restore or ``--undo`` finished with ``--no-start``: ``status`` says so while the
-stack is not running; nothing refuses because of it; ``update`` removes it once the stack runs."""
-
-
-def note_not_started(ctx: Context, what: str) -> None:
-    write_atomic(ops_dir(ctx) / NOT_STARTED, json.dumps({"what": what}).encode(), 0o644)
-
-
-def not_started(ctx: Context) -> str | None:
-    try:
-        raw = json.loads((ops_dir(ctx) / NOT_STARTED).read_text(encoding="utf-8"))
-    except FileNotFoundError:
-        return None
-    except (OSError, ValueError):
-        return "a restore"
-    return str(raw.get("what", "a restore")) if isinstance(raw, dict) else "a restore"
-
-
-def clear_not_started(ctx: Context) -> None:
-    (ops_dir(ctx) / NOT_STARTED).unlink(missing_ok=True)
-
-
 def give_to_checkout_owner(ctx: Context, path: Path) -> None:
     """Make ``path`` the checkout owner's, so that Git running as that user can write there."""
     if is_root():
@@ -249,17 +227,23 @@ def give_to_checkout_owner(ctx: Context, path: Path) -> None:
 
 
 # ---------------------------------------------------------------------------- files with owners
+NOT_STATE = ("lock", OPS_DIR, "stopped.json", "watch.json")
+"""Entries of ``CAVE_DATA/.cave`` that are records of the commands, not state: the lock, the
+``ops`` directory, the record of a stack stopped on purpose and what ``cave watch`` has said
+(``records.py``, ``alert.py``). No snapshot, backup or restore moves them."""
+
+
 def state_entries(data: Path) -> list[str]:
     """What a snapshot or backup holds, relative to ``CAVE_DATA``: every top-level entry, and
-    inside ``.cave`` everything except the lock and the commands' own ``ops`` directory."""
+    inside ``.cave`` everything except the commands' own records (``NOT_STATE``) and their
+    temporary files."""
     if not data.is_dir():
         return []
     entries = sorted(name for name in os.listdir(data) if name != ".cave")
     meta = data / ".cave"
     if meta.is_dir():
-        entries += sorted(
-            f".cave/{name}" for name in os.listdir(meta) if name not in ("lock", OPS_DIR)
-        )
+        records = {*NOT_STATE, *(f".{name}.tmp" for name in NOT_STATE)}
+        entries += sorted(f".cave/{name}" for name in os.listdir(meta) if name not in records)
     return entries
 
 
@@ -321,31 +305,7 @@ def sync() -> None:
     os.sync()
 
 
-def write_atomic(path: Path, data: bytes, mode: int = 0o644) -> None:
-    """Replace ``path`` with ``data`` so that a reader, or a power cut, sees old or new only.
-
-    The temporary file is created fresh and never through a symbolic link, because this runs as
-    root in directories that other users can write.
-    """
-    path.parent.mkdir(parents=True, exist_ok=True)
-    tmp = path.with_name(f".{path.name}.tmp")
-    tmp.unlink(missing_ok=True)
-    fd = os.open(tmp, os.O_WRONLY | os.O_CREAT | os.O_EXCL | os.O_NOFOLLOW, mode)
-    try:
-        with os.fdopen(fd, "wb") as handle:
-            handle.write(data)
-            handle.flush()
-            os.fsync(handle.fileno())
-        os.chmod(tmp, mode)
-        os.replace(tmp, path)
-    except BaseException:
-        tmp.unlink(missing_ok=True)
-        raise
-    directory = os.open(path.parent, os.O_RDONLY)
-    try:
-        os.fsync(directory)
-    finally:
-        os.close(directory)
+write_atomic = records.write_atomic
 
 
 # ------------------------------------------------------------------------------------- archives

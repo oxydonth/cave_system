@@ -39,15 +39,12 @@ from ..errors import CaveError
 from ..ha import HAError, HAUnreachable
 from ..heating import validate_and_store
 from ..lock import LockBusy
-from ..paths import CONTAINER_CONFIG, CONTAINER_TOOLS
+from ..paths import APPLIED_IN_CONTAINER, DASHBOARD_IN_CONTAINER, GENERATOR
 from ._common import require_initialised
 from ._update_state import maintenance_pending
 
 HELP = "Validate cave/heating.yaml, then use it: regenerate the dashboard and reload cave_heating"
 
-GENERATOR = f"{CONTAINER_TOOLS}/render_dashboard.py"
-APPLIED_IN_CONTAINER = f"{CONTAINER_CONFIG}/cave/.applied/heating.yaml"
-DASHBOARD_IN_CONTAINER = f"{CONTAINER_CONFIG}/dashboards/heating.yaml"
 RESTART_COMMAND = "./cave restart homeassistant"
 
 

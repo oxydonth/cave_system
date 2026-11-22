@@ -189,7 +189,7 @@ def test_a_restore_with_no_start_is_said_by_status_and_blocks_nothing(
     server.stack.start(OLD)
     assert field(run_cave("status").out, "NOT STARTED") == []
     run_cave("update")
-    assert not (server.data / ".cave/ops/not-started.json").exists()
+    assert not (server.data / ".cave/stopped.json").exists()
 
 
 def test_an_undo_ends_with_the_stack_running(

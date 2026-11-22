@@ -178,6 +178,7 @@ Because code is read-only and state lives elsewhere, moving the server to anothe
 | `CAVE_FRITZ_HOST`, `CAVE_FRITZ_USER`, `CAVE_FRITZ_PASSWORD` | owner, optional | bootstrap | FRITZ!Box address and login for the two integrations |
 | `CAVE_AUTO_UPDATE` | init, default `1` | update timer | `0` means manual updates only |
 | `CAVE_BACKUP_DIR`, `CAVE_BACKUP_KEEP`, `CAVE_BACKUP_COPY_TO` | init, defaults `/var/backups/cave`, `14`, empty | backup | Archive directory, number of archives kept, optional second location |
+| `CAVE_ALERT_URL` | owner, optional; init writes it empty | `cave watch`, update, backup, restore | Where alerts that do not depend on Home Assistant are posted (4.5). Empty: nothing leaves the server |
 
 ### 4.3 Repository layout
 

@@ -32,6 +32,7 @@ from pathlib import Path
 from typing import Any
 
 from ..context import Context
+from ..records import note_stopped
 from . import _server
 
 STATE_FILE = "update.json"
@@ -114,9 +115,9 @@ def complete_undo(ctx: Context) -> bool:
     If the restore had superseded an interrupted update, that update is written back and the
     marker removed: the update's way back then owns the state and starts the stack. Otherwise the
     marker moves to ``start_owed``, or, if the undo was run with ``--no-start``, it is replaced by
-    the not-started note. No step leaves the state from before in place without a record that
-    says what is still to do. ``update`` calls this first, so the next run at boot finishes what
-    ``--undo`` began; ``restore --undo`` itself calls it too.
+    the record of a stack stopped on purpose (``records.py``). No step leaves the state from
+    before in place without a record that says what is still to do. ``update`` calls this first,
+    so the next run at boot finishes what ``--undo`` began; ``restore --undo`` itself calls it too.
     """
     marker = _server.ops_dir(ctx) / _server.RESTORE_MARKER
     try:
@@ -128,7 +129,10 @@ def complete_undo(ctx: Context) -> bool:
     superseded = series.get("superseded_update")
     if not isinstance(superseded, dict):
         if series.get("no_start"):
-            _server.note_not_started(ctx, f"the undo of the restore of {series.get('archive')}")
+            note_stopped(
+                ctx.paths,
+                f"the undo of the restore of {series.get('archive')} finished with --no-start",
+            )
             marker.unlink(missing_ok=True)
         elif not series.get("start_owed"):
             series["start_owed"] = True

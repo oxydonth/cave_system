@@ -106,6 +106,14 @@ VARIABLES: tuple[Variable, ...] = (
     Variable("CAVE_BACKUP_DIR", "/var/backups/cave", "Where `cave backup` writes its archives."),
     Variable("CAVE_BACKUP_KEEP", "14", "How many backup archives to keep."),
     Variable("CAVE_BACKUP_COPY_TO", "", "Optional second location that backups are copied to."),
+    Variable(
+        "CAVE_ALERT_URL",
+        "",
+        "Optional: a URL that short alerts are posted to (ntfy's format) when the stack has been\n"
+        "down for 15 minutes, or an update, backup or restore needs you; also while Home\n"
+        "Assistant cannot tell you. For example a topic of an ntfy server on the home network.\n"
+        "Empty: nothing leaves the server. A token in it is never printed. See docs/operations.md.",
+    ),
 )
 
 NAMES = tuple(v.name for v in VARIABLES)
@@ -234,7 +242,8 @@ def apply_updates(text: str, updates: Mapping[str, str]) -> str:
     """Set ``updates`` in the text of a ``.env``, changing nothing else.
 
     A variable that already has a line (an empty one) is changed in place; a variable that has
-    none is appended with its documentation.
+    none is appended with its documentation. Values are quoted as ``render`` quotes them
+    (``quote_value``), so that ``parse_env`` and Docker Compose read them back unchanged.
     """
     appended: list[Variable] = []
     for var in VARIABLES:
@@ -242,7 +251,7 @@ def apply_updates(text: str, updates: Mapping[str, str]) -> str:
             continue
         pattern = re.compile(rf"^(\s*(?:export\s+)?){re.escape(var.name)}\s*=.*$", re.MULTILINE)
         if pattern.search(text):
-            literal = f"{var.name}={updates[var.name]}".replace("\\", "\\\\")
+            literal = f"{var.name}={quote_value(updates[var.name])}".replace("\\", "\\\\")
             text = pattern.sub(rf"\g<1>{literal}", text)
         else:
             appended.append(var)

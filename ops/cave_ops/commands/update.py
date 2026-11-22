@@ -47,6 +47,7 @@ from ..heating import validation_result
 from ..lock import Lock, LockBusy
 from ..notify import notify
 from ..paths import CONTAINER_CONFIG
+from ..records import clear_stopped, stopped
 from ..runner import Result
 from . import _releases, _server
 from . import _update_state as state
@@ -231,8 +232,8 @@ class _Update:
         owed = _server.restore_start_owed(ctx)
         if owed is not None:
             return self.finish_owed_start(owed)
-        if _server.not_started(ctx) is not None and check_health(ctx).healthy:
-            _server.clear_not_started(ctx)  # the stack was started since the --no-start
+        if stopped(ctx.paths) is not None and check_health(ctx).healthy:
+            clear_stopped(ctx.paths)  # the stack was started since it was stopped on purpose
         restoring = _server.restore_in_progress(ctx)
         if restoring is not None:
             return self.conclude(
