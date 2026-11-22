@@ -193,13 +193,18 @@ def render(matrix: Matrix) -> str:
                 cells.append(symbols[status])
         lines.append(f"| {entry.title} (`{name}`) | " + " | ".join(cells) + " |")
     lines.append("")
-    lines.append(
+    legend = (
         "n/a: the capability does not apply to the device; the reason is the skip message of "
         "its test and is listed in `tests/devices/capabilities.py`. GAP: a case the registry "
-        "declares for the device did not run. ⚠️ Fn (k of n cases pass): the other cases are an "
-        "open finding, each a test that asserts the concept and is a strict expected failure "
-        "until the fix; the finding's cases are kept to the assertions the finding breaks."
+        "declares for the device did not run."
     )
+    if matrix.findings:
+        legend += (
+            " ⚠️ Fn (k of n cases pass): the other cases are an open finding, each a test that "
+            "asserts the concept and is a strict expected failure until the fix; the finding's "
+            "cases are kept to the assertions the finding breaks."
+        )
+    lines.append(legend)
     if matrix.findings:
         lines += ["", "### Findings", ""]
         for text in sorted(matrix.findings, key=_finding_label):

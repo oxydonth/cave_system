@@ -48,20 +48,11 @@ REFUSALS: Final = (
     "lock-not-yet-polled-ignored",
 )
 
-# Open findings: a case in which the integration does not do what the concept requires. The test
-# asserts the concept and is a strict expected failure until the fix is merged (pull request
-# #15 fixes all three); then the entry goes.
-FINDINGS: Final[dict[str, str]] = {
-    "F1": "F1: a blocked thermostat that reports no target (a FRITZ! in summer or holiday mode) "
-    "is retried on every report, not every retry_interval: driver.same(None, None) is False, so "
-    "every report counts as a target change (fix: pull request #15)",
-    "F2": "F2: when a contact that went silent while open answers again, Home Assistant shows its "
-    "last state (open) for an instant before the new one (closed); the integration dates that "
-    "opening from the old one, so the window pause starts again at once and lasts "
-    "window_close_delay (fix: pull request #15)",
-    "F3": "F3: cave_heating.boost takes a temperature off the room's 0.5 K grid; the room "
-    "thermostat shows it (22.25 as 22.2) while the thermostats get 22.5 (fix: pull request #15)",
-}
+# Open findings: a case in which the integration or a simulator does not do what the concept
+# requires, by name (F1, F2, ...) with its description and the fix that closes it. A capability
+# names the cases it marks in its ``findings``; :func:`devices` makes each a strict expected
+# failure. F1, F2 and F3 were fixed by pull request #15; none is open.
+FINDINGS: Final[dict[str, str]] = {}
 
 
 @dataclass(frozen=True)
@@ -161,9 +152,13 @@ CAPABILITIES: Final[dict[str, Capability]] = {
     # --- every thermostat model -------------------------------------------------------------
     "discovery": _thermostats("Discovery: entities, entity IDs, range and step"),
     "rounding_to_the_step": _thermostats(
-        "A target reaches the device on its step (and a boost off the grid is rounded half up)",
-        variants=dict.fromkeys(THERMOSTATS, ("room-step", "boost-off-grid")),
-        findings={f"{device}-boost-off-grid": "F3" for device in THERMOSTATS},
+        "Rounded half up to the step: room targets arrive on it, the Bosch input on 0.2 K",
+        variants={
+            "TRV-ZBT": ("room-step", "boost-off-grid"),
+            "TRVZB": ("room-step", "boost-off-grid"),
+            "BTH-RA": ("room-step", "boost-off-grid", "input-0.2-step"),
+            "FRITZ-302": ("room-step", "boost-off-grid"),
+        },
     ),
     "clamping_to_the_range": _only(
         "A target outside the device's range is clamped to it, and compared as such",
@@ -276,7 +271,6 @@ CAPABILITIES: Final[dict[str, Capability]] = {
         ("FRITZ-302",),
         _FRITZ_REFUSALS,
         variants={"FRITZ-302": REFUSALS},
-        findings={"FRITZ-302-summer-mode": "F1", "FRITZ-302-holiday-mode": "F1"},
     ),
     "fritz_window_detection": _only(
         "The FRITZ!Box's own window detection, with both things it may report",
@@ -309,7 +303,6 @@ CAPABILITIES: Final[dict[str, Capability]] = {
         "Sensors",
         ("SNZB-04P",),
         _CONTACT_ONLY,
-        findings={"SNZB-04P": "F2"},
     ),
     # --- rooms built from each thermostat model ---------------------------------------------
     "room_comfort_and_eco_by_schedule": Capability(

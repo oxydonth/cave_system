@@ -34,19 +34,20 @@ uv run pytest tests/devices -k FRITZ-302    # only one device
 **The matrix.** Every pipeline run shows the devices against the capabilities in its job summary
 (job `test`, step "Device matrix", also printed in its log). A cell says `pass`, `FAIL`, `n/a`
 (with the reason in `capabilities.py`), `GAP` (the capability, or one of its declared variants,
-applies but did not run, which fails the step), or ⚠️ with a finding number. To make it locally:
+applies but did not run, which fails the step), or ⚠️ with the number of an open finding (see
+below). To make it locally:
 
 ```sh
 uv run pytest --junitxml=test-results.xml
 uv run python -m tests.devices.matrix test-results.xml
 ```
 
-**Findings.** Where the integration or a simulator does not do what the concept requires, the
-test still asserts the concept, and the case is marked as an expected failure whose reason starts
-with `finding:` and a number (F1, F2, ...), listed in `capabilities.py` with the fix that closes
-it. A finding's case holds only the assertions the finding breaks, so the mark hides nothing else.
-The mark is strict: once the finding is fixed, the case passes, the run fails, and the mark has
-to go.
+**Findings.** None is open: the three this suite found in the integration (F1, F2, F3) were
+fixed in pull request #15, and every device test passes. Should the suite find another while its
+fix is still under way, the test keeps asserting the concept, and the case is recorded in
+`capabilities.py` (`FINDINGS`, and the capability's `findings`) as a strict expected failure whose
+reason starts with `finding:`. Such a case holds only the assertions the finding breaks, so the
+mark hides nothing else, and it fails the run as soon as the fix lands, so the mark has to go.
 
 **Behaviours not confirmed on real hardware** (concept section 12) are tested in every variant the
 simulators can play, and each test says which one it covers: a Sonoff that does or does not go

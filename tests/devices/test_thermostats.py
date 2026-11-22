@@ -23,9 +23,11 @@ from tests.devices.rig import (
     MIN,
     MODELS,
     OFF,
+    ROOM,
     ROOM_CLIMATE,
     SEC,
     SENSOR_ID,
+    TEMPERATURE,
     Rig,
     heat,
 )
@@ -64,20 +66,32 @@ async def test_discovery(rig: Rig, device: str) -> None:
 
 @pytest.mark.parametrize(("device", "case"), devices("rounding_to_the_step"))
 async def test_rounding_to_the_step(rig: Rig, device: str, case: str) -> None:
-    """Concepts 5.2 and 5.5: the room's target is in 0.5 K steps, and a target is rounded half up
-    to the thermostat's step before it is sent and compared.
+    """Concepts 5.2 and 5.5: the room's target is in 0.5 K steps, and what is sent to a
+    thermostat is rounded half up to the thermostat's step before it is sent and compared.
 
-    Every recommended model has a 0.5 K step (the FRITZ! one through its precision, as it has no
-    ``target_temp_step``), so a room target arrives unchanged; that is what ``room-step`` checks
-    (22.5 °C must arrive as 22.5, neither 22 nor 23). Rounding to a step other than the room's
-    can therefore not occur on these models; WP4's tests cover it with fake thermostats, and the
-    Bosch's 0.2 K external input is rounded in ``feed_reaches_external_input``.
+    ``room-step``: a room target arrives on the device unchanged (22.5 °C as 22.5, neither 22
+    nor 23). ``boost-off-grid``: ``cave_heating.boost`` to 22.25 °C is 22.5 on the room, half up,
+    and the thermostat gets 22.5 with one command.
 
-    ``boost-off-grid``: a boost to 22.25 °C through ``cave_heating.boost``. Concept 5.2 puts the
-    room's target on the 0.5 K grid, so the room shows 22.5 (half up), and the thermostat gets
-    22.5 with one command.
+    Every recommended model has a 0.5 K step, like the room (the FRITZ! one through its
+    precision, as it has no ``target_temp_step``), so the thermostat-side rounding of a *target*
+    can never change a value on these models. The one place where a real device has another
+    step is the Bosch's external input (0.2 K), which goes through the same rounding:
+    ``input-0.2-step`` writes a room reading of 20.5 °C as 20.6 (half up; rounding to even
+    would give 20.4). Rounding a target to other steps is covered by WP4's fake thermostats.
     """
     model = MODELS[device]
+    if case == "input-0.2-step":
+        await rig.start(model, contact=False)
+        assert model.external is not None
+        assert rig.state(model.external).attributes["step"] == 0.2
+        rig.mark()
+        rig.sim.home.set_room_temperature(ROOM, 20.5)
+        await rig.advance(10 * MIN + 15 * SEC)
+        assert rig.state(TEMPERATURE).state == "20.5"
+        assert rig.writes(model.name, model.external.split(f"{model.device_id}_")[1]) == [20.6]
+        assert float(rig.state(model.external).state) == 20.6
+        return
     await rig.start(model, contact=False, sensor=False)
     await rig.advance(1 * MIN)
     rig.mark()
@@ -90,7 +104,7 @@ async def test_rounding_to_the_step(rig: Rig, device: str, case: str) -> None:
     assert rig.commands(model) == heat(model, 22.5)
     await rig.refresh_fritzbox()
     assert rig.state(model.climate).attributes["temperature"] == 22.5
-    await rig.advance(30 * MIN)
+    await rig.advance(20 * MIN)  # within the boost's 30 minutes
     assert rig.commands(model) == heat(model, 22.5), "it matches: nothing more is sent"
     assert rig.status(model) == "ok"
 
