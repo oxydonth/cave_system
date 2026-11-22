@@ -13,6 +13,7 @@ from cave_sim.home import load_home
 from cave_sim.mqtt import InMemoryBroker
 from cave_sim.runtime import SimulatedHome
 from cave_sim.testing import DEMO_HOME
+from cave_sim.zigbee.discovery import project_device_options
 
 
 class Api:
@@ -185,7 +186,8 @@ async def test_a_device_falls_silent_and_answers_again(api: Api) -> None:
 
 async def test_the_passive_timeout(api: Api) -> None:
     status, settings = await api.post("/api/zigbee2mqtt", {"passive_timeout_minutes": 5})
-    assert (status, settings) == (200, {"passive_timeout_minutes": 5})
+    assert (status, settings["passive_timeout_minutes"]) == (200, 5)
+    assert settings["device_options"] == project_device_options(), "the demo home's"
     assert (await api.post("/api/zigbee2mqtt", {"passive_timeout_minutes": 0}))[0] == 400
 
 

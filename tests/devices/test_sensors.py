@@ -4,7 +4,9 @@ integration, with cave_heating on top. A TRVZB is the room's thermostat througho
 from __future__ import annotations
 
 import pytest
+from homeassistant.helpers import entity_registry as er
 
+from cave_sim.zigbee.discovery import project_device_options
 from tests.devices.capabilities import devices
 from tests.devices.rig import (
     CONTACT,
@@ -17,6 +19,7 @@ from tests.devices.rig import (
     ROOM_CLIMATE,
     SEC,
     SENSOR_ID,
+    SENSOR_NAME,
     TEMPERATURE,
     TRVZB,
     WINDOW_OPEN,
@@ -27,6 +30,7 @@ from tests.devices.rig import (
 pytestmark = pytest.mark.usefixtures("hass")
 
 EXTERNAL = "external_temperature_input"
+LAST_SEEN = f"sensor.{SENSOR_ID}_last_seen"
 
 
 @pytest.mark.parametrize("device", devices("room_temperature_and_humidity"))
@@ -89,27 +93,99 @@ async def test_sensor_stays_fresh_while_it_reports(rig: Rig, device: str, case: 
     showing its reading and the feed keeps writing it every 25 minutes past the three hours.
 
     ``humidity-changing``: the humidity changes every half hour, so the device's humidity entity
-    reports. ``everything-steady``: nothing changes; the SNZB-02P still reports every hour (its
-    maximum reporting interval), so the device is alive.
+    reports. ``everything-steady``: nothing changes for twelve hours, so Home Assistant records
+    no report of the temperature, humidity or battery entity; the SNZB-02P still sends its values
+    every hour (its maximum reporting interval). Its ``last_seen`` sensor, which this project's
+    Zigbee2MQTT enables (``device_options`` in compose.yaml), changes with every message, and the
+    room stays on the sensor (issue #21, F4).
     """
 
     async def steady(rig: Rig) -> None:
         rig.sim.home.set_outdoor_temperature(19.0)
 
     await rig.start(TRVZB, contact=False, room={"comfort_temperature": 19.0}, before_heating=steady)
+    reported = rig.state(TEMPERATURE).last_reported
+    start = len(rig.sim.broker.log)
     humidity = 50
-    for half_hour in range(1, 10):
+    for half_hour in range(1, 25):
         if case == "humidity-changing":
             humidity = 52 if humidity == 50 else 50
             rig.sim.home.set_room_humidity(ROOM, humidity)
         await rig.advance(30 * MIN)
         if half_hour == 6:
             rig.mark()  # three hours in: what follows is past sensor_stale
+        assert rig.room_runtime().sensor_fresh, f"fresh after {half_hour / 2} h"
+        assert rig.state(ROOM_CLIMATE).attributes["current_temperature"] == 19.0
     assert float(rig.state(TEMPERATURE).state) == 19.0, "the temperature never changed"
+    sent = [
+        message
+        for message in rig.sim.broker.log[start:]
+        if message.topic == f"zigbee2mqtt/{SENSOR_NAME}"
+    ]
+    assert len(sent) >= 12, "the sensor sent its values at least every hour"
+    if case == "everything-steady":
+        assert rig.state(TEMPERATURE).last_reported == reported, "no report was recorded"
+        assert rig.state(HUMIDITY).last_reported <= reported
     writes = rig.writes(TRVZB.name, EXTERNAL)
-    assert len(writes) >= 3, f"the feed goes on past sensor_stale, got {writes}"
+    assert len(writes) >= 20, f"the feed goes on past sensor_stale, got {writes}"
     assert set(writes) == {19.0}
-    assert rig.state(ROOM_CLIMATE).attributes["current_temperature"] == 19.0
+
+
+@pytest.mark.parametrize("device", devices("sensor_last_seen_enabled_after_an_upgrade"))
+async def test_sensor_last_seen_enabled_after_an_upgrade(rig: Rig, device: str) -> None:
+    """Issue #21: a home paired before this project's Zigbee2MQTT enabled ``last_seen``.
+
+    Home Assistant registered every device's ``last_seen`` sensor disabled, and keeps it so
+    when Zigbee2MQTT, started again with the new ``device_options``, rediscovers it as enabled
+    by default: ``enabled_by_default`` counts only at registration. cave_heating enables the
+    room sensor's at its start; Home Assistant reloads the MQTT integration 30 s later, which
+    makes every MQTT entity unavailable for a moment and then unknown until Zigbee2MQTT
+    publishes the states again, 30 s after Home Assistant's birth message. A window pause in
+    effect holds through it, nothing is sent to the thermostat but what the rules ask for, and
+    nothing reaches Zigbee2MQTT but those commands. Afterwards the steady room stays on its
+    sensor for twelve hours.
+    """
+    registry = er.async_get(rig.hass)
+
+    async def before_upgrade(rig: Rig) -> None:
+        assert registry.async_get(LAST_SEEN).disabled_by is er.RegistryEntryDisabler.INTEGRATION
+        rig.sim.home.zigbee.set_device_options(project_device_options())
+        await rig.sim.async_flush_subscriptions()
+        await rig.advance(1 * SEC)
+        entry = registry.async_get(LAST_SEEN)
+        assert entry.disabled_by is er.RegistryEntryDisabler.INTEGRATION, "still disabled"
+        rig.sim.home.set_outdoor_temperature(19.0)
+        rig.sim.home.set_window(CONTACT_ID, True)
+        await rig.advance(2 * MIN)
+
+    await rig.start(
+        TRVZB,
+        zigbee2mqtt={"device_options": {}},
+        room={"comfort_temperature": 19.0},
+        before_heating=before_upgrade,
+    )
+    assert registry.async_get(LAST_SEEN).disabled_by is None, "enabled by cave_heating"
+    others = [
+        entry.entity_id
+        for entry in registry.entities.values()
+        if entry.unique_id.endswith("_last_seen_zigbee2mqtt") and entry.entity_id != LAST_SEEN
+    ]
+    assert others, "the other devices have one too"
+    assert all(registry.async_get(entity_id).disabled_by for entity_id in others), "left alone"
+    assert rig.state(WINDOW_OPEN).state == "on"
+    assert rig.commands(TRVZB) == OFF
+    rig.mark()
+    log_start = len(rig.sim.broker.log)
+    last = None
+    for second in range(120):
+        await rig.advance(1 * SEC)
+        if second == 32:
+            await rig.sim.async_flush_subscriptions()
+        now = tuple(getattr(rig.hass.states.get(e), "state", None) for e in (CONTACT, TRVZB.climate, WINDOW_OPEN, LAST_SEEN, TEMPERATURE))
+        if now != last:
+            print(second, now, rig.commands(TRVZB))
+            last = now
+    print([ (m.topic, m.payload) for m in rig.sim.broker.log[log_start:] if m.sender == "homeassistant"])
 
 
 @pytest.mark.parametrize("device", devices("contact_starts_and_ends_window_pause"))

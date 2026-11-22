@@ -21,6 +21,7 @@ from typing import TYPE_CHECKING, Any, Final
 from cave_sim.clock import Timer
 from cave_sim.home import DeviceSpec
 from cave_sim.room import PROPORTIONAL_BAND, RadiatorBias, Room
+from cave_sim.zigbee.discovery import apply_options, entity_options
 from cave_sim.zigbee.exposes import GET, STATE, Binary, Climate, Enum, Numeric, Text
 from cave_sim.zigbee.fixtures import Fixture, Identity
 from cave_sim.zigbee.models import ZigbeeModel
@@ -103,8 +104,15 @@ class ZigbeeDevice:
         )
 
     def discovery_messages(self) -> dict[str, dict[str, Any]]:
-        """This device's discovery messages, keyed by topic below the discovery prefix."""
-        return self.fixture.render_discovery(self.identity())
+        """This device's discovery messages, keyed by topic below the discovery prefix.
+
+        The fixture holds what the device's definition yields; Zigbee2MQTT's ``device_options``
+        are applied on top, as ``discover`` does (``cave_sim.zigbee.discovery.apply_options``).
+        The stand-in's devices have no options of their own.
+        """
+        return apply_options(
+            self.fixture.render_discovery(self.identity()), entity_options(self.network.settings)
+        )
 
     # --- measuring and reporting --------------------------------------------------------------
 

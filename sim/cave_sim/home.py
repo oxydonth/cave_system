@@ -5,6 +5,7 @@
     outdoor_temperature: 5.0          # optional, °C
     zigbee2mqtt:                      # optional
       passive_timeout_minutes: 1500   # until a silent battery device is unavailable
+      device_options: {}              # Zigbee2MQTT's device_options; default: this project's
     fritzbox:                         # optional
       report_delay: 0                 # seconds before a new setpoint is reported; 0 = at once
       window_target: unchanged        # what tsoll shows during window detection: unchanged or off
@@ -29,6 +30,7 @@ underscore, which for a Zigbee device is also the start of its entity IDs.
 
 import hashlib
 import re
+from collections.abc import Mapping
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any, Final, Literal
@@ -119,6 +121,9 @@ class Zigbee2MqttSpec:
     """Zigbee2MQTT settings of the stand-in."""
 
     passive_timeout_minutes: float = 1500.0
+    # Zigbee2MQTT's ``device_options``; None means the ones this project sets in compose.yaml
+    # (``cave_sim.zigbee.discovery.project_device_options``).
+    device_options: Mapping[str, Any] | None = field(default=None, hash=False)
 
 
 @dataclass(frozen=True)
@@ -241,7 +246,7 @@ def parse_home(raw: Any) -> HomeSpec:
     if locked_command not in LOCKED_COMMANDS:
         raise HomeError(f"fritzbox.locked_command: one of {LOCKED_COMMANDS}")
     z2m_raw = _mapping(data.get("zigbee2mqtt", {}), "zigbee2mqtt")
-    unknown = set(z2m_raw) - {"passive_timeout_minutes"}
+    unknown = set(z2m_raw) - {"passive_timeout_minutes", "device_options"}
     if unknown:
         raise HomeError(f"zigbee2mqtt: unknown keys {sorted(unknown)}")
     passive_timeout = _number(
@@ -257,7 +262,14 @@ def parse_home(raw: Any) -> HomeSpec:
             window_target=window_target,
             locked_command=locked_command,
         ),
-        zigbee2mqtt=Zigbee2MqttSpec(passive_timeout_minutes=passive_timeout),
+        zigbee2mqtt=Zigbee2MqttSpec(
+            passive_timeout_minutes=passive_timeout,
+            device_options=(
+                _mapping(z2m_raw["device_options"], "zigbee2mqtt.device_options")
+                if "device_options" in z2m_raw
+                else None
+            ),
+        ),
     )
     _check_unique(home)
     return home

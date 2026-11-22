@@ -162,9 +162,14 @@ def test_a_recorded_fixture_replaces_the_generated_one(tmp_path: Path) -> None:
 
 
 def test_the_recorder_turns_a_device_s_messages_into_a_fixture() -> None:
-    """Record the simulator itself: the result must equal the generated fixture."""
+    """Record the simulator itself: the result must equal the generated fixture.
+
+    A fixture holds what the device's definition yields, before Zigbee2MQTT's ``device_options``,
+    so the recording is made without them.
+    """
     home = parse_home(
         {
+            "zigbee2mqtt": {"device_options": {}},
             "rooms": [
                 {
                     "id": "r",

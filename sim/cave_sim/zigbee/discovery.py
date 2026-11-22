@@ -11,9 +11,11 @@ models use, copied verbatim. Zigbee2MQTT serialises with sorted keys (``lib/util
 and so does :func:`serialize`.
 """
 
+import copy
 import json
 import re
-from dataclasses import dataclass
+from collections.abc import Mapping
+from dataclasses import dataclass, field
 from typing import Any, Final
 
 from cave_sim.zigbee.exposes import (
@@ -102,9 +104,20 @@ class DeviceInfo:
     hardware_version: int | None = None
 
 
+def project_device_options() -> dict[str, Any]:
+    """The ``device_options`` this project gives Zigbee2MQTT (a fresh copy).
+
+    ``compose.yaml`` sets them through ``ZIGBEE2MQTT_CONFIG_DEVICE_OPTIONS``; a test keeps the two
+    equal. They enable the ``last_seen`` sensor of every device in Home Assistant, which changes
+    with every message the device sends, so that ``cave_heating`` can tell a live room sensor in
+    a steady room from a dead one (concept section 5.4).
+    """
+    return {}
+
+
 @dataclass(frozen=True)
 class Settings:
-    """The Zigbee2MQTT settings the stand-in follows."""
+    """The Zigbee2MQTT settings the stand-in follows: this project's, by default."""
 
     base_topic: str = "zigbee2mqtt"
     discovery_topic: str = "homeassistant"
@@ -115,6 +128,9 @@ class Settings:
     # availability.passive.timeout, in seconds: 1500 minutes, the default of Zigbee2MQTT 2.14.3
     # (lib/util/settings.schema.json) and the value in zigbee2mqtt/configuration.template.yaml.
     passive_timeout: float = 1500 * 60.0
+    # ``device_options``: options applied to every device, below its own (``devices.<ieee>``).
+    # Zigbee2MQTT's default is empty; see project_device_options.
+    device_options: Mapping[str, Any] = field(default_factory=project_device_options, hash=False)
 
 
 def js_number(value: float) -> float:
@@ -580,6 +596,69 @@ def discover_device(device: DeviceInfo, settings: Settings) -> dict[str, dict[st
         topic = f"{entry.type}/{device.ieee_address}/{entry.object_id}/config"
         messages[topic] = _drop_undefined(payload)
     return messages
+
+
+def entity_options(
+    settings: Settings, own: Mapping[str, Any] | None = None
+) -> dict[str, Any]:
+    """``Device.options`` in ``lib/model/device.ts``: ``{...device_options, ...deviceOptions}``.
+
+    A shallow merge: a device whose own options have a ``homeassistant`` key does not see the
+    ``homeassistant`` key of ``device_options`` at all.
+    """
+    return {**copy.deepcopy(dict(settings.device_options)), **copy.deepcopy(dict(own or {}))}
+
+
+def apply_options(
+    messages: Mapping[str, Mapping[str, Any]], options: Mapping[str, Any]
+) -> dict[str, dict[str, Any]]:
+    """The user's ``homeassistant`` options on a device's discovery messages.
+
+    Zigbee2MQTT applies them in homeassistant.ts: ``discover`` publishes nothing for a device
+    whose ``homeassistant`` option is set and falsy; ``getConfigs`` drops each entity whose own
+    entry is ``null``; and ``discover``, after the converter's ``overrideHaDiscoveryPayload``,
+    copies the scalar and list values of ``homeassistant`` into every payload (``name`` excepted)
+    and then those of ``homeassistant.<object id>`` into that entity's payload (``add``): a
+    ``null`` deletes the key, and a ``device`` object is merged into the device payload. Renaming
+    an entity through ``type`` or ``object_id`` in its entry (also ``getConfigs``) is not
+    transcribed, and refused. ``messages`` are keyed ``<component>/<ieee>/<object id>/config``.
+    """
+    if "homeassistant" not in options:
+        return {topic: copy.deepcopy(dict(payload)) for topic, payload in messages.items()}
+    homeassistant = options["homeassistant"]
+    if not homeassistant:
+        return {}
+    if not isinstance(homeassistant, Mapping):
+        raise ValueError(f"homeassistant option must be an object, got {homeassistant!r}")
+    result: dict[str, dict[str, Any]] = {}
+    for topic, original in messages.items():
+        object_id = topic.split("/")[2]
+        own = homeassistant.get(object_id, UNDEFINED)
+        if own is None:
+            continue
+        if isinstance(own, Mapping) and ("type" in own or "object_id" in own):
+            raise ValueError(
+                f"homeassistant.{object_id}: renaming an entity is not transcribed by the stand-in"
+            )
+        payload = copy.deepcopy(dict(original))
+        _add(payload, homeassistant, ignore_name=True)
+        if isinstance(own, Mapping):
+            _add(payload, own, ignore_name=False)
+        result[topic] = payload
+    return result
+
+
+def _add(payload: dict[str, Any], values: Mapping[str, Any], *, ignore_name: bool) -> None:
+    """``add`` inside ``discover``."""
+    for key, value in values.items():
+        if key in ("type", "object_id") or (ignore_name and key == "name"):
+            continue
+        if isinstance(value, bool | int | float | str | list):
+            payload[key] = copy.deepcopy(value)
+        elif value is None:
+            payload.pop(key, None)
+        elif key == "device" and isinstance(value, Mapping):
+            payload["device"] = {**payload.get("device", {}), **copy.deepcopy(dict(value))}
 
 
 def bridge_messages(settings: Settings) -> dict[str, dict[str, Any]]:

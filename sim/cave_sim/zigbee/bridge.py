@@ -5,7 +5,8 @@ What it publishes, and when, follows Zigbee2MQTT 2.14.3:
 * ``<base>/bridge/state`` ``{"state":"online"}``, retained, at start; ``offline`` is the last will
   (``lib/mqtt.ts``).
 * ``<base>/bridge/info``, retained (a subset of the real message, see ``sim/README.md``).
-* Discovery messages, retained, below the discovery prefix (``lib/extension/homeassistant.ts``).
+* Discovery messages, retained, below the discovery prefix (``lib/extension/homeassistant.ts``),
+  with the ``device_options`` applied; changed ones again when the options change.
 * ``<base>/<name>/availability`` ``{"state":"online"|"offline"}``, retained
   (``lib/extension/availability.ts``). All our devices run on batteries, which Zigbee2MQTT treats
   as "passive": a device is available while it was last heard less than
@@ -22,9 +23,12 @@ It accepts ``<base>/<name>/set`` with a JSON object, ``<base>/<name>/set/<proper
 value, the same for ``get`` (``lib/extension/publish.ts``), and answers a few bridge requests.
 """
 
+import copy
+import dataclasses
 import json
 import logging
 import re
+from collections.abc import Mapping
 from datetime import UTC, datetime
 from typing import Any, Final
 
@@ -64,6 +68,8 @@ class Zigbee2Mqtt:
         self._last_heard: dict[str, float] = {}
         self._available: dict[str, bool] = {}
         self._availability_timers: dict[str, Timer] = {}
+        # What was published as each device's discovery: topic -> serialised payload.
+        self._discovered: dict[str, dict[str, str]] = {}
         base = re.escape(self.settings.base_topic)
         self._set_get = re.compile(rf"^{base}/(?!bridge)(.+?)/(get|set)(?:/(.+))?$")
 
@@ -83,8 +89,7 @@ class Zigbee2Mqtt:
         for topic, payload in bridge_messages(self.settings).items():
             self._publish_discovery(topic, payload)
         for device in self.devices.values():
-            for topic, payload in device.discovery_messages().items():
-                self._publish_discovery(topic, payload)
+            self._discover(device)
         for device in self.devices.values():
             device.prime()
             self._last_heard[device.friendly_name] = self.clock.now()
@@ -92,10 +97,43 @@ class Zigbee2Mqtt:
             self.publish_availability(device, True)
             self.publish_entity_state(device)
 
-    def _publish_discovery(self, topic: str, payload: dict[str, Any]) -> None:
+    def _publish_discovery(self, topic: str, payload: dict[str, Any] | None) -> None:
+        """Publish a discovery message, retained; None clears it (an empty retained message)."""
         self.transport.publish(
-            f"{self.settings.discovery_topic}/{topic}", serialize(payload), qos=1, retain=True
+            f"{self.settings.discovery_topic}/{topic}",
+            "" if payload is None else serialize(payload),
+            qos=1,
+            retain=True,
         )
+
+    def _discover(self, device: ZigbeeDevice) -> None:
+        """``discover`` for one device: publish what changed, clear what is gone.
+
+        Zigbee2MQTT publishes a discovery message only when it differs from the one published
+        before, and clears a topic it no longer discovers (homeassistant.ts, ``discover``).
+        """
+        before = self._discovered.get(device.friendly_name, {})
+        now = {topic: serialize(payload) for topic, payload in device.discovery_messages().items()}
+        for topic, text in now.items():
+            if before.get(topic) != text:
+                self.transport.publish(
+                    f"{self.settings.discovery_topic}/{topic}", text, qos=1, retain=True
+                )
+        for topic in before.keys() - now.keys():
+            self._publish_discovery(topic, None)
+        self._discovered[device.friendly_name] = now
+
+    def set_device_options(self, options: Mapping[str, Any]) -> None:
+        """Zigbee2MQTT started again with other ``device_options`` (``compose.yaml``).
+
+        Discovery that changed is published again and discovery that is gone is cleared, as at
+        any start; the devices' states and availability are left alone.
+        """
+        self.settings = dataclasses.replace(
+            self.settings, device_options=copy.deepcopy(dict(options))
+        )
+        for device in self.devices.values():
+            self._discover(device)
 
     def publish_bridge_info(self) -> None:
         """``<base>/bridge/info`` with the fields Home Assistant's bridge entities read."""

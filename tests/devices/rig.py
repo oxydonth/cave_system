@@ -37,6 +37,7 @@ from cave_sim.home import parse_home
 from cave_sim.mqtt import topic_matches
 from cave_sim.testing import HOME_ASSISTANT_CLIENT, SimulatedHomeHandle
 from custom_components.cave_heating.const import DOMAIN
+from custom_components.cave_heating.runtime import HeatingRuntime, RoomRuntime
 
 ROOM: Final = "living_room"
 ROOM_CLIMATE: Final = f"climate.cave_{ROOM}"
@@ -513,6 +514,12 @@ class Rig:
             attributes.get("preset_mode"),
             attributes.get("reason"),
         )
+
+    def room_runtime(self) -> RoomRuntime:
+        """The controller's view of the room, for what no entity shows (``sensor_fresh``)."""
+        entry = self.hass.config_entries.async_entries(DOMAIN)[0]
+        runtime: HeatingRuntime = entry.runtime_data
+        return runtime.rooms[ROOM]
 
     def statuses(self) -> dict[str, str]:
         """The problem sensor's ``thermostats`` attribute."""
