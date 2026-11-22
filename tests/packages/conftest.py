@@ -10,15 +10,37 @@ from collections.abc import Iterator
 from pathlib import Path
 
 import pytest
+from freezegun.api import FrozenDateTimeFactory
 from homeassistant.core import HomeAssistant
 
 import custom_components.cave_heating  # noqa: F401  (import-time side effect, see above)
 from tests.cave_heating.fakes import FakeHome
+from tests.packages.helpers import START
 
 
 @pytest.fixture(autouse=True)
-def auto_enable_custom_integrations(enable_custom_integrations: None) -> None:
-    """Let every test in this directory load the integrations in this repository."""
+def clock(freezer: FrozenDateTimeFactory) -> FrozenDateTimeFactory:
+    """Freeze the clock at ``START`` for every test, before Home Assistant is set up.
+
+    The package's sensors run on a time pattern: second 0 of every minute plus an offset of 50 to
+    500 ms that Home Assistant draws at random for each tracker. ``advance`` moves whole minutes,
+    so the clock keeps its second within the minute for the whole test, and that second used to
+    be wherever the real clock was when the test started. Two of them made tests fail now and
+    then (see ``check_clock`` in helpers.py); second 30, half a minute from both, makes every
+    test the same on every run, whatever the offset and however fast the machine.
+    """
+    freezer.move_to(START)
+    return freezer
+
+
+@pytest.fixture(autouse=True)
+def auto_enable_custom_integrations(
+    clock: FrozenDateTimeFactory, enable_custom_integrations: None
+) -> None:
+    """Let every test in this directory load the integrations in this repository.
+
+    It asks for ``clock`` first, so that Home Assistant starts on the frozen clock.
+    """
 
 
 @pytest.fixture

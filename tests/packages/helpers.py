@@ -1,6 +1,6 @@
 """What the tests of the notifications package share: loading it, and watching what it shows."""
 
-from datetime import timedelta
+from datetime import UTC, datetime, timedelta
 from pathlib import Path
 from typing import Any
 
@@ -11,10 +11,33 @@ from homeassistant.core import HomeAssistant
 from homeassistant.helpers import area_registry as ar
 from homeassistant.helpers import entity_registry as er
 from homeassistant.setup import async_setup_component
+from homeassistant.util import dt as dt_util
 from homeassistant.util.yaml import load_yaml_dict
 from pytest_homeassistant_custom_component.common import async_fire_time_changed
 
 PACKAGE = Path(__file__).parents[2] / "homeassistant" / "packages" / "cave_notifications.yaml"
+
+# The frozen clock every test of this directory starts on (the autouse fixture ``clock``):
+# second 30 of a minute, as far as it gets from the minute's boundary. See ``check_clock``.
+START = datetime(2026, 1, 14, 12, 0, 30, tzinfo=UTC)
+
+
+def check_clock() -> None:
+    """Fail unless the frozen clock is clear of the boundary of a minute.
+
+    The sensors' time pattern fires at second 0 of a minute plus a random offset of up to
+    0.5 s, and ``advance`` keeps the clock's second within the minute. Two seconds break it:
+
+    - In the first second of a minute, past the offset, the first time the tracker computes
+      while the package is set up is already over, so the sensors are evaluated during the set-up,
+      before ``Shown`` listens, and the start-up case passes unseen.
+    - In the last half second, ``async_fire_time_changed`` looks 0.5 s ahead, into second 0 but
+      short of the offset. The tracker fires (a minute late), takes that time as past its own
+      slot, schedules the slot of the following minute, and the next ``advance`` falls short of
+      it: the sensors are evaluated in every other minute only.
+    """
+    second = dt_util.utcnow().second
+    assert 1 <= second <= 58, f"the clock is at second {second} of a minute, see check_clock"
 
 
 class Shown:
@@ -56,6 +79,7 @@ async def load_package(
     first evaluation is the start-up case: what it finds is shown and not pushed. The restart
     tests run it themselves, with the sensors restored, and pass nothing.
     """
+    check_clock()
     assert await async_setup_component(hass, "persistent_notification", {})
     assert await async_setup_component(hass, "system_log", {})
     package = load_yaml_dict(str(PACKAGE))
@@ -82,6 +106,7 @@ async def set_helper(hass: HomeAssistant, name: str, value: str) -> None:
 async def advance(hass: HomeAssistant, freezer: FrozenDateTimeFactory, minutes: int) -> None:
     """Move the clock forward one minute at a time, letting Home Assistant react to each."""
     for _ in range(minutes):
+        check_clock()
         freezer.tick(timedelta(minutes=1))
         async_fire_time_changed(hass)
         await hass.async_block_till_done()

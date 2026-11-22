@@ -6,13 +6,14 @@ entities come back with a fresh ``last_changed`` and sometimes as ``unknown`` or
 and the start event is fired.
 """
 
+from datetime import timedelta
 from typing import Any
 from unittest.mock import patch
 
 import pytest
 from freezegun.api import FrozenDateTimeFactory
 from homeassistant.const import EVENT_HOMEASSISTANT_START, EVENT_HOMEASSISTANT_STARTED
-from homeassistant.core import HomeAssistant, ServiceCall, State
+from homeassistant.core import CoreState, Event, HomeAssistant, ServiceCall, State
 from homeassistant.helpers import device_registry as dr
 from homeassistant.helpers import entity_registry as er
 from homeassistant.helpers.entity import entity_sources
@@ -25,6 +26,7 @@ from pytest_homeassistant_custom_component.common import (
 
 from tests.packages.helpers import (
     PACKAGE,
+    START,
     Shown,
     advance,
     in_area,
@@ -274,6 +276,62 @@ async def test_a_new_condition_after_a_restart_is_still_announced(
         hass, {"battery": {"sensor.hall_contact_battery": "Hall contact is at 12 %"}}
     )
 
+    await advance(hass, freezer, 3)
+
+    assert shown.messages == ["Gate is at 9 %", "Hall contact is at 12 %"]
+    assert [call.data["message"] for call in phone] == ["Gate is at 9 %"]
+
+
+def _other_integration_at_start(_event: Event) -> None:
+    """Any integration that does work at start: not a callback, so it runs in the executor."""
+
+
+@pytest.mark.parametrize(
+    "start_second",
+    [
+        30.0,
+        pytest.param(
+            0.6,
+            marks=pytest.mark.xfail(
+                strict=True,
+                raises=AssertionError,
+                reason="issue #31: a minute slot inside the start phase evaluates the sensors "
+                "before the automations are armed, so the new condition is never pushed",
+            ),
+        ),
+    ],
+    ids=["start-at-second-30", "start-at-second-0.6"],
+)
+async def test_a_new_condition_across_a_real_start_is_announced(
+    hass: HomeAssistant,
+    freezer: FrozenDateTimeFactory,
+    phone: list[ServiceCall],
+    start_second: float,
+) -> None:
+    """The same as above, with Home Assistant really starting, not already running.
+
+    The template integration attaches the time pattern at START and the automations are armed
+    only after every START listener has finished. When the start phase reaches a minute's slot
+    (here, START at second 0.6 with a tracker offset of 100 ms), the sensors are evaluated before
+    the automation that pushes is listening.
+    """
+    hass.set_state(CoreState.not_running)
+    hass.states.async_set("sensor.hall_contact_battery", "12", BATTERY)
+    hass.states.async_set("sensor.gate_battery", "9", {**BATTERY, "friendly_name": "Gate"})
+    entries = {"sensor.hall_contact_battery": "Hall contact is at 12 %"}
+    state = State("sensor.cave_attention_battery", "1", {"entries": entries})
+    mock_restore_cache_with_extra_data(
+        hass, [(state, {"native_value": "1", "native_unit_of_measurement": None})]
+    )
+    shown = await load_package(hass)
+    await use_phone(hass)
+    hass.bus.async_listen_once(EVENT_HOMEASSISTANT_START, _other_integration_at_start)
+
+    freezer.move_to(START.replace(second=0) + timedelta(seconds=start_second))
+    with patch("homeassistant.helpers.event.randint", return_value=100000):
+        await hass.async_start()
+        await hass.async_block_till_done()
+    freezer.move_to(START + timedelta(minutes=1))  # back to second 30, see check_clock
     await advance(hass, freezer, 3)
 
     assert shown.messages == ["Gate is at 9 %", "Hall contact is at 12 %"]
