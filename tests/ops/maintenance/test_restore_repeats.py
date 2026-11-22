@@ -71,27 +71,40 @@ def test_a_failed_repeat_keeps_the_marker_and_does_not_start_a_half_restored_sta
     )
 
 
-# 2. docs/operations.md, "A restore that cannot finish", way 3: "the oldest before-restore-*
-#    holds" the state from before the first attempt. After two attempts cut while moving aside,
-#    it holds only part of it; the rest is in the second one.
-def test_the_oldest_before_restore_holds_the_whole_state_from_before(
+# 2. docs/operations.md, "A restore that cannot finish", way 3 was a recipe that assumed "the
+#    oldest before-restore-* holds" the state from before; after two attempts cut while moving
+#    aside it did not (the reviewer's test asserted that premise). The recipe is replaced by
+#    `cave restore --undo`, so the promise to test is: after the same two cut attempts, --undo
+#    brings back exactly the state from before, and the stack runs again.
+def test_undo_after_two_attempts_cut_while_moving_aside_brings_back_the_state_from_before(
     server,
     run_cave,
     backups,  # noqa: F811
     monkeypatch,
     killed,
+    state_tree,
 ):
     assert run_cave("backup").code == 0
     [archive] = archives(backups)
+    (server.data / "homeassistant/automations.yaml").write_text("- id: made after the backup\n")
+    before = state_tree(server.data)
+    env_before = (server.root / ".env").read_text()
     _cut_while_moving_aside(server, run_cave, archive, monkeypatch, killed)
     _cut_while_moving_aside(server, run_cave, archive, monkeypatch, killed)
+    # Every attempt moved the originals into the one directory of the first attempt.
+    assert len(list((server.data / ".cave" / "ops").glob("before-restore-*"))) == 1
 
-    asides = sorted((server.data / ".cave" / "ops").glob("before-restore-*"))
-    oldest = asides[0]
-    missing = [e for e in ENTRIES if not os.path.lexists(oldest / e)]
-    assert missing == [], (
-        f"{oldest.name} lacks {missing}; they are in {[a.name for a in asides[1:]]}"
-    )
+    result = run_cave("restore", "--undo")
+
+    assert result.code == 0, result.err
+    after = state_tree(server.data)
+    after.pop("homeassistant/started-v2026.11.14.1", None)
+    before.pop("homeassistant/started-v2026.11.14.1", None)
+    assert after == before
+    assert (server.root / ".env").read_text() == env_before
+    assert not (server.data / ".cave" / "ops" / "restore.json").exists()
+    assert list((server.data / ".cave" / "ops").glob("before-restore-*")) == []
+    assert server.stack.running == "v2026.11.14.1"
 
 
 # 3. The restored .env is re-rendered without quotes. A value the owner had to quote (the docs

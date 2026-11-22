@@ -66,7 +66,8 @@ def run(ctx: Context, args: argparse.Namespace) -> int:
             ctx,
             "INTERRUPTED",
             f"a restore of {restoring} was interrupted; the state may be half restored. Run the "
-            "same `sudo ./cave restore` again.",
+            "same `sudo ./cave restore` again, restore another archive, or `sudo ./cave restore "
+            "--undo`.",
         )
     if record.last_result:
         last = record.last_result

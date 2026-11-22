@@ -175,6 +175,11 @@ def device_of(path: Path) -> int:
 
 
 RESTORE_MARKER = "restore.json"
+RESTORE_WAY_OUT = (
+    "Run the same `sudo ./cave restore` again, restore another archive, or put the state from "
+    "before back with `sudo ./cave restore --undo` (docs/operations.md, 'A restore that cannot "
+    "finish')."
+)
 
 
 def restore_in_progress(ctx: Context) -> str | None:
@@ -367,6 +372,24 @@ def check_members(
     return checked
 
 
+RESERVED = (f".cave/{OPS_DIR}", ".cave/lock")
+"""No state link may point at or below these, nor at a directory that contains them (``.cave``,
+the state directory itself): the commands' own records, snapshots and lock."""
+
+
+def touches_reserved(lands: PurePosixPath, reserved: tuple[str, ...] = RESERVED) -> str | None:
+    """The reserved path that a link landing on ``lands`` (relative to the state) would expose."""
+    for place in reserved:
+        reserved_path = PurePosixPath(place)
+        if (
+            lands == reserved_path
+            or reserved_path in lands.parents
+            or lands in reserved_path.parents
+        ):
+            return place
+    return None
+
+
 Owners = Callable[[tarfile.TarInfo], tuple[int, int]]
 
 
@@ -445,11 +468,13 @@ def extract(
                 )
             real = Path(os.path.realpath(path)).relative_to(os.path.realpath(target))
             lands = PurePosixPath(real.as_posix())
-            for place in reserved:
-                if lands == PurePosixPath(place) or PurePosixPath(place) in lands.parents:
-                    raise UnsafeArchive(
-                        str(path.relative_to(target)), f"it points into {place}, which is reserved"
-                    )
+            place = touches_reserved(lands, reserved)
+            if place is not None:
+                raise UnsafeArchive(
+                    str(path.relative_to(target)),
+                    f"it points into {place}, or at a directory that contains it, which is "
+                    "reserved",
+                )
     for path, member in reversed(directories):
         if is_root():
             os.chown(path, *owner_of(member))

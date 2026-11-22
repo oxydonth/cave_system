@@ -231,7 +231,7 @@ class _Update:
                 "refused",
                 NOT_UPDATED,
                 f"Not updating: a restore of {restoring} was interrupted, and the state may be "
-                "half restored. Run the same `sudo ./cave restore` again. Nothing was changed.",
+                "half restored. " + _server.RESTORE_WAY_OUT + " Nothing was changed.",
             )
         if record.switch is not None:
             return self.finish_interrupted()

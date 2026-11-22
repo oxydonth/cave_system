@@ -31,7 +31,7 @@ from pathlib import Path, PurePosixPath
 from typing import Any
 
 from ..context import Context
-from ..envfile import HEADER, NAMES, load_env, parse_env, render
+from ..envfile import HEADER, NAMES, load_env, parse_env, quote_value, render
 from ..errors import CaveError
 from ..health import wait_healthy
 from ..notify import notify
@@ -49,7 +49,14 @@ SPACE_MARGIN = 256 * 1024 * 1024
 
 
 def add_arguments(parser: argparse.ArgumentParser) -> None:
-    parser.add_argument("archive", help="a cave-backup-*.tar.gz written by `cave backup`")
+    parser.add_argument(
+        "archive", nargs="?", help="a cave-backup-*.tar.gz written by `cave backup`"
+    )
+    parser.add_argument(
+        "--undo",
+        action="store_true",
+        help="put back the state from before a restore that stopped half-way (no archive)",
+    )
     parser.add_argument(
         "--data",
         metavar="DIR",
@@ -153,6 +160,12 @@ def _read(archive: tarfile.TarFile, member: tarfile.TarInfo) -> str:
 
 
 def run(ctx: Context, args: argparse.Namespace) -> int:
+    if args.undo:
+        if args.archive:
+            raise CaveError("give either an archive or --undo, not both")
+        return undo(ctx, args)
+    if not args.archive:
+        raise CaveError("name the archive to restore, or give --undo")
     source = Path(args.archive).expanduser().resolve()
     if not source.is_file():
         raise CaveError(f"{source} does not exist")
@@ -206,8 +219,7 @@ SERVICE_ENTRIES = ("homeassistant", "mosquitto", "zigbee2mqtt")
 STEERING = ("CAVE_BACKUP_DIR", "CAVE_BACKUP_COPY_TO", "CAVE_Z2M_SERIAL_PORT", "COMPOSE_PROFILES")
 """Restored settings that decide where the nightly backup writes or what is passed to a
 container; the restore names them so that the owner can check them."""
-RESERVED = (f".cave/{_server.OPS_DIR}", ".cave/lock")
-"""No restored link may point at or below these: the commands' own records, snapshots and lock."""
+RESERVED = _server.RESERVED
 
 
 def _target(ctx: Context, args: argparse.Namespace) -> tuple[Path, str]:
@@ -298,6 +310,7 @@ def _restore(
 
     info = ctx.paths.root.stat()
     marker = ops / _server.RESTORE_MARKER
+    earlier = _read_marker(marker)  # a restore that stopped half-way: this is a repeat
     try:
         ctx.say(f"Unpacking into {staging} ...")
         staging.mkdir(parents=True, mode=0o700)
@@ -305,7 +318,7 @@ def _restore(
         _server.sync()
         # Only now, with everything unpacked: the release from before an interrupted update, and
         # the marker that makes an interrupted move visible (`status`) and stops `update` and
-        # `backup` until the restore is run again.
+        # `backup` until the restore is run again or undone.
         if switch is not None:
             ctx.say(f"Checking out {switch.from_label}, the release before the interrupted update")
             failed, kept = _server.check_out_exactly(
@@ -318,7 +331,21 @@ def _restore(
                 raise CaveError(f"{switch.from_label} could not be checked out: {failed}")
             if kept:
                 ctx.warn("Left in place, not the update's files: " + ", ".join(kept))
-        _server.write_atomic(marker, json.dumps({"archive": str(archive.path)}).encode(), 0o644)
+        if earlier is None:
+            aside_name = f"before-restore-{stamp}"
+            counter = 1
+            while (ops / aside_name).exists():
+                counter += 1
+                aside_name = f"before-restore-{stamp}-{counter}"
+            series: dict[str, Any] = {
+                "archive": str(archive.path),
+                "aside": aside_name,
+                "original_entries": _server.state_entries(data),
+                "env_backup": None,
+            }
+        else:
+            series = {**earlier, "archive": str(archive.path)}
+        _write_marker(marker, series)
         if switch is not None:
             # From here on the restore, not the update's snapshot, decides the state: a recovery
             # must never put that snapshot back over the restored state.
@@ -331,23 +358,28 @@ def _restore(
             save_update_record(ctx, record)
     except (OSError, tarfile.TarError, EOFError, CaveError) as error:
         _server.remove(staging)
+        if earlier is not None:
+            return _repeat_failed(ctx, error)
         marker.unlink(missing_ok=True)
         return _unpack_failed(ctx, args, error, was_running)
 
-    aside = ops / f"before-restore-{stamp}"
-    counter = 1
-    while aside.exists():  # a repeated restore in the same second keeps both
-        counter += 1
-        aside = ops / f"before-restore-{stamp}-{counter}"
+    # The whole state from before the first attempt goes into one directory, `aside`, over all
+    # repeats: an original entry is moved there; whatever an earlier attempt moved in (an entry
+    # that was not there before, or one whose original is in `aside` already) is discarded.
+    aside = ops / series["aside"]
+    originals = set(series["original_entries"])
     restored = _server.state_entries(staging)
     current = _server.state_entries(data)
     try:
         if current:
             ctx.say(f"Moving the current state aside to {aside} ...")
-            aside.mkdir(mode=0o700)
+            aside.mkdir(mode=0o700, exist_ok=True)
         for entry in current:
-            (aside / entry).parent.mkdir(parents=True, exist_ok=True)
-            os.rename(data / entry, aside / entry)
+            if entry in originals and not os.path.lexists(aside / entry):
+                (aside / entry).parent.mkdir(parents=True, exist_ok=True)
+                os.rename(data / entry, aside / entry)
+            else:
+                _server.remove(data / entry)
         for entry in restored:
             (data / entry).parent.mkdir(parents=True, exist_ok=True)
             os.rename(staging / entry, data / entry)
@@ -355,8 +387,9 @@ def _restore(
         raise CaveError(
             f"the restore stopped half-way while moving the state into place: {error}. The stack "
             "is stopped, and update and backup wait for the restore. Run the same restore again; "
-            "if it stops at the same place again, restore another archive (an older one). The "
-            f"state from before is in {aside}. See {OPERATIONS}, 'A restore that cannot finish'."
+            "if it stops at the same place again, restore another archive (an older one), or put "
+            f"the state from before back with `sudo ./cave restore --undo`. It is in {aside}. See "
+            f"{OPERATIONS}, 'A restore that cannot finish'."
         ) from error
     _server.remove(staging)
     _server.sync()
@@ -368,13 +401,26 @@ def _restore(
         )
 
     env_file = ctx.paths.env_file
-    if env_file.exists():
-        os.replace(env_file, env_file.with_name(f".env.before-restore-{stamp}"))
+    if env_file.exists() and series.get("env_backup") is None:
+        # A copy, and .env itself is then replaced in one step: there is always a .env, which
+        # names the state directory for a repeat or --undo after a kill.
+        backup = env_file.with_name(f".env.before-restore-{stamp}")
+        _server.write_atomic(backup, env_file.read_bytes(), 0o600)
+        series["env_backup"] = backup.name
+        _write_marker(marker, series)
     # Only the variables of concept section 4.2 (`render` writes exactly the table), so that the
     # archive cannot set anything else that Compose reads from .env (COMPOSE_FILE,
     # COMPOSE_PROJECT_NAME, ...); CAVE_DATA is the directory actually used.
     values = {**archived_env, "CAVE_DATA": str(data)}
     ignored = sorted(name for name in archived_env if name not in NAMES)
+    for name in [name for name in NAMES if name in values]:
+        try:
+            quote_value(values[name])
+        except ValueError:
+            # Cannot be written so that Compose and cave read the same: the default is written,
+            # and the owner is told to set it again.
+            del values[name]
+            ignored.append(f"{name} (its value cannot be written unchanged; set it again)")
     _server.write_atomic(env_file, (HEADER + "\n" + render(values)).encode(), 0o600)
     if _server.is_root():
         info = ctx.paths.root.stat()
@@ -449,3 +495,103 @@ def _unpack_failed(
     ctx.warn(message)
     notify(ctx, TITLE, message)
     return 1
+
+
+def _read_marker(marker: Path) -> dict[str, Any] | None:
+    """The record of a restore that stopped half-way, or ``None``.
+
+    A marker written by an earlier version names only the archive; it is taken as "the state
+    from before was not recorded", which ``--undo`` then refuses to guess.
+    """
+    try:
+        raw = json.loads(marker.read_text(encoding="utf-8"))
+    except FileNotFoundError:
+        return None
+    except (OSError, ValueError):
+        raw = {}
+    raw.setdefault("archive", "an archive")
+    raw.setdefault("aside", None)
+    raw.setdefault("original_entries", [])
+    raw.setdefault("env_backup", None)
+    return dict(raw)
+
+
+def _write_marker(marker: Path, series: dict[str, Any]) -> None:
+    _server.write_atomic(marker, json.dumps(series, indent=2).encode(), 0o644)
+
+
+def _repeat_failed(ctx: Context, error: BaseException) -> int:
+    """A repeat of a restore that stopped half-way failed before it moved anything. The state is
+    still half restored: keep the marker, do not start the stack, say so."""
+    message = (
+        f"The restore failed while unpacking: {error}. The state is still half restored from the "
+        "earlier attempt, so the stack was NOT started and update and backup still wait. Free "
+        "space if that was the cause and run it again, restore another archive, or put the state "
+        f"from before back with `sudo ./cave restore --undo`. See {OPERATIONS}, 'A restore that "
+        "cannot finish'."
+    )
+    ctx.warn(message)
+    notify(ctx, TITLE, message)
+    return 1
+
+
+def undo(ctx: Context, args: argparse.Namespace) -> int:
+    """``cave restore --undo``: put back the state from before a restore that stopped half-way.
+
+    Everything an attempt moved in is discarded; every original entry comes back from the one
+    directory all attempts moved them to (or stays, if no attempt reached it); the ``.env`` from
+    before comes back if an attempt replaced it. Then the marker goes, and the stack starts.
+    """
+    data, why = _target(ctx, args)
+    ctx.paths = Paths(root=ctx.paths.root, data=data)
+    _server.require_state_access(ctx, "restore")
+    ops = _server.ops_dir(ctx)
+    marker = ops / _server.RESTORE_MARKER
+    with ctx.lock("restore"):
+        series = _read_marker(marker)
+        if series is None:
+            raise CaveError(
+                f"there is no restore to undo in {data} ({why}): no restore stopped half-way. "
+                "Nothing was changed."
+            )
+        if not series["aside"]:
+            raise CaveError(
+                f"the restore that stopped half-way in {data} was made by an earlier version, "
+                "which did not record the state from before; it cannot be undone automatically. "
+                f"See {OPERATIONS}, 'A restore that cannot finish'. Nothing was changed."
+            )
+        if ctx.paths.env_file.is_file():
+            ctx.compose("down", timeout=300.0)
+        aside = ops / series["aside"]
+        originals = set(series["original_entries"])
+        ctx.say(f"Putting back the state from before, from {aside} ...")
+        for entry in _server.state_entries(data):
+            if not (entry in originals and not os.path.lexists(aside / entry)):
+                _server.remove(data / entry)  # moved in by an attempt
+        if aside.is_dir():
+            for entry in _server.state_entries(aside):
+                (data / entry).parent.mkdir(parents=True, exist_ok=True)
+                os.rename(aside / entry, data / entry)
+        _server.sync()
+        env_file = ctx.paths.env_file
+        backup = series.get("env_backup")
+        if backup and (env_file.parent / backup).is_file():
+            os.replace(env_file.parent / backup, env_file)
+        marker.unlink()
+        _server.remove(aside)
+        _server.remove(ops / "restore-staging")
+    message = f"The restore that stopped half-way was undone: {data} holds the state from before."
+    if args.no_start or not ctx.paths.env_file.is_file():
+        ctx.say(f"{message} Not started: run `./cave up` when ready.")
+        return 0
+    started = ctx.compose("up", "--detach", "--force-recreate", timeout=900.0)
+    if not started.ok:
+        message += f" But the stack could not be started: {started.output.strip()[-300:]}"
+        ctx.warn(message)
+        notify(ctx, TITLE, message)
+        return 1
+    health = wait_healthy(ctx, timeout=args.timeout)
+    message += f" The stack is {health.describe()}."
+    (ctx.say if health.healthy else ctx.warn)(message)
+    notify(ctx, TITLE, message)
+    return 0 if health.healthy else 1

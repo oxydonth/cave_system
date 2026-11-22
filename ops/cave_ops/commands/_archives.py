@@ -27,11 +27,11 @@ import stat
 import tarfile
 import tempfile
 import urllib.parse
-from pathlib import Path
+from pathlib import Path, PurePosixPath
 from typing import Any
 
 from ..errors import CaveError
-from ._server import safe_link_target
+from ._server import safe_link_target, touches_reserved
 
 PREFIX = "cave-backup-"
 SUFFIX = ".tar.gz"
@@ -169,6 +169,17 @@ def add_file(archive: tarfile.TarFile, name: str, source: Path, info: os.stat_re
         archive.addfile(_info(name, info, tarfile.REGTYPE, size), handle)
 
 
+def _exposes_reserved(link: Path, data: Path) -> bool:
+    """Whether a link in the state resolves to the commands' own records or a directory that
+    contains them, as `restore` checks on the unpacked tree."""
+    real = os.path.realpath(link)
+    top = os.path.realpath(data)
+    if not (real == top or real.startswith(top + os.sep)):
+        return True
+    lands = PurePosixPath(Path(real).relative_to(top).as_posix())
+    return touches_reserved(lands) is not None
+
+
 def add_tree(
     archive: tarfile.TarFile,
     data: Path,
@@ -198,7 +209,7 @@ def add_tree(
                 archive.addfile(_info(name, info, tarfile.DIRTYPE))
             elif stat.S_ISLNK(info.st_mode):
                 link = os.readlink(path)
-                if not safe_link_target(link):
+                if not safe_link_target(link) or _exposes_reserved(path, data):
                     # `restore` refuses such a link; leaving it out keeps the archive restorable.
                     left_out.append(f"{relative} -> {link}")
                     continue

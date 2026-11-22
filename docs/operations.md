@@ -51,6 +51,9 @@ Find the start of the message in the left column.
 | `cave restore`: `… is neither empty nor a cave state directory` | The chosen target holds something else. | Nothing was changed. | Check `--data` (or `CAVE_DATA` in `.env`); `--force` only if you mean it. |
 | `cave restore`: `refusing archive member …` | The archive breaks a rule (see [What an archive may contain](#restoring-a-backup)). | Nothing was stopped or changed. | Use another archive; a backup written by `cave backup` never breaks these rules. |
 | `cave restore`: `… Variables in the archive's .env that cave does not know were left out: …` / `From the archive's .env, check: …` | The restore wrote only the known variables and names the settings that decide where root writes. | Restored. | Check the named settings in `/opt/cave/.env`. |
+| `The restore failed while unpacking: … The state is still half restored from the earlier attempt, so the stack was NOT started` | A repeat of a restore that stopped half-way failed before it moved anything. | Stack stopped; the state half restored; the marker stays. | See [A restore that cannot finish](#a-restore-that-cannot-finish). |
+| `Not applied: …` (`cave apply`) / `cave: not bootstrapping: …` | An update is interrupted or a restore stopped half-way; a change made now would be undone or land in a half-restored state. | Nothing was changed. | Finish that first (`sudo ./cave update --recover`, or see [A restore that cannot finish](#a-restore-that-cannot-finish)), then run it again. |
+| `cannot take the lock …/.cave/lock …` | `.cave` belongs to root (left by an earlier version) and the lock file is missing. | Nothing was changed. | The next root command that takes the lock (the nightly backup, or `sudo ./cave backup`) gives it back to the service user. |
 | `The restore failed while unpacking: …` | A restore could not unpack the archive; nothing was restored. | The stack runs again unchanged (or the message says it could not be started). If an update was interrupted, its way back was finished instead (`… was finished instead`), so the release and the state belong together; its own notification says how that went. | Read the reason (often a full disk). |
 | `Not updating: a restore of … was interrupted` / `No backup was made: a restore of … was interrupted` | A restore was cut off while moving the state into place. Update and backup wait for it. | The stack is stopped; the state may be half restored. | Run the same `sudo ./cave restore …` again; if it stops at the same place again, restore another archive. See [A restore that cannot finish](#a-restore-that-cannot-finish). |
 | `Update to v… failed earlier and was rolled back … That could not be recorded then` | An earlier way back had finished, but the disk was full when it wanted to record that. | The previous release runs, healthy; nothing was stopped. | Free space on the disk. |
@@ -134,6 +137,7 @@ the result.
 | `sudo ./cave update --timeout SECONDS` | How long a started release may take to become healthy (default 900). |
 | `sudo ./cave backup` | Writes a backup now. |
 | `sudo ./cave restore ARCHIVE [--data DIR] [--no-start] [--force]` | Puts back a backup; see [Restoring](#restoring-a-backup). |
+| `sudo ./cave restore --undo [--data DIR] [--no-start]` | Puts back the state from before a restore that stopped half-way; see [A restore that cannot finish](#a-restore-that-cannot-finish). |
 
 `update` exits with 0 (installed, or nothing to do), 1 (not updated, the previous release runs as
 before), 2 (the release failed and was rolled back; the previous release runs, healthy) or 3 (the
@@ -148,7 +152,11 @@ mount it at `/var/lib/cave` itself.
 
 ### Which user
 
-`update`, `backup` and `restore` run as **root**; the systemd units do. The state directory holds
+`update`, `backup` and `restore` run as **root**; the systemd units do. `apply` and `bootstrap` run
+as the service user. All five take the one lock of concept section 4.5 (`/var/lib/cave/.cave/lock`),
+in any order: taking it needs no write access to the file, and a root command gives `.cave` and
+the lock file to the owner of `/var/lib/cave` (the service user), so whichever ran first, the
+other can take it next. The state directory holds
 files that the containers created, owned by root or by the broker's user and readable only by them
 (Home Assistant's `.storage`, the broker's data). Only root can copy all of them and give a copy
 back its owner. Run as the service user, these commands stop at once with
@@ -296,7 +304,11 @@ archive from time to time.
 ## Restoring a backup
 
 `sudo ./cave restore ARCHIVE` checks the whole archive first, then stops the stack, puts back
-the state and `.env`, and starts the stack.
+the state and `.env`, and starts the stack. The `.env` from before is copied to `.env.before-restore-<time>` and `.env` is then
+replaced in one step, so there is always a `.env` that names the state directory. Values are
+written back as `./cave init` and Docker Compose read them: in single quotes where they contain
+`$`, `#` or spaces; a value that cannot be written so that both read it unchanged is left out and
+named.
 
 **Where it restores to** is never taken from the archive: `--data DIR` if given, else `CAVE_DATA`
 of the existing `/opt/cave/.env`, else the default state directory (`/var/lib/cave` on a
@@ -319,7 +331,9 @@ and contain no `..` at all, so it can only point at or below its own directory; 
 whole archive is unpacked, every link in it is resolved and must stay inside. An archive that
 breaks a rule is refused before anything is stopped or touched. `data/.cave` must be a plain
 directory, and nothing may lie at or below `data/.cave/ops` or `data/.cave/lock` (the commands'
-own records and lock, which a backup never contains); no link may point there either. Modes keep
+own records and lock, which a backup never contains); no link may point there, nor at a
+directory that contains them (`.cave` itself, or the state directory). `cave backup` leaves out
+such links too. Modes keep
 only the permission bits, so an archive cannot plant a setuid or setgid file. So, with the
 target chosen as above, nothing in an archive can make the restore write outside the state
 directory and `.env`, nor leave a link there that points outside (which a container's bind
@@ -358,19 +372,26 @@ has been run again.
 
 ### A restore that cannot finish
 
-A restore cut off while moving the state in leaves a marker; `status` shows it, and `update`
-(also `--recover`) and `backup` refuse, because the state may be half restored. The way out:
+A restore cut off while moving the state in leaves a marker (`/var/lib/cave/.cave/ops/restore.json`);
+`status` shows it, and `update` (also `--recover`), `backup`, `apply` and `bootstrap` refuse,
+because the state may be half restored. Every attempt of the same series moves the state from
+before into one and the same `before-restore-*` directory, named in the marker. The ways out:
 
 1. Run the same `sudo ./cave restore <archive>` again. It unpacks again and moves the state in
-   from the start; what the first attempt moved aside stays in its `before-restore-*` directory.
-2. If it stops at the same place again, or the message says there is not enough space, restore
-   another archive (`sudo ./cave restore <older archive>`), after freeing space if needed (an
-   older `/var/lib/cave/.cave/ops/before-restore-*`, old archives, `sudo docker image prune -a`).
-   Any completed restore removes the marker.
-3. To go back to the state from before the first attempt instead: the oldest
-   `/var/lib/cave/.cave/ops/before-restore-*` holds it. Move its entries back into
-   `/var/lib/cave` (`sudo mv`, same file system), remove `/var/lib/cave/.cave/ops/restore.json`,
-   restore `/opt/cave/.env.before-restore-*` as `.env`, and `sudo -u cave ./cave up`.
+   from the start.
+2. If it stops at the same place again, or there is not enough space, restore another archive
+   (`sudo ./cave restore <older archive>`), after freeing space if needed (old archives,
+   `sudo docker image prune -a`). Any completed restore removes the marker.
+3. Or go back to the state from before the first attempt: `sudo ./cave restore --undo`. It
+   discards what the attempts moved in, puts back every entry from before (from the
+   `before-restore-*` directory, or where no attempt touched it), puts back the `.env` from
+   before if an attempt had replaced it, removes the marker and starts the stack (`--no-start`:
+   do not). A marker written by an earlier version does not record the state from before;
+   `--undo` then refuses rather than guess.
+
+If an attempt fails while unpacking (a full disk, an unreadable archive) it changes nothing, but
+the state is still half restored from the attempt before: the stack is not started, the marker
+stays, and the message says so.
 
 ### Onto a new server
 

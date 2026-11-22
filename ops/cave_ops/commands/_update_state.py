@@ -120,8 +120,8 @@ def maintenance_pending(ctx: Context) -> str | None:
     restoring = _server.restore_in_progress(ctx)
     if restoring is not None:
         return (
-            f"a restore of {restoring} stopped half-way and the state is half restored. See "
-            "docs/operations.md, 'A restore that cannot finish'"
+            f"a restore of {restoring} stopped half-way and the state is half restored. "
+            + _server.RESTORE_WAY_OUT.rstrip(".")
         )
     return None
 

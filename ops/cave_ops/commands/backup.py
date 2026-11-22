@@ -71,7 +71,7 @@ def run(ctx: Context, args: argparse.Namespace) -> int:
             if restoring is not None:
                 message = (
                     f"No backup was made: a restore of {restoring} was interrupted and the state "
-                    "may be half restored. Run the same `sudo ./cave restore` again."
+                    "may be half restored. " + _server.RESTORE_WAY_OUT
                 )
                 ctx.warn(message)
                 notify(ctx, TITLE, message)

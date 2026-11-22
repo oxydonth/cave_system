@@ -156,12 +156,31 @@ def load_env(path: Path) -> dict[str, str]:
         return {}
 
 
+_PLAIN = re.compile(r"[^\s#$'\"\\`]*")
+
+
+def quote_value(value: str) -> str:
+    """``value`` as written in ``.env`` so that ``parse_env`` and Docker Compose both read it back
+    exactly: bare when nothing in it is special, else in single quotes (literal for both), else,
+    if it contains a single quote, in double quotes when nothing in it is interpreted there.
+    Raises ``ValueError`` for a value that cannot be written so (both quote characters together
+    with ``$``, a backslash or a double quote)."""
+    if _PLAIN.fullmatch(value):
+        return value
+    if "'" not in value and "\n" not in value:
+        return f"'{value}'"
+    if not any(c in value for c in '"$\\`\n'):
+        return f'"{value}"'
+    raise ValueError("the value cannot be written in .env so that Compose reads it unchanged")
+
+
 def render(values: Mapping[str, str], variables: Iterable[Variable] = VARIABLES) -> str:
-    """Render ``variables`` with their documentation, taking each value from ``values``."""
+    """Render ``variables`` with their documentation, taking each value from ``values``; values
+    are quoted where needed (``quote_value``)."""
     blocks = []
     for var in variables:
         doc = "".join(f"# {line}\n" for line in var.doc.splitlines())
-        blocks.append(f"{doc}{var.name}={values.get(var.name, var.default)}\n")
+        blocks.append(f"{doc}{var.name}={quote_value(values.get(var.name, var.default))}\n")
     return "\n".join(blocks)
 
 
