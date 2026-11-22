@@ -133,8 +133,9 @@ one that Home Assistant registered disabled before is enabled by `cave_heating`,
 the MQTT integration that follows, with a window pause in effect, sends no command and ends no
 pause (`sensor_last_seen_enabled_after_an_upgrade`). In that minute of the reload every Zigbee
 thermostat is unavailable too: a `cave device-check` started then reports its thermostat as
-unavailable; run it again a minute later. `Last seen` is not recorded, so it has no history. It reports by its configured reporting (1 °C
-or 1 %, at least hourly); real ones may report smaller changes, and how often a real one repeats
+unavailable; run it again a minute later. `Last seen` is not recorded, so it has no history. It
+reports by its configured reporting (1 °C or 1 %, at least hourly); real ones may report smaller
+changes, and how often a real one repeats
 both readings exactly is on the [hardware acceptance checklist](hardware-acceptance.md).
 
 ### Sonoff SNZB-04P (window contact)

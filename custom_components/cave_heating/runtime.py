@@ -278,6 +278,9 @@ class HeatingRuntime:
         self._roles: dict[str, list[Callable[[State | None, datetime], None]]] = {}
         # Room sensor -> the other entities of its device, as last looked up.
         self._sensor_devices: dict[str, set[str]] = {}
+        # Every room sensor and every other entity of its device: what one message of a room
+        # sensor's device writes.
+        self._sensor_entities: set[str] = set()
         self._resubscribe = False
         self._sensor_report_due = False
         self._listeners: list[CALLBACK_TYPE] = []
@@ -636,6 +639,7 @@ class HeatingRuntime:
         if self._started:
             self._enable_last_seen()
         reporters = sensors | {item for items in self._sensor_devices.values() for item in items}
+        self._sensor_entities = reporters
         if reporters:
             self._unsub_events.append(
                 async_track_state_report_event(self.hass, reporters, self._on_sensor_report)
@@ -652,6 +656,14 @@ class HeatingRuntime:
         state = event.data["new_state"]
         for role in self._roles.get(event.data["entity_id"], ()):
             role(state, now)
+        if event.data["entity_id"] in self._sensor_entities:
+            # The temperature or the humidity of a room sensor changed. The message that
+            # carries it carries the device's ``last_seen`` too, and that may be written after
+            # it: after a restart every entity is unknown until Zigbee2MQTT sends its states
+            # again, and an evaluation between the two writes would take the reading of a
+            # sensor that died before the restart for fresh and feed it to the thermostats.
+            self._evaluate_after_message()
+            return
         self._evaluate()
 
     @callback
@@ -665,9 +677,20 @@ class HeatingRuntime:
         the device's ``last_seen`` written before its temperature, an evaluation at once would
         take the old temperature for fresh and feed it to the thermostats.
         """
-        if self._sensor_report_due or not any(
+        if any(
             not room.sensor_fresh and room.config.temperature_sensor for room in self.rooms.values()
         ):
+            self._evaluate_after_message()
+
+    @callback
+    def _evaluate_after_message(self) -> None:
+        """Evaluate once every entity of the message being written has its new state.
+
+        Home Assistant's MQTT integration writes the entities of one message one after the
+        other without giving up control, so the next turn of the event loop is after all of
+        them. One evaluation serves any number of writes of that message.
+        """
+        if self._sensor_report_due:
             return
         self._sensor_report_due = True
 

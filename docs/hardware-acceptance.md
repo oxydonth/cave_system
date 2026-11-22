@@ -178,7 +178,10 @@ what this point checks.
   `climate.cave_<room>` show the sensor's temperature throughout (not the thermostats' average)?
   `Last seen` has no history (the recorder leaves it out, `homeassistant/configuration.yaml`):
   how often the sensor sent during the stretch shows in Zigbee2MQTT's log, one `MQTT publish`
-  line on `zigbee2mqtt/<name>` per message.
+  line on `zigbee2mqtt/<name>` per message. For a whole night:
+  `sudo -u cave ./cave logs --since 12h --tail all zigbee2mqtt | grep "topic 'zigbee2mqtt/<name>'"`.
+  A restart of Home Assistant or Zigbee2MQTT adds one such line that is not a message from the
+  sensor: Zigbee2MQTT sending its states again.
 - **Result:** longest steady stretch ______ ; longest gap between two messages of the sensor
   ______ ; the room showed the thermostats' reading: yes / no.
 - **Do with it.** A gap between messages longer than three hours means the sensor reports less often

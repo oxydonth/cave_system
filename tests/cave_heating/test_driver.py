@@ -626,3 +626,40 @@ def test_setting_calls() -> None:
     assert setting_call("switch.w", "on") == ("switch", "turn_on", {})
     assert setting_call("switch.w", "off") == ("switch", "turn_off", {})
     assert setting_call("number.n", 1.5) == ("number", "set_value", {"value": 1.5})
+
+
+def test_a_target_only_command_after_a_mode_command_whose_mode_already_arrived() -> None:
+    """A heat command with its mode, from off; the mode arrives first (heat at 21). A new target
+    then goes out without the mode, so no mode is on its way any more. The 22 of the first
+    command and the 23 arrive in heat: confirmed, nothing more sent.
+    (From the second review of pull request #29.)"""
+    driver = ThermostatDriver("climate.t", TIMING, slow=False, now=T0 - HOUR)
+    driver.set_want(Want(heat=False, target=21.0), T0 - HOUR)
+    driver.on_report(report(21.0, mode="off"), T0 - HOUR)
+    first = send(driver, 22.0, T0)
+    assert first.data == {"temperature": 22.0, "hvac_mode": "heat"}
+    driver.on_report(report(21.0, mode="heat"), T0 + 5 * SEC)
+    second = send(driver, 23.0, T0 + 10 * SEC)
+    assert second.data == {"temperature": 23.0}
+    assert driver.mode_sent is False
+    driver.on_report(report(22.0, mode="heat"), T0 + 20 * SEC)
+    driver.on_report(report(23.0, mode="heat"), T0 + 30 * SEC)
+    assert driver.phase is Phase.OK
+    assert driver.tick(T0 + 40 * SEC) is None
+
+
+def test_a_mode_still_on_its_way_when_the_next_target_goes_out_is_sent_again() -> None:
+    """Off at 21; heat 22 with its mode is sent, and before anything is reported 23 is wanted.
+    The report still says off, so the second command carries the mode too, and the wait applies
+    when 23 is reported before the mode. (From the second review of pull request #29.)"""
+    driver = ThermostatDriver("climate.t", TIMING, slow=False, now=T0 - HOUR)
+    driver.set_want(Want(heat=False, target=21.0), T0 - HOUR)
+    driver.on_report(report(21.0, mode="off"), T0 - HOUR)
+    send(driver, 22.0, T0)
+    second = send(driver, 23.0, T0 + 10 * SEC)
+    assert second.data == {"temperature": 23.0, "hvac_mode": "heat"}
+    driver.on_report(report(23.0, mode="off"), T0 + 20 * SEC)
+    assert driver.phase is Phase.PENDING
+    assert driver.tick(T0 + 20 * SEC + TIMING.debounce) is None
+    driver.on_report(report(23.0, mode="heat"), T0 + 30 * SEC)
+    assert driver.phase is Phase.OK

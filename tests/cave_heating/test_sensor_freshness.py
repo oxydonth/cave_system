@@ -323,3 +323,64 @@ async def test_a_message_whose_last_seen_is_written_first_feeds_its_new_temperat
     await home.settle()
     assert feed_input.writes[before:] == [21.6]
     assert _shown(home) == 21.6
+
+
+@pytest.mark.parametrize(
+    "order",
+    [
+        ("temperature", "humidity", "last_seen"),
+        ("humidity", "temperature", "last_seen"),
+        ("temperature", "last_seen", "humidity"),
+        ("last_seen", "temperature", "humidity"),
+    ],
+    ids="-".join,
+)
+@pytest.mark.parametrize("humidity_in_the_room", [False, True], ids=["temperature-only", "both"])
+async def test_a_sensor_dead_before_a_restart_stays_stale_through_the_republish(
+    hass: HomeAssistant,
+    home: FakeHome,
+    freezer: FrozenDateTimeFactory,
+    order: tuple[str, ...],
+    humidity_in_the_room: bool,
+) -> None:
+    """After a restart every entity of the room sensor is unknown until Zigbee2MQTT sends its
+    states again, 30 s after Home Assistant's birth message. The sensor died 4 h before.
+
+    That one message carries its old temperature, its old humidity and its old last_seen, and
+    Home Assistant writes them in an order it does not fix. Whichever comes first, and whether
+    the room uses the humidity or not, the room stays on the thermostat's reading and the feed
+    does not write the dead sensor's value. (From the second review of pull request #29.)
+    """
+    temperature, humidity, seen = _sensor_device(hass)
+    await home.thermostat("climate.a", target=21.0, current=23.0)
+    feed_input = FakeNumber("number.a_external", 0.0)
+    await home.add(feed_input)
+    for entity_id in (temperature, humidity, seen):
+        home.set(entity_id, "unknown")
+    fields = {"temperature_sensor": temperature}
+    if humidity_in_the_room:
+        fields["humidity_sensor"] = humidity
+    await home.start(
+        config(
+            room(
+                "living_room",
+                {"entity": "climate.a", "external_temperature": "number.a_external"},
+                **fields,
+            )
+        )
+    )
+    await home.advance(freezer, 30 * SEC)
+    assert _shown(home) == 23.0
+    values = {
+        "temperature": (temperature, "19.0"),
+        "humidity": (humidity, "50"),
+        "last_seen": (seen, _iso(home.now() - 4 * HOUR)),
+    }
+
+    for name in order:  # the republish: one message, written without giving up control
+        home.set(*values[name])
+    await home.settle()
+    await home.advance(freezer, 5 * SEC)
+
+    assert _shown(home) == 23.0, "stale at once"
+    assert feed_input.writes == [], "the dead sensor's value is not fed"
