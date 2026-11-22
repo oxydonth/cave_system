@@ -17,6 +17,7 @@ from freezegun.api import FrozenDateTimeFactory
 from homeassistant.core import HomeAssistant
 from homeassistant.helpers.event import RANDOM_MICROSECOND_MAX, RANDOM_MICROSECOND_MIN
 from homeassistant.util import dt as dt_util
+from pytest_homeassistant_custom_component.common import get_scheduled_timer_handles
 
 from tests.packages.helpers import START, advance, check_clock, load_package
 
@@ -32,9 +33,18 @@ def offset(request: pytest.FixtureRequest) -> Iterator[int]:
 
 
 async def test_home_assistant_runs_on_the_frozen_clock_from_its_start(hass: HomeAssistant) -> None:
-    """Every test starts at the same instant, and so does the loop that runs the timers."""
+    """Every test starts at the same instant, and Home Assistant was set up on it.
+
+    The frozen clock is read live, so the first two lines would hold even if ``hass`` had been
+    set up before ``clock`` froze it. The timer Home Assistant schedules while it is set up (a
+    daily one) shows when that was: set before the freeze, it would be on the real monotonic
+    clock, far below ``START``, or gone, run when the clock jumped; either way this fails.
+    """
     assert dt_util.utcnow() == START
     assert hass.loop.time() == START.timestamp()
+    timers = [h.when() for h in get_scheduled_timer_handles(hass.loop) if not h.cancelled()]
+    assert timers, "no timer from the set-up of Home Assistant is left"
+    assert min(timers) >= START.timestamp()
 
 
 async def test_every_minute_is_one_evaluation_and_the_first_comes_after_the_set_up(
@@ -63,3 +73,22 @@ def test_a_clock_near_the_boundary_of_a_minute_is_refused(
     freezer.move_to(START.replace(second=0) + timedelta(seconds=second))
     with pytest.raises(AssertionError, match="see check_clock"):
         check_clock()
+
+
+async def test_loading_the_package_near_the_boundary_of_a_minute_is_refused(
+    hass: HomeAssistant, freezer: FrozenDateTimeFactory
+) -> None:
+    """``load_package`` checks the clock before it sets anything up."""
+    freezer.move_to(START.replace(second=0) + timedelta(seconds=0.6))
+    with pytest.raises(AssertionError, match="see check_clock"):
+        await load_package(hass)
+
+
+async def test_a_step_of_advance_near_the_boundary_of_a_minute_is_refused(
+    hass: HomeAssistant, freezer: FrozenDateTimeFactory
+) -> None:
+    """``advance`` checks the clock before every minute it moves."""
+    await load_package(hass)
+    freezer.move_to(START + timedelta(seconds=29.6))
+    with pytest.raises(AssertionError, match="see check_clock"):
+        await advance(hass, freezer, 1)
