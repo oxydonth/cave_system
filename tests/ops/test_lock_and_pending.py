@@ -12,8 +12,27 @@ from cave_ops import lock as lock_module
 from cave_ops.errors import CaveError
 from cave_ops.lock import Lock, LockBusy
 
-from .test_apply import edit, home  # noqa: F401  (home is a fixture)
-from .test_bootstrap import initialised  # noqa: F401  (a fixture)
+VALID = (
+    "version: 1\nrooms:\n  - id: office\n    name: Office\n    trvs:\n      - entity: climate.a\n"
+)
+
+
+@pytest.fixture
+def home(ctx, run_cave):
+    """An initialised state directory (as in test_apply.py, which cannot be imported in the
+    Python 3.11 run of these tests)."""
+    assert run_cave("init").code == 0
+    return ctx.paths
+
+
+@pytest.fixture
+def initialised(run_cave, ctx):
+    assert run_cave("init").code == 0
+    return ctx.env
+
+
+def edit(home, text=VALID):
+    home.heating.write_text(text)
 
 
 @pytest.fixture
@@ -111,7 +130,7 @@ def unfinished_restore(ctx):
 )
 def test_apply_refuses_while_an_update_or_restore_is_unfinished(
     run_cave,
-    home,  # noqa: F811
+    home,
     ctx,
     fake_runner,
     make,
@@ -138,7 +157,7 @@ def test_apply_refuses_while_an_update_or_restore_is_unfinished(
     ],
 )
 def test_bootstrap_refuses_while_an_update_or_restore_is_unfinished(
-    initialised,  # noqa: F811
+    initialised,
     run_cave,
     ctx,
     fake_runner,
@@ -154,7 +173,7 @@ def test_bootstrap_refuses_while_an_update_or_restore_is_unfinished(
     assert fake_runner.calls == []
 
 
-def test_bootstrap_holds_the_shared_lock(initialised, run_cave, ctx, fake_runner):  # noqa: F811
+def test_bootstrap_holds_the_shared_lock(initialised, run_cave, ctx, fake_runner):
     with Lock(ctx.paths.lock_file, "update"):
         result = run_cave("bootstrap")
 
