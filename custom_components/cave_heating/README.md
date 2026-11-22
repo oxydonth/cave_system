@@ -174,7 +174,11 @@ before a restart of Home Assistant or Zigbee2MQTT is stale at once afterwards in
 `sensor_stale` later; a value later than its arrival counts from its arrival. Without a value
 (before Zigbee2MQTT's first message, or with `last_seen` disabled) the newest report of any entity
 of the device counts, as before. The entity is recognised by Zigbee2MQTT's unique ID
-(`<IEEE address>_last_seen_<base topic>`), so renaming it changes nothing.
+(`<IEEE address>_last_seen_<base topic>`, the base topic being that of the room sensor's own
+unique ID), so renaming it changes nothing. Only its current value is read: Home Assistant does
+not restore it after a restart (an MQTT sensor without `expire_after`), so it comes from
+Zigbee2MQTT's republish after the birth message, and the recorder leaves it out
+(`homeassistant/configuration.yaml`).
 
 `compose.yaml` makes Zigbee2MQTT enable it for every device it discovers. One that Home Assistant
 registered disabled before that is enabled by the integration when Home Assistant has started,

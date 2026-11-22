@@ -173,7 +173,12 @@ def test_the_device_options_are_written_and_nothing_else_of_the_state_changes(
 
 
 def test_device_options_set_elsewhere_are_replaced(data: Path) -> None:
-    """compose.yaml owns ``device_options``: one set in the web UI is gone at the next start."""
+    """compose.yaml owns ``device_options``: the variable replaces whatever the file held.
+
+    Zigbee2MQTT applies the environment at every write of the file (``settings.ts:239``,
+    re-read at 263), the one a change in its web UI makes included, so a ``device_options``
+    set there never takes effect. A start is the write this test can make.
+    """
     before = _configuration() | {"device_options": {"retain": True}}
     (data / "configuration.yaml").write_text(yaml.safe_dump(before), encoding="utf-8")
     _start(data)

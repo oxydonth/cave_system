@@ -114,7 +114,7 @@ _FEED_STEP: Final = 0.1
 # Only a missing or unavailable entity cannot be written; one that has no value yet can.
 _NOT_WRITABLE: Final = "unavailable"
 # The unique ID Zigbee2MQTT gives a device's last_seen sensor.
-_LAST_SEEN_UNIQUE_ID: Final = re.compile(r"0x[0-9a-f]{16}_last_seen_.+")
+_LAST_SEEN_UNIQUE_ID: Final = re.compile(r"(0x[0-9a-f]{16})_last_seen_(.+)")
 
 
 def applied_file_path(hass: HomeAssistant) -> Path:
@@ -163,16 +163,22 @@ def _writable(state: State | None) -> bool:
     return state is not None and state.state != _NOT_WRITABLE
 
 
-def is_last_seen(entry: er.RegistryEntry) -> bool:
-    """Whether an entity is a device's ``last_seen`` sensor from Zigbee2MQTT's discovery.
+def is_last_seen(entry: er.RegistryEntry, sensor: er.RegistryEntry) -> bool:
+    """Whether ``entry`` is the ``last_seen`` sensor Zigbee2MQTT discovered for ``sensor``'s device.
 
-    Zigbee2MQTT's unique ID is ``<IEEE address>_last_seen_<base topic>`` (homeassistant.ts,
-    ``discover``), which stays when the owner renames the entity.
+    Zigbee2MQTT's unique IDs are ``<IEEE address>_<object id>_<base topic>`` (homeassistant.ts,
+    ``discover``), which stay when the owner renames an entity. The base topic is taken from the
+    room sensor's own unique ID, so an entity whose object ID merely starts with ``last_seen_``
+    does not count.
     """
+    match = _LAST_SEEN_UNIQUE_ID.fullmatch(entry.unique_id)
+    if entry.domain != "sensor" or entry.platform != "mqtt" or match is None:
+        return False
+    ieee, base_topic = match.groups()
     return (
-        entry.domain == "sensor"
-        and entry.platform == "mqtt"
-        and _LAST_SEEN_UNIQUE_ID.fullmatch(entry.unique_id) is not None
+        sensor.platform == "mqtt"
+        and sensor.unique_id.startswith(f"{ieee}_")
+        and sensor.unique_id.endswith(f"_{base_topic}")
     )
 
 
@@ -561,6 +567,15 @@ class HeatingRuntime:
             if item.entity_id != entity_id
         ]
 
+    def _last_seen_entries(
+        self, sensor: str, entries: list[er.RegistryEntry]
+    ) -> list[er.RegistryEntry]:
+        """Of a room sensor's device's ``entries``, its Zigbee2MQTT ``last_seen`` sensor."""
+        own = er.async_get(self.hass).async_get(sensor)
+        if own is None:
+            return []
+        return [entry for entry in entries if is_last_seen(entry, own)]
+
     @callback
     def _enable_last_seen(self) -> None:
         """Enable the ``last_seen`` sensor of each room sensor's device, if it was never enabled.
@@ -576,8 +591,8 @@ class HeatingRuntime:
         registry = er.async_get(self.hass)
         by_integration = er.RegistryEntryDisabler.INTEGRATION
         for sensor in self._sensor_devices:
-            for entry in self._device_entries(sensor):
-                if is_last_seen(entry) and entry.disabled_by is by_integration:
+            for entry in self._last_seen_entries(sensor, self._device_entries(sensor)):
+                if entry.disabled_by is by_integration:
                     _LOGGER.info(
                         "Enabling %s, so that every message of the room sensor %s counts",
                         entry.entity_id,
@@ -942,8 +957,8 @@ class HeatingRuntime:
         if siblings != self._sensor_devices.get(sensor, set()):
             self._sensor_devices[sensor] = siblings
             self._resubscribe = True
-        for entry in entries:
-            if is_last_seen(entry) and (seen := self._last_seen(entry.entity_id)) is not None:
+        for entry in self._last_seen_entries(sensor, entries):
+            if (seen := self._last_seen(entry.entity_id)) is not None:
                 return seen
         times = []
         for entity_id in {sensor, *siblings}:

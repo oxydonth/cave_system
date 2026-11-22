@@ -185,7 +185,9 @@ one that has stopped sending. Leave it enabled. If you paired devices before thi
 `Last seen` is disabled; `cave_heating` enables the room sensors' itself when it starts or when
 you run `./cave apply`, and Home Assistant then reloads its MQTT integration about half a minute
 later, which makes every Zigbee device unavailable for a moment. A `Last seen` you disabled
-yourself is left alone, and the room then judges the sensor by its readings alone.
+yourself is left alone, and the room then judges the sensor by its readings alone. Further
+device options for Zigbee2MQTT go into `compose.override.yaml`, not its web UI, as the comment at
+`ZIGBEE2MQTT_CONFIG_DEVICE_OPTIONS` in `compose.yaml` explains.
 
 The names follow Zigbee2MQTT's and the FRITZ! integration's scheme; the entity page in Home
 Assistant is the final word, and a name that differs from the table is the one to write into the

@@ -165,18 +165,23 @@ at least every three hours when nothing changes, and whether Zigbee2MQTT then mo
 what this point checks.
 
 - **Observe.** After pairing, open the room sensor's device page in Home Assistant: `Last seen`
-  is listed under Diagnostic, enabled, with a time. If it says disabled, run `./cave apply` (or
-  restart Home Assistant) and look again a minute later: about half a minute after the `apply`
-  every Zigbee device shows unavailable for a moment (Home Assistant reloads its MQTT integration),
-  then their values return within another half minute; note how long it took, and whether a
-  thermostat received anything but its settings meanwhile (Zigbee2MQTT's log). Then, after a night in which the room was
-  empty and steady, open the **History** of the sensor's temperature, humidity and `Last seen`. Is
-  there a stretch of three hours or more in which neither temperature nor humidity changed? If so,
-  did `Last seen` move at least every three hours during it, and did the room's
+  is listed under Diagnostic, enabled, with a time. If it is disabled, open the entity's settings:
+  when Home Assistant says it was disabled by the integration, run `./cave apply` (or restart Home
+  Assistant), which enables it; when it says disabled by the user, enable it there by hand
+  (`cave_heating` leaves an owner's choice alone). Then look again a minute later: about half a
+  minute after it was enabled every Zigbee device shows unavailable for a moment (Home Assistant
+  reloads its MQTT integration), and their values return within another half minute. Note how
+  long it took, and whether a thermostat received anything but its settings meanwhile
+  (`sudo -u cave ./cave logs --tail 200 zigbee2mqtt`). Then, after a night in which the room was
+  empty and steady, open the **History** of the sensor's temperature and humidity. Is there a
+  stretch of three hours or more in which neither changed? If so, did the room's
   `climate.cave_<room>` show the sensor's temperature throughout (not the thermostats' average)?
-- **Result:** longest steady stretch ______ ; longest gap between two `Last seen` times ______ ;
-  the room showed the thermostats' reading: yes / no.
-- **Do with it.** A gap of `Last seen` longer than three hours means the sensor reports less often
+  `Last seen` has no history (the recorder leaves it out, `homeassistant/configuration.yaml`):
+  how often the sensor sent during the stretch shows in Zigbee2MQTT's log, one `MQTT publish`
+  line on `zigbee2mqtt/<name>` per message.
+- **Result:** longest steady stretch ______ ; longest gap between two messages of the sensor
+  ______ ; the room showed the thermostats' reading: yes / no.
+- **Do with it.** A gap between messages longer than three hours means the sensor reports less often
   than assumed: raise `sensor_stale` in the `timing:` block above that gap, and report it on the
   issue. The room showing the thermostats' reading while `Last seen` moved is a defect to report.
 

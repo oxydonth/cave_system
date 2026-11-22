@@ -162,8 +162,8 @@ class Zigbee2Mqtt:
             device.cache.update(changes)
         message = dict(device.cache)
         if self.settings.last_seen != "disable":
-            last_seen = self._last_heard.get(device.friendly_name, self.clock.now())
-            message["last_seen"] = format_last_seen(last_seen, self.settings.last_seen)
+            heard = self.last_heard(device)
+            message["last_seen"] = format_last_seen(heard, self.settings.last_seen)
         message["linkquality"] = device.linkquality
         if device.model.ota and (message.get("update") or {}).get("latest_version") is None:
             # adjustMessageBeforePublish in homeassistant.ts
@@ -192,6 +192,10 @@ class Zigbee2Mqtt:
     def available(self, device: ZigbeeDevice) -> bool:
         """Whether Zigbee2MQTT shows the device as available."""
         return self._available.get(device.friendly_name, True)
+
+    def last_heard(self, device: ZigbeeDevice) -> float:
+        """When Zigbee2MQTT last heard the device (its ``last_seen``), on the simulator's clock."""
+        return self._last_heard.get(device.friendly_name, self.clock.now())
 
     def device_heard(self, device: ZigbeeDevice, *, publish: bool = True) -> None:
         """A message from the device arrived (``onLastSeenChanged``)."""

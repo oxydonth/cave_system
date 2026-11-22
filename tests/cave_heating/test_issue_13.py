@@ -135,6 +135,24 @@ async def test_an_off_that_never_arrives_after_its_target_is_resent_at_the_timeo
     assert trv.commands == [heat(22.0), OFF, OFF]
 
 
+async def test_an_off_at_the_device_before_a_target_only_command_arrives_is_put_back_at_once(
+    hass: HomeAssistant, home: FakeHome, freezer: FrozenDateTimeFactory
+) -> None:
+    """Review of #29, the other side of the waiting: ``set_temperature 22`` goes out without a
+    mode (the thermostat is in heat). Before it arrives, the thermostat is switched off at the
+    device (a Sonoff or Bosch keeps its setpoint in off); then 22 arrives and it reports off at
+    22. Nothing in flight sets the mode, so it is put back after the debounce."""
+    trv = await _deaf_room(home, freezer)
+    await _call(hass, "number", "set_value", entity_id=COMFORT, value=22)
+    await home.advance(freezer, 3 * SEC)
+    assert trv.commands == [heat(22.0)]
+    trv.report(mode="off")
+    await home.advance(freezer, 10 * SEC)
+    trv.report(target=22.0)
+    await home.advance(freezer, 10 * SEC)
+    assert trv.commands == [heat(22.0), heat(22.0, "heat")], "put back at once"
+
+
 async def _off_thermostat(home: FakeHome, freezer: FrozenDateTimeFactory) -> FakeThermostat:
     """A thermostat in ``off`` at 21 in a room that wants heat at 22: one heat command with
     its mode goes out at the start."""

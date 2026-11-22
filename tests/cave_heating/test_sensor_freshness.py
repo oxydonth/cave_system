@@ -8,15 +8,21 @@ are written by hand, so the tests say exactly what Home Assistant would show (is
 from __future__ import annotations
 
 from datetime import datetime, timedelta
+from pathlib import Path
 
 import pytest
+import yaml
 from freezegun.api import FrozenDateTimeFactory
+from homeassistant.components import recorder
 from homeassistant.core import HomeAssistant
 from homeassistant.helpers import device_registry as dr
 from homeassistant.helpers import entity_registry as er
+from homeassistant.helpers.entityfilter import convert_include_exclude_filter
 from pytest_homeassistant_custom_component.common import MockConfigEntry
 
 from tests.cave_heating.fakes import FakeHome, FakeNumber, config, room
+
+CONFIGURATION = Path(__file__).resolve().parents[2] / "homeassistant" / "configuration.yaml"
 
 SEC = timedelta(seconds=1)
 MIN = timedelta(minutes=1)
@@ -71,6 +77,31 @@ async def _room(home: FakeHome, temperature: str) -> None:
 
 def _shown(home: FakeHome) -> float:
     return float(home.state(LIVING).attributes["current_temperature"])
+
+
+def test_the_recorder_leaves_out_every_last_seen_and_nothing_the_heating_shows() -> None:
+    """homeassistant/configuration.yaml: ``last_seen`` changes with every message of every
+    device, so it is not recorded; the controller reads only its current value. The room
+    sensor's readings and the thermostats keep their history."""
+
+    class Loader(yaml.SafeLoader):
+        """Home Assistant's ``!include`` tags are read as nothing: only ``recorder`` matters."""
+
+    Loader.add_multi_constructor("!", lambda _loader, _suffix, _node: None)
+    configuration = yaml.load(CONFIGURATION.read_text(encoding="utf-8"), Loader=Loader)  # noqa: S506
+    section = configuration["recorder"]
+    conf = recorder.CONFIG_SCHEMA({"recorder": section})["recorder"]
+    recorded = convert_include_exclude_filter(conf).get_filter()
+    for entity_id in ("sensor.wohnzimmer_last_seen", "sensor.wohnzimmer_heizung_tuer_last_seen"):
+        assert not recorded(entity_id), entity_id
+    for entity_id in (
+        "sensor.wohnzimmer_temperature",
+        "sensor.wohnzimmer_humidity",
+        "climate.wohnzimmer_heizung_tuer",
+        "climate.cave_living_room",
+        "binary_sensor.wohnzimmer_fenster_contact",
+    ):
+        assert recorded(entity_id), entity_id
 
 
 async def test_a_sensor_whose_values_repeat_stays_fresh_while_last_seen_moves(
@@ -193,10 +224,19 @@ async def test_only_the_last_seen_of_a_room_sensor_is_enabled(
         device_id=sensor_device.device_id,
         disabled_by=er.RegistryEntryDisabler.INTEGRATION,
     )
+    # An MQTT entity whose object ID only starts with last_seen_: its unique ID does not end in
+    # the room sensor's base topic after "_last_seen_".
+    prefixed = registry.async_get_or_create(
+        "sensor",
+        "mqtt",
+        f"{IEEE}_last_seen_extra_zigbee2mqtt",
+        device_id=sensor_device.device_id,
+        disabled_by=er.RegistryEntryDisabler.INTEGRATION,
+    )
     home.set(temperature, "20.4")
     await _room(home, temperature)
-    assert registry.async_get(elsewhere.entity_id).disabled_by is not None  # type: ignore[union-attr]
-    assert registry.async_get(lookalike.entity_id).disabled_by is not None  # type: ignore[union-attr]
+    for entry in (elsewhere, lookalike, prefixed):
+        assert registry.async_get(entry.entity_id).disabled_by is not None  # type: ignore[union-attr]
 
 
 async def test_a_last_seen_registered_disabled_after_the_start_is_enabled(

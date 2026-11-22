@@ -624,7 +624,7 @@ def apply_options(
     if "homeassistant" not in options:
         return {topic: copy.deepcopy(dict(payload)) for topic, payload in messages.items()}
     homeassistant = options["homeassistant"]
-    if not homeassistant:
+    if _js_falsy(homeassistant):
         return {}
     if not isinstance(homeassistant, Mapping):
         raise ValueError(f"homeassistant option must be an object, got {homeassistant!r}")
@@ -644,6 +644,15 @@ def apply_options(
             _add(payload, own, ignore_name=False)
         result[topic] = payload
     return result
+
+
+def _js_falsy(value: Any) -> bool:
+    """JavaScript's ``!value`` for a value from YAML or JSON: an empty object is true there."""
+    if value is None or value is False or value == "":
+        return True
+    if isinstance(value, int | float) and not isinstance(value, bool):
+        return value == 0 or value != value  # 0 and NaN
+    return False
 
 
 def _add(payload: dict[str, Any], values: Mapping[str, Any], *, ignore_name: bool) -> None:

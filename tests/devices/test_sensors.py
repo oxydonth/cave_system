@@ -3,6 +3,8 @@ integration, with cave_heating on top. A TRVZB is the room's thermostat througho
 
 from __future__ import annotations
 
+from datetime import timedelta
+
 import pytest
 from homeassistant.helpers import entity_registry as er
 from homeassistant.util import dt as dt_util
@@ -163,7 +165,9 @@ async def test_sensor_last_seen_enabled_after_an_upgrade(rig: Rig, device: str) 
     await rig.start(
         TRVZB,
         zigbee2mqtt={"device_options": {}},
-        room={"comfort_temperature": 19.0},
+        # A close delay far shorter than the reload, so that only window_unavailable_grace can
+        # hold the pause through it.
+        room={"comfort_temperature": 19.0, "window_close_delay": "00:00:05"},
         before_heating=before_upgrade,
     )
     assert registry.async_get(LAST_SEEN).disabled_by is None, "enabled by cave_heating"
@@ -198,7 +202,7 @@ async def test_sensor_last_seen_enabled_after_an_upgrade(rig: Rig, device: str) 
         await second()
     assert seen[CONTACT] == ["on", "unavailable", "unknown", "on"]
     assert seen[TRVZB.climate] == ["off", "unavailable", "unknown", "off"]
-    assert seen[WINDOW_OPEN] == ["on"], "the pause held through the reload"
+    assert seen[WINDOW_OPEN] == ["on"], "the grace held the pause through the reload"
     assert rig.commands(TRVZB) == [], "no mode or target command"
     to_zigbee2mqtt = [
         (message.topic, message.payload.decode())
@@ -212,7 +216,14 @@ async def test_sensor_last_seen_enabled_after_an_upgrade(rig: Rig, device: str) 
         f"zigbee2mqtt/{TRVZB.name}/set/open_window": "OFF",
     }
     assert all(settings.get(topic) == payload for topic, payload in to_zigbee2mqtt), to_zigbee2mqtt
-    assert dt_util.parse_datetime(rig.state(LAST_SEEN).state) is not None
+    # Not restored by Home Assistant (an MQTT sensor without expire_after is not), and not
+    # recorded: the value comes from Zigbee2MQTT's republish, and it is the time the sensor was
+    # last heard, not the time of the republish.
+    last_seen = dt_util.parse_datetime(rig.state(LAST_SEEN).state)
+    assert last_seen is not None
+    heard = rig.sim.home.zigbee.last_heard(rig.sim.home.zigbee.devices[SENSOR_NAME])
+    assert abs(last_seen.timestamp() - heard) < 1
+    assert last_seen < rig.state(LAST_SEEN).last_reported - timedelta(seconds=30)
     assert not rig.problem()
 
     rig.sim.home.set_window(CONTACT_ID, False)

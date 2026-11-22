@@ -155,6 +155,8 @@ class ThermostatDriver:
         self.exempt_until: datetime | None = now + self.timing.confirm_timeout
         # The mode the thermostat will be in once the commands in flight have arrived.
         self.expected_mode: str | None = None
+        # Whether the last command sent sets the mode (set_hvac_mode, or hvac_mode with a target).
+        self.mode_sent = False
         self.hold_until: datetime | None = None
         self.budget: deque[datetime] = deque()
         self.budget_exhausted = False  # a send is being held back by the budget
@@ -256,6 +258,7 @@ class ThermostatDriver:
         self.resending = False
         self.queue.clear()
         self.expected_mode = None
+        self.mode_sent = False
         self.disagreeing = False
 
     def on_report(
@@ -331,10 +334,13 @@ class ThermostatDriver:
 
         A heat command carries its mode with its target, and an off after a target is a second
         command; the device may report the target first. Then the command still in flight is
-        what makes the thermostat match, and the normal confirmation applies (issue #13).
+        what makes the thermostat match, and the normal confirmation applies (issue #13). Only
+        a command that sets the mode counts: ``expected_mode`` is set for every command, also a
+        target sent alone, which puts back no mode switched at the device meanwhile.
         """
         return (
             self.phase is Phase.PENDING
+            and self.mode_sent
             and self.expected_mode is not None
             and self.expected_mode != report.mode
             and self.matches(replace(report, mode=self.expected_mode))
@@ -369,6 +375,7 @@ class ThermostatDriver:
         self.resending = False
         self.budget_exhausted = False
         self.expected_mode = None
+        self.mode_sent = False
         self.disagreeing = False
         self.disagreed_since_retry = False
         self.error = None
@@ -463,6 +470,7 @@ class ThermostatDriver:
             if not same(expected, command.target):
                 self.queue.append(command.target)
         self.expected_mode = OFF if command.service == "set_hvac_mode" else self.report.heat_mode
+        self.mode_sent = command.service == "set_hvac_mode" or "hvac_mode" in command.data
         if self.phase is Phase.UNRESPONSIVE:
             self.deadline = now + self.timing.retry_interval
         else:
@@ -492,6 +500,7 @@ class ThermostatDriver:
         self.send_due = None
         self.resending = False
         self.expected_mode = None
+        self.mode_sent = False
         self.disagreeing = False
         self.error = error
         return True

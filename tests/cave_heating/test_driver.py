@@ -466,6 +466,30 @@ def test_a_setpoint_reported_before_the_mode_of_its_command_is_not_corrected() -
     assert resend.data == {"temperature": 22.0, "hvac_mode": "heat"}
 
 
+@pytest.mark.parametrize("slow", [False, True])
+def test_an_off_at_the_device_while_a_target_only_command_is_in_flight_is_corrected_at_once(
+    slow: bool,
+) -> None:
+    """Review of #29: the wait applies only when the pending command sets the mode.
+
+    Heat at 21 is confirmed; 22 goes out without a mode, since the thermostat is in heat.
+    Before it arrives, the thermostat is switched off at the device and then reports off at 22.
+    Nothing in flight will put the mode back, so it is corrected after the debounce, with the
+    mode, on a slow thermostat as on a fast one (not at the confirmation timeout).
+    """
+    driver = ThermostatDriver("climate.t", TIMING, slow=slow, now=T0 - HOUR)
+    driver.set_want(Want(heat=True, target=21.0), T0 - HOUR)
+    driver.on_report(report(21.0), T0 - HOUR)
+    command = send(driver, 22.0, T0)
+    assert command.data == {"temperature": 22.0}, "a target-only command"
+    driver.on_report(report(21.0, mode="off"), T0 + 10 * SEC)
+    driver.on_report(report(22.0, mode="off"), T0 + 20 * SEC)
+    assert driver.phase is Phase.OK, "not waiting: no mode is in flight"
+    correction = driver.tick(T0 + 20 * SEC + TIMING.debounce)
+    assert correction is not None
+    assert correction.data == {"temperature": 22.0, "hvac_mode": "heat"}
+
+
 def test_a_report_that_empties_the_queue_with_a_different_target_is_still_corrected() -> None:
     """The other side: only a difference the mode in flight would remove is waited for. The
     thermostat reports the target sent but in the wrong mode and another target is wanted by

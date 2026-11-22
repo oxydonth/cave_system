@@ -285,8 +285,9 @@ def test_the_homeassistant_option_is_applied_as_zigbee2mqtt_applies_it() -> None
     assert applied[LAST_SEEN_TOPIC]["name"] == "Zuletzt gesehen"
     assert "icon" not in applied[LAST_SEEN_TOPIC]
     assert plain[LAST_SEEN_TOPIC]["icon"] == "mdi:clock", "the input is not changed"
-    assert apply_options(plain, {"homeassistant": None}) == {}
-    assert apply_options(plain, {"homeassistant": False}) == {}
+    for falsy in (None, False, 0, ""):
+        assert apply_options(plain, {"homeassistant": falsy}) == {}, falsy
+    assert apply_options(plain, {"homeassistant": {}}) == plain, "{} is true in JavaScript"
 
 
 def test_renaming_an_entity_through_the_options_is_refused() -> None:
