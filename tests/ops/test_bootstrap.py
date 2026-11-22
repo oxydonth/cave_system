@@ -296,5 +296,9 @@ def test_a_second_run_runs_the_tool_again_and_leaves_the_state_as_it_was(
     result = run_cave("bootstrap")
 
     assert result.code == 0, result.err
-    assert snapshot(ctx.paths.data) == before
+    # The lock of concept section 4.5 records its holder in .cave/lock; that is the lock's own
+    # bookkeeping, not state.
+    after = snapshot(ctx.paths.data)
+    assert after.pop(".cave/lock")[0] == before.pop(".cave/lock")[0]
+    assert after == before
     assert len(fake_runner.matching(*TOOL)) == 2

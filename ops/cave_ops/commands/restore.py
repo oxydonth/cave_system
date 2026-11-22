@@ -188,6 +188,11 @@ def run(ctx: Context, args: argparse.Namespace) -> int:
     # against that release. Checked before anything is created, and again under the lock.
     before = load_update_record(ctx).switch
     _check_release(ctx, archive.manifest, args.force, before.from_commit if before else "HEAD")
+    if not data.exists():
+        # A new state directory belongs to the service user, as `init` would make it; the lock
+        # then gives `.cave` and the lock file to that owner too.
+        data.mkdir(parents=True, mode=0o750)
+        _server.give_to_checkout_owner(ctx, data)
     _server.cave_dir(ctx).mkdir(parents=True, exist_ok=True)
     with ctx.lock("restore"):
         switch = load_update_record(ctx).switch

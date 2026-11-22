@@ -41,6 +41,7 @@ from ..heating import validate_and_store
 from ..lock import LockBusy
 from ..paths import CONTAINER_CONFIG, CONTAINER_TOOLS
 from ._common import require_initialised
+from ._update_state import maintenance_pending
 
 HELP = "Validate cave/heating.yaml, then use it: regenerate the dashboard and reload cave_heating"
 
@@ -151,6 +152,11 @@ def run(ctx: Context, args: argparse.Namespace) -> int:
 
 
 def _apply(ctx: Context) -> int:
+    pending = maintenance_pending(ctx)
+    if pending is not None:
+        ctx.warn(f"Not applied: {pending}.")
+        ctx.warn("Nothing was changed.")
+        return 1
     result = validate_and_store(ctx)
     if not result.ok:
         ctx.warn(f"{ctx.paths.heating} is not valid:")

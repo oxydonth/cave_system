@@ -107,6 +107,25 @@ def _switch(raw: dict[str, Any]) -> Switch:
     return Switch(**known)
 
 
+def maintenance_pending(ctx: Context) -> str | None:
+    """What an owner command (``apply``, ``bootstrap``) must not run into, or ``None``: an update
+    that was interrupted (its way back would put a snapshot back over whatever is changed now) or a
+    restore that stopped half-way (the state is half restored). ``backup`` refuses for the same."""
+    switch = load(ctx).switch
+    if switch is not None:
+        return (
+            f"an update to {switch.to_release} was interrupted ({switch.phase}); its way back "
+            "would undo a change made now. `sudo ./cave update --recover` finishes it"
+        )
+    restoring = _server.restore_in_progress(ctx)
+    if restoring is not None:
+        return (
+            f"a restore of {restoring} stopped half-way and the state is half restored. See "
+            "docs/operations.md, 'A restore that cannot finish'"
+        )
+    return None
+
+
 def save(ctx: Context, record: UpdateRecord) -> None:
     data = {
         "switch": asdict(record.switch) if record.switch else None,
