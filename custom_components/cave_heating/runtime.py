@@ -16,7 +16,7 @@ from __future__ import annotations
 import logging
 import math
 from collections.abc import Callable, Mapping
-from dataclasses import dataclass, field, fields
+from dataclasses import dataclass, field, fields, replace
 from datetime import datetime, timedelta
 from pathlib import Path
 from typing import Any, Final
@@ -76,6 +76,7 @@ from .driver import (
 from .logic import (
     UNAVAILABLE_STATES,
     AwayTracker,
+    Boost,
     Decision,
     HomeMode,
     Override,
@@ -305,6 +306,14 @@ class HeatingRuntime:
         if stored.get("mode") == RoomMode.OFF:
             state.mode = RoomMode.OFF
         state.hand = hand_from_dict(stored.get("hand"), dt_util.utcnow())
+        if isinstance(state.hand, Boost):
+            # A boost stored before its temperature was rounded (5.2: 0.5 K steps).
+            state.hand = replace(
+                state.hand,
+                temperature=round_target(
+                    state.hand.temperature, TEMPERATURE_STEP, MIN_TEMPERATURE, MAX_TEMPERATURE
+                ),
+            )
         return state
 
     def _log_file_differences(self) -> None:
@@ -355,7 +364,7 @@ class HeatingRuntime:
         )
         if previous is not None:
             # A reload keeps what the room was doing.
-            windows.paused = previous.windows.paused
+            windows.carry_over(previous.windows)
             room.decision = previous.decision
             room.refused_settings = dict(previous.refused_settings)
             # Owed settings are kept only while the file still lists them for that thermostat.
@@ -1255,8 +1264,12 @@ class HeatingRuntime:
     def boost(
         self, room: RoomRuntime, duration: timedelta | None, temperature: float | None
     ) -> None:
-        """``cave_heating.boost``."""
+        """``cave_heating.boost``; a temperature is rounded to the room's 0.5 K step (5.2)."""
         self.refuse_if_off(room)
+        if temperature is not None:
+            temperature = round_target(
+                temperature, TEMPERATURE_STEP, MIN_TEMPERATURE, MAX_TEMPERATURE
+            )
         room.state.start_boost(
             dt_util.utcnow(),
             duration or room.config.boost_duration,

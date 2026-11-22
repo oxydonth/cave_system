@@ -149,7 +149,7 @@ home). Each room is a device in the area named like the room.
 
 | Service | Fields | Does |
 |---|---|---|
-| `cave_heating.boost` | target: room thermostats (entity, device or area); `duration`, `temperature` optional | Boosts the rooms. A target that is not a room thermostat, or that reaches none, is refused with a message. |
+| `cave_heating.boost` | target: room thermostats (entity, device or area); `duration`, `temperature` optional | Boosts the rooms; a `temperature` is rounded to the 0.5 K step, half up. A target that is not a room thermostat, or that reaches none, is refused with a message. |
 | `cave_heating.resume_schedule` | target: room thermostats, refused like `boost` | Ends a boost or override. |
 | `cave_heating.reload` | none | Reads the applied copy again. Fails with the problems in its message (HTTP 400 over the REST API) if the file is not valid; the running configuration stays. |
 | `cave_heating.hold` | `entity_id`: a thermostat named in the file; `duration` optional, 15 minutes by default, more than zero and at most 4 hours | The controller sends the thermostat nothing and adopts nothing from it. Not kept across a restart. |
