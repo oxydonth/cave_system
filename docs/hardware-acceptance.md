@@ -132,6 +132,27 @@ protection, and a radiator that was off stays off.
 - **Result:** the thermostats kept their targets / did something else: ______ .
 - **Do with it.** Anything else than keeping their last setpoint is a defect to report.
 
+### 1.7 A room sensor in a perfectly steady room
+
+Known limitation, [issue #21](https://github.com/oxydonth/cave_system/issues/21): the room counts as
+having a stale sensor when neither the sensor nor any other entity of its device has reported for
+three hours (`sensor_stale`). Home Assistant records a state only when a value changed, so a sensor
+that is alive and reports every hour, but whose temperature, humidity and battery level all stay
+exactly the same for three hours, looks silent. The room then shows the average of its thermostats'
+own readings, and the temperature feed stops (a Bosch thermostat returns to its own sensor 30
+minutes later), until one value changes. How often a real SNZB-02P repeats both readings exactly is
+not known without hardware.
+
+- **Observe.** In a room that is empty and steady for at least three hours (the first night will
+  do), open the **History** of the room sensor's temperature, humidity and battery level. Is there a
+  stretch of three hours or more in which none of them changes? If so, the room shows the
+  thermostats' average reading during it instead of the sensor's, which you can see by comparing
+  the room's `climate.cave_<room>` current temperature with the sensor's.
+- **Result:** longest steady stretch ______ ; the room showed the thermostats' reading: yes / no.
+- **Do with it.** Degraded, not unsafe: the room is controlled on the thermostat's own reading, which
+  is high next to a radiator, and recovers by itself. Report what you saw on the issue, with the
+  length of the stretch: it decides how urgent the fix is.
+
 ## 2. Radio range
 
 Battery-powered Zigbee devices do not relay for each other, so each one has to reach the
