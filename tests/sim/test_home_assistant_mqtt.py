@@ -308,6 +308,34 @@ async def test_the_contact_sensor_reaches_home_assistant(
     assert hass.states.get("binary_sensor.test_contact_contact").state == "off"
 
 
+async def test_last_seen_is_enabled_and_moves_with_every_message(
+    hass: HomeAssistant, simulated_home: Any, freezer: Any
+) -> None:
+    """This project's device_options: every device's last_seen sensor is enabled when first
+    registered, and shows when Zigbee2MQTT last heard the device. linkquality stays disabled.
+    (That it moves while every value repeats: tests/devices, sensor_stays_fresh_while_it_reports.)
+    """
+    sim = await simulated_home(ONE_OF_EACH, setup_fritzbox=False)
+    registry = er.async_get(hass)
+    for device in ("test_trv_zbt", "test_trvzb", "test_bosch", "test_climate", "test_contact"):
+        entry = registry.async_get(f"sensor.{device}_last_seen")
+        assert entry is not None
+        assert entry.disabled_by is None, device
+        linkquality = registry.async_get(f"sensor.{device}_linkquality")
+        assert linkquality is not None
+        assert linkquality.disabled_by is er.RegistryEntryDisabler.INTEGRATION
+    before = hass.states.get("sensor.test_climate_last_seen")
+    assert before is not None
+    assert before.attributes["device_class"] == "timestamp"
+    await async_advance(hass, freezer, 2 * 3600)
+    after = hass.states.get("sensor.test_climate_last_seen")
+    assert after is not None
+    assert after.state > before.state, "the device's reports moved it"
+    assert sim.home.zigbee.settings.device_options == {
+        "homeassistant": {"last_seen": {"enabled_by_default": True}}
+    }
+
+
 async def test_demo_home_entity_ids(hass: HomeAssistant, simulated_home: Any) -> None:
     """The demo home produces the entity IDs listed in sim/README.md."""
     await simulated_home(DEMO_HOME)

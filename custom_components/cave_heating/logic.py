@@ -254,6 +254,9 @@ class WindowPause:
             return
         if previous is not None and previous.state is Contact.SILENT and state is Contact.MISSING:
             return  # 5.4: an entity that does not exist counts as unavailable
+        if previous is not None and previous.state is Contact.OPEN and state is Contact.MISSING:
+            # Removed while open: like a contact that goes silent while open (issue #13).
+            state = Contact.SILENT
         # A contact silent while open counts as open only for its grace; after that the opening
         # is over, and a contact that answers again starts afresh.
         was_open = previous is not None and (

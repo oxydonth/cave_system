@@ -13,7 +13,7 @@ from __future__ import annotations
 
 from collections import deque
 from collections.abc import Mapping
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from datetime import datetime, timedelta
 from decimal import ROUND_HALF_UP, Decimal
 from enum import Enum, StrEnum
@@ -312,7 +312,11 @@ class ThermostatDriver:
             and self._is_hand_change(previous, report)
         ):
             return ReportOutcome(returned=returned, hand_target=report.target)
-        if emptied and self.phase in (Phase.PENDING, Phase.UNRESPONSIVE):
+        if (
+            emptied
+            and self.phase in (Phase.PENDING, Phase.UNRESPONSIVE)
+            and not self._mode_in_flight(report)
+        ):
             # It reported the last target sent and still differs: correct it at once rather
             # than at the confirmation timeout.
             self.phase = Phase.OK
@@ -321,6 +325,20 @@ class ThermostatDriver:
         if self.phase is Phase.OK:
             self._request_send(now)
         return ReportOutcome(returned=returned)
+
+    def _mode_in_flight(self, report: Report) -> bool:
+        """Whether the pending command sets a mode with which the thermostat would match.
+
+        A heat command carries its mode with its target, and an off after a target is a second
+        command; the device may report the target first. Then the command still in flight is
+        what makes the thermostat match, and the normal confirmation applies (issue #13).
+        """
+        return (
+            self.phase is Phase.PENDING
+            and self.expected_mode is not None
+            and self.expected_mode != report.mode
+            and self.matches(replace(report, mode=self.expected_mode))
+        )
 
     def _consume(self, target: float | None) -> bool:
         """A reported target that was sent: drop the queue up to its first occurrence."""

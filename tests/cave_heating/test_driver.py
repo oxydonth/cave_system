@@ -190,15 +190,22 @@ def test_no_hand_change_for_one_confirmation_timeout_after_each_moment(moment: s
     assert after.hand_target == 23.5
 
 
-@pytest.mark.parametrize("moment", ["start", "return"])
+@pytest.mark.parametrize("moment", ["start", "return", "release"])
 def test_a_slow_thermostat_is_exempt_for_confirm_timeout_too(moment: str) -> None:
-    """P10 as decided: confirm_timeout for every thermostat, not confirm_timeout_slow."""
-    driver = ThermostatDriver("climate.t", TIMING, slow=True, now=T0)
-    driver.set_want(Want(heat=True, target=21.0), T0)
-    driver.on_report(report(21.0), T0)
+    """P10 as decided: confirm_timeout for every thermostat, not confirm_timeout_slow.
+
+    ``release`` is issue #13's: the window after a hold ends, on a slow thermostat.
+    """
+    start = T0 - HOUR if moment == "release" else T0
+    driver = ThermostatDriver("climate.t", TIMING, slow=True, now=start)
+    driver.set_want(Want(heat=True, target=21.0), start)
+    driver.on_report(report(21.0), start)
     if moment == "return":
         driver.on_report(None, T0)
         driver.on_report(report(21.0), T0)
+    if moment == "release":
+        driver.hold(T0 - 10 * MIN, timedelta(minutes=15))
+        driver.release(T0)
     inside = driver.on_report(report(23.0), T0 + TIMING.confirm_timeout - SEC, adopt=True)
     assert inside.hand_target is None
     driver.on_report(report(21.0), T0 + TIMING.confirm_timeout)
@@ -395,6 +402,84 @@ def test_a_report_that_empties_the_queue_while_differing_is_corrected_at_once() 
     correction = driver.tick(T0 + 20 * SEC + TIMING.debounce)
     assert correction is not None
     assert correction.data["temperature"] == 21.0
+
+
+def test_an_unresponsive_thermostat_that_reports_its_last_target_is_corrected_at_once() -> None:
+    """Issue #13: the correction when a report empties the queue applies while unresponsive.
+
+    25 is sent and never confirmed until the resends are used up. Meanwhile 21 is wanted again,
+    which the thermostat still reports, so nothing is sent. Then the late report of 25 arrives:
+    the thermostat answers after all, and it is corrected after the debounce, not at the next
+    retry_interval.
+    """
+    driver = started(target=21.0)
+    now = T0
+    send(driver, 25.0, now)
+    while driver.phase is not Phase.UNRESPONSIVE:
+        now += TIMING.confirm_timeout
+        driver.tick(now)
+    assert driver.queue == [25.0]
+    driver.set_want(Want(heat=True, target=21.0), now + SEC)
+    assert driver.send_due is None, "it still reports 21"
+    driver.on_report(report(25.0), now + 2 * SEC)
+    assert driver.phase is Phase.OK
+    correction = driver.tick(now + 2 * SEC + TIMING.debounce)
+    assert correction is not None
+    assert correction.data["temperature"] == 21.0
+    assert driver.deadline == now + 2 * SEC + TIMING.debounce + TIMING.confirm_timeout
+
+
+def test_a_target_reported_while_an_off_is_in_flight_is_not_corrected() -> None:
+    """Issue #13: 22, then off before 22 is reported. The report of 22 empties the queue, but
+    the off in flight is what makes the thermostat match: it is not sent again, and the
+    confirmation timeout still applies to it."""
+    driver = started(target=21.0)
+    assert send(driver, 22.0, T0).data == {"temperature": 22.0}
+    driver.set_want(Want(heat=False, target=22.0), T0 + SEC)
+    off = driver.tick(T0 + SEC + TIMING.debounce)
+    assert off is not None
+    assert off.service == "set_hvac_mode"
+    sent_off = T0 + SEC + TIMING.debounce
+    driver.on_report(report(22.0), sent_off + SEC)
+    assert driver.queue == []
+    assert driver.phase is Phase.PENDING, "waiting for the off"
+    assert driver.send_due is None, "nothing sent again"
+    assert driver.next_deadline(sent_off + SEC) == sent_off + TIMING.confirm_timeout
+    driver.on_report(report(22.0, mode="off"), sent_off + 5 * SEC)
+    assert driver.phase is Phase.OK
+
+
+def test_a_setpoint_reported_before_the_mode_of_its_command_is_not_corrected() -> None:
+    """Issue #13: heat with its mode, the setpoint reported first. Not sent again; and if the
+    mode never arrives, the command is resent at the confirmation timeout, mode included."""
+    driver = ThermostatDriver("climate.t", TIMING, slow=False, now=T0 - HOUR)
+    driver.set_want(Want(heat=False, target=21.0), T0 - HOUR)
+    driver.on_report(report(21.0, mode="off"), T0 - HOUR)
+    command = send(driver, 22.0, T0)
+    assert command.data == {"temperature": 22.0, "hvac_mode": "heat"}
+    driver.on_report(report(22.0, mode="off"), T0 + SEC)
+    assert driver.queue == []
+    assert driver.phase is Phase.PENDING, "waiting for the mode"
+    assert driver.tick(T0 + SEC + TIMING.debounce) is None, "nothing sent again"
+    resend = driver.tick(T0 + TIMING.confirm_timeout)
+    assert resend is not None
+    assert resend.data == {"temperature": 22.0, "hvac_mode": "heat"}
+
+
+def test_a_report_that_empties_the_queue_with_a_different_target_is_still_corrected() -> None:
+    """The other side: only a difference the mode in flight would remove is waited for. The
+    thermostat reports the target sent but in the wrong mode and another target is wanted by
+    then: corrected at once."""
+    driver = ThermostatDriver("climate.t", TIMING, slow=False, now=T0 - HOUR)
+    driver.set_want(Want(heat=False, target=21.0), T0 - HOUR)
+    driver.on_report(report(21.0, mode="off"), T0 - HOUR)
+    send(driver, 22.0, T0)
+    driver.set_want(Want(heat=True, target=23.0), T0 + SEC)
+    driver.on_report(report(22.0, mode="off"), T0 + 2 * SEC)
+    assert driver.phase is Phase.OK, "no longer waiting for the command in flight"
+    correction = driver.tick(T0 + 2 * SEC + TIMING.debounce)
+    assert correction is not None
+    assert correction.data == {"temperature": 23.0, "hvac_mode": "heat"}
 
 
 # --- Other edges ---------------------------------------------------------------------------------
