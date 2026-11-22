@@ -15,15 +15,13 @@ jobs:
     runs-on: ubuntu-24.04
     timeout-minutes: 15
     env:
-      # The broker of concept section 2. Its digest is the registry's index digest for the tag.
-      MOSQUITTO_IMAGE: eclipse-mosquitto:2.0.22@sha256:81a6193ae693942a3231cd3ac52875b02b7e3a19da671b2fb4b55cc874c5b279
       NETWORK: cave-sim-ci
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           persist-credentials: false
 
-      - name: Validate compose.sim.yaml as an overlay on compose.yaml
+      - name: Validate compose.sim.yaml as an overlay on compose.yaml and take the broker image from it
         env:
           # Placeholders: `config` only resolves them.
           CAVE_DATA: /tmp/cave-validation
@@ -38,6 +36,10 @@ jobs:
           jq -e '.services.sim.depends_on.mosquitto.condition == "service_healthy"' <<< "${merged}" > /dev/null
           jq -e '[.services.sim.ports[] | "\(.host_ip):\(.published)"] | sort == ["127.0.0.1:8480", "127.0.0.1:8481"]' \
             <<< "${merged}" > /dev/null
+          # The broker for the steps below is the one the stack runs: the image of the mosquitto
+          # service, so that an update of it in compose.yaml is tested here as well.
+          mosquitto_image="$(jq -er '.services.mosquitto.image' <<< "${merged}")"
+          echo "MOSQUITTO_IMAGE=${mosquitto_image}" >> "${GITHUB_ENV}"
 
       - name: Build the image
         run: docker build -f sim/Dockerfile -t cave-sim:ci .

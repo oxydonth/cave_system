@@ -198,16 +198,45 @@ def test_check_fails_when_the_compose_file_is_invalid_but_still_checks_the_rest(
     assert fake_runner.ran("docker", "compose", "run")
 
 
-def test_version_prints_the_release_and_images(run_cave, fake_runner):
+def test_version_prints_the_release_and_images(checkout, run_cave, fake_runner):
+    # A Compose file of the test's own: the versions in the real one change with every update.
+    (checkout / "compose.yaml").write_text(
+        "services:\n"
+        "  homeassistant:\n"
+        "    image: ghcr.io/home-assistant/home-assistant:2026.10.4\n"
+        "  mosquitto:\n"
+        "    image: eclipse-mosquitto:2.0.22@sha256:81a6193ae693\n",
+        encoding="utf-8",
+    )
     fake_runner.on(["git", "describe"], out="v2026.11.15.1\n")
 
     result = run_cave("version")
 
     assert result.code == 0
-    assert "release: v2026.11.15.1" in result.out
-    assert "image:   ghcr.io/home-assistant/home-assistant:2026.10.4" in result.out
-    assert "image:   eclipse-mosquitto:2.0.22" in result.out
-    assert "image:   ghcr.io/koenkk/zigbee2mqtt:2.14.3" in result.out
+    assert result.out.splitlines() == [
+        "release: v2026.11.15.1",
+        "image:   ghcr.io/home-assistant/home-assistant:2026.10.4",
+        "image:   eclipse-mosquitto:2.0.22",
+    ]
+
+
+def _image_names(output: str) -> list[str]:
+    """The images that ``version`` printed, without their tags."""
+    lines = [line for line in output.splitlines() if line.startswith("image:")]
+    return [line.removeprefix("image:").strip().rpartition(":")[0] for line in lines]
+
+
+def test_version_lists_the_image_of_every_service_in_the_real_compose_file(run_cave, fake_runner):
+    fake_runner.on(["git", "describe"], out="v2026.11.15.1\n")
+
+    result = run_cave("version")
+
+    assert result.code == 0
+    assert _image_names(result.out) == [
+        "ghcr.io/home-assistant/home-assistant",
+        "eclipse-mosquitto",
+        "ghcr.io/koenkk/zigbee2mqtt",
+    ]
 
 
 def test_version_outside_a_checkout_still_prints_images(run_cave, fake_runner):
@@ -217,3 +246,4 @@ def test_version_outside_a_checkout_still_prints_images(run_cave, fake_runner):
 
     assert result.code == 0
     assert "release: unknown" in result.out
+    assert len(_image_names(result.out)) == 3

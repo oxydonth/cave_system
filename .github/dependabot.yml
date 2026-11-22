@@ -62,6 +62,9 @@ updates:
 
   # Dockerfiles live below the root, such as sim/Dockerfile. Dependabot takes every file whose name
   # contains "dockerfile" for one, so the build-context file next to it is excluded.
+  #
+  # The Python base image takes patch releases only. The simulator runs on the Python version its
+  # tests run on (.python-version), so a new minor version comes by hand, together with that file.
   - package-ecosystem: docker
     directories: ["/**/*"]
     exclude-paths: ["*.dockerignore", "**/*.dockerignore"]
@@ -71,6 +74,8 @@ updates:
       - dependency-name: ghcr.io/home-assistant/home-assistant
       - dependency-name: homeassistant/home-assistant
       - dependency-name: home-assistant/home-assistant
+      - dependency-name: python
+        update-types: ["version-update:semver-major", "version-update:semver-minor"]
     groups:
       dockerfiles:
         patterns: ["*"]
