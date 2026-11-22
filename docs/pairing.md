@@ -268,6 +268,12 @@ regenerates the dashboard from it and tells Home Assistant to reload the heating
 lines that say what happened (applied copy, dashboard, Home Assistant). If it says that Home
 Assistant has to be restarted instead, run `./cave bootstrap` once: the script token is missing.
 
+`apply` and `bootstrap` take the same lock as the nightly backup (02:30) and update (03:30). If one says
+that another command holds the lock, wait a few minutes and run it again. If one says "Not applied" or
+"not bootstrapping" because an update is interrupted or a restore stopped half-way, nothing was
+changed: finish that first, as [operations.md](operations.md#a-notification-arrived-what-now) says
+(`./cave status` shows it).
+
 A room that names a `schedule` needs the schedule to exist. Run the first-run setup again, which
 creates a schedule for each such room with a default week and never touches one that exists:
 
@@ -315,7 +321,8 @@ schedule, window pause and dial handling do not reach it. It prints a table with
 check failed. What each row means, the exit codes and how a failure looks are in
 [devices.md](devices.md#checking-a-real-thermostat-cave-device-check).
 
-Write down the times: the FRITZ! one is an open question that
+Run checks by day: a nightly update that restarts the stack during a check can spoil that check
+([operations.md](operations.md#which-user)). Write down the times: the FRITZ! one is an open question that
 [hardware-acceptance.md](hardware-acceptance.md#11-when-the-fritzbox-reports-a-new-setpoint) uses.
 
 ## 7. Place the room sensors so they read right

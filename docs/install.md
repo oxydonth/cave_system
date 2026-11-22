@@ -80,9 +80,9 @@ its home is `/var/lib/cave-home`) and the directories `/opt/cave` (the checkout)
 (the state, where everything the system keeps lives) and `/var/backups/cave`. It stops on a system
 other than Debian 13 or Raspberry Pi OS 64-bit.
 
-At its end it says that the nightly update and backup are not installed yet. That is expected: the
-units for them come with the repository, which you clone next, and **you run the script a second
-time after that**. Run again, it only does what is still missing. The commands below use the user
+At its end it lists what follows. The nightly update and backup are not installed yet, and that is
+expected: their units come with the repository, which you clone next, and **you run the script a
+second time after that**. Run again, it only does what is still missing. The commands below use the user
 name `cave`; use yours if you gave `--user`.
 
 ## 4. Get the code, and install the timers
@@ -102,8 +102,9 @@ cd /opt/cave
 ```
 
 Now the second run of the script, this time from the checkout. It finds the units in
-`scripts/systemd/` and installs and starts the timers: the backup at 02:30 and the update at 03:30,
-and the recovery of an interrupted update at every boot. [operations.md](operations.md) explains
+`scripts/systemd/` and installs and starts the timers: the backup at 02:30 and the update at 03:30
+(each with a few minutes of random delay), and the recovery of an interrupted update at every
+boot. The units do nothing until `.env` exists, which [creating the configuration](#5-create-the-configuration) does. [operations.md](operations.md) explains
 what they do and what to do when one reports a failure.
 
 ```sh
@@ -215,6 +216,12 @@ without a browser:
 * and it removes the integrations Home Assistant's onboarding adds by itself (Radio Browser, Google
   Translate text-to-speech, Shopping list): this system keeps nothing that reaches the internet
   when used. Only the entries onboarding created; the same integration added by you later stays.
+
+It takes the one lock that `apply`, `update`, `backup` and `restore` also take. If it says that another
+command holds the lock (the nightly backup or update is running), wait for it and run it again; if it
+says "not bootstrapping" because an update is interrupted or a restore stopped half-way, that is
+something [operations.md](operations.md#a-notification-arrived-what-now) describes. Nothing was changed
+either way. On a fresh install neither happens.
 
 Run it again whenever you like: it changes only what is missing, and an interrupted run is finished
 by the next. It repairs a deleted or revoked script token and changes the MQTT login to the one in

@@ -23,6 +23,13 @@ a day.
 - [ ] You know the entity IDs of the room (`climate.cave_<room>` is the room, `sensor.cave_<room>_reason`
   says why it is where it is, `binary_sensor.cave_<room>_problem` says whether something needs attention).
 
+Some observations take hours and run through the night. The nightly update (03:30) restarts the
+stack when it installs a new release: the History then has a gap, and for five minutes after the
+restart a dial turned on a thermostat is not taken over (`confirm_timeout`). For the length of this
+checklist set `CAVE_AUTO_UPDATE=0` in `/opt/cave/.env` (`sudo -u cave editor /opt/cave/.env`), which
+stops only the timer-started updates, and **set it back to `1` when you are done**; check afterwards that
+`.env` says `1` again. Run `cave device-check` by day for the same reason.
+
 Every observation below is a look at the **History** of an entity (Home Assistant, sidebar, pick the
 entity and a time span), and the controller's own words are in `sensor.cave_<room>_reason` and the
 problem sensor's attribute `messages`.
