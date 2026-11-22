@@ -169,6 +169,50 @@ async def test_every_cave_entity_in_the_generated_dashboard_exists_in_the_integr
     assert missing == []
 
 
+def _named_by_their_own_name(node: Any) -> Iterator[str]:
+    """The entity of every card and row of a dashboard that is named ``{type: entity}``."""
+    if isinstance(node, dict):
+        if node.get("name") == {"type": "entity"}:
+            yield node["entity"]
+        for value in node.values():
+            yield from _named_by_their_own_name(value)
+    elif isinstance(node, list):
+        for value in node:
+            yield from _named_by_their_own_name(value)
+
+
+async def test_the_rows_named_by_the_entitys_own_name_have_one_without_the_room(
+    hass: HomeAssistant, home: FakeHome, tmp_path: Path
+) -> None:
+    """The frontend shows the registry's name of the entity alone, so each must have one.
+
+    For a `{type: entity}` name the frontend (2026.10, `formatEntityName`) takes the entity's
+    `name` from the registry, else its `original_name`; without either the row would be empty.
+    """
+    await start(home)
+    source = tmp_path / "heating.yaml"
+    source.write_text(yaml.safe_dump(HEATING, sort_keys=False))
+    dashboard = yaml.safe_load(render_file(source))
+    registry = er.async_get(hass)
+
+    names = {}
+    for entity_id in _named_by_their_own_name(dashboard):
+        entry = registry.async_get(entity_id)
+        assert entry is not None, entity_id
+        names[entity_id] = entry.name or entry.original_name
+
+    assert names == {
+        "select.cave_home_mode": "Mode",
+        "number.cave_away_temperature": "Away temperature",
+        "binary_sensor.cave_home_occupied": "Occupied",
+        "sensor.cave_living_room_reason": "Reason",
+        "binary_sensor.cave_living_room_window_open": "Window open",
+        "number.cave_living_room_comfort_temperature": "Comfort temperature",
+        "number.cave_living_room_eco_temperature": "Eco temperature",
+        "button.cave_living_room_resume_schedule": "Resume schedule",
+    }
+
+
 async def test_the_dashboards_entities_have_the_domains_its_cards_need(
     hass: HomeAssistant, home: FakeHome, tmp_path: Path
 ) -> None:

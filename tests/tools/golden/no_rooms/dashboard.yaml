@@ -14,16 +14,22 @@ views:
       icon: mdi:home-thermometer
     - type: tile
       entity: select.cave_home_mode
+      name:
+        type: entity
       features:
       - type: select-options
         style: buttons
     - type: tile
       entity: number.cave_away_temperature
+      name:
+        type: entity
       features:
       - type: numeric-input
         style: buttons
     - type: tile
       entity: binary_sensor.cave_home_occupied
+      name:
+        type: entity
     - type: markdown
       content: |
         No rooms are configured yet. Describe them in `cave/heating.yaml` and run

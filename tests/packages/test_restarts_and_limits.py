@@ -655,6 +655,30 @@ async def test_reloading_the_template_entities_does_not_push_what_is_reported_ag
     assert hass.states.get("sensor.cave_attention_battery") is not None
 
 
+async def test_while_the_pushing_automation_is_off_nothing_is_checked_and_nothing_missed(
+    hass: HomeAssistant, freezer: FrozenDateTimeFactory, phone: list[ServiceCall]
+) -> None:
+    """The minute is counted by "Cave: notify about what needs attention" itself.
+
+    Turned off, it neither checks nor pushes; what changed meanwhile is pushed at the first check
+    after it is turned on again, instead of having entered the sensors unseen.
+    """
+    shown = await load_package(hass, freezer)
+    await use_phone(hass)
+    automation = {"entity_id": "automation.cave_notify_about_what_needs_attention"}
+    await hass.services.async_call("automation", "turn_off", automation, blocking=True)
+    hass.states.async_set("sensor.hall_contact_battery", "12", BATTERY)
+    await advance(hass, freezer, 5)
+    assert hass.states.get("sensor.cave_attention_battery").attributes["entries"] == {}
+    assert shown.current == {}
+
+    await hass.services.async_call("automation", "turn_on", automation, blocking=True)
+    await advance(hass, freezer, 1)
+
+    assert shown.messages == ["Hall contact is at 12 %"]
+    assert [call.data["message"] for call in phone] == ["Hall contact is at 12 %"]
+
+
 async def test_what_exists_when_the_sensors_are_first_added_is_shown_and_not_pushed(
     hass: HomeAssistant, freezer: FrozenDateTimeFactory, phone: list[ServiceCall]
 ) -> None:
