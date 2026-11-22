@@ -153,7 +153,12 @@ jobs:
             [ -f "${file}" ] || continue
             grep -E '^CAVE_(MQTT_PASSWORD|HA_OWNER_PASSWORD|Z2M_FRONTEND_TOKEN|FRITZ_PASSWORD)=' "${file}" |
               cut -d= -f2- | while read -r secret; do
-                [ -n "${secret}" ] && sed -i "s/${secret}/********/g" "${RUNNER_TEMP}"/logs/*.log
+                # `if`, not `&&`: an empty secret (the FRITZ!Box password of a home without one)
+                # would otherwise make the loop, and with it the step, fail under `bash -e`, so
+                # that the logs of a failed run were neither masked nor printed.
+                if [ -n "${secret}" ]; then
+                  sed -i "s/${secret}/********/g" "${RUNNER_TEMP}"/logs/*.log
+                fi
               done
           done
           # The artifact store of the account may be full, so the essentials go into the job
