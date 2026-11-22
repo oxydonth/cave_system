@@ -58,6 +58,9 @@ HOLD_MAX = 4 * 3600.0  # what cave_heating.hold accepts (concept 5.5)
 # How long the clean-up keeps trying while Home Assistant restarts (a Raspberry Pi can take
 # several minutes); the hold covers it.
 CLEANUP_PATIENCE = 900.0
+# How long a single reading during the check is tried again when it fails (an error status, a
+# timeout): a passing hiccup is not a reason to give up the check.
+READ_PATIENCE = 60.0
 RETRY_PAUSE = 5.0
 STEP = 0.5
 UNUSABLE = ("unavailable", "unknown")
@@ -217,6 +220,17 @@ class Run:
         except HAError as error:
             raise ReadFailed(f"reading {entity_id} failed: {error}") from error
 
+    def read(self, entity_id: str) -> dict[str, Any] | None:
+        """``state``, tried again for ``READ_PATIENCE`` when a reading fails."""
+        deadline = self.ctx.monotonic() + READ_PATIENCE
+        while True:
+            try:
+                return self.state(entity_id)
+            except HAUnreachable:  # also ReadFailed
+                if self.ctx.monotonic() >= deadline:
+                    raise
+                self.ctx.sleep(RETRY_PAUSE)
+
     def problem_sensor(self) -> str:
         room = self.config.room if self.config is not None else ""
         return f"binary_sensor.cave_{room}_problem"
@@ -225,9 +239,14 @@ class Run:
         """Whether the controller still shows the thermostat as held."""
         if not self.hold_requested:
             return True
-        sensor = self.state(self.problem_sensor())
+        sensor = self.read(self.problem_sensor())
         statuses = (sensor or {}).get("attributes", {}).get("thermostats") or {}
-        return bool(statuses.get(self.entity) == "held")
+        held = statuses.get(self.entity) == "held"
+        if not held:
+            # However it was noticed: Home Assistant may be restarting, and until cave_heating
+            # has loaded its services answer "Service not found", which is not a refusal.
+            self.hold_lost = True
+        return held
 
     def ensure_held(self) -> None:
         if not self.still_held():
@@ -451,6 +470,7 @@ def run(ctx: Context, args: argparse.Namespace) -> int:
                     "so far are shown"
                 )
             except HAUnreachable as error:
+                check.hold_lost = True  # it may be restarting; the clean-up waits for it
                 check.incomplete = f"Home Assistant did not answer: {error}"
             except HAError as error:
                 check.incomplete = f"Home Assistant refused a request: {error}"
@@ -521,7 +541,7 @@ def _check(check: Run) -> None:
         if not held:
             raise HoldLost
 
-    state = check.state(entity)
+    state = check.read(entity)
     if not check.record(f"{entity} exists", state is not None) or state is None:
         return
     available = state.get("state") not in UNUSABLE
@@ -577,7 +597,7 @@ def _fresh_sensor_reading(check: Run) -> tuple[float | None, str]:
     sensor = check.config.temperature_sensor if check.config is not None else None
     if sensor is None:
         return None, "the room has no temperature sensor, so the controller writes nothing"
-    state = check.state(sensor)
+    state = check.read(sensor)
     value = _number(state.get("state")) if state is not None else None
     if state is None or state.get("state") in UNUSABLE or value is None:
         return None, f"room sensor {sensor} unavailable: the controller's feed is stopped"
@@ -601,7 +621,7 @@ def _fresh_sensor_reading(check: Run) -> tuple[float | None, str]:
 
 def _check_input(check: Run, input_entity: str) -> None:
     label = f"external input {input_entity} accepts the room's temperature"
-    state = check.state(input_entity)
+    state = check.read(input_entity)
     if state is None or state.get("state") == "unavailable":
         check.record(label, False, note="missing" if state is None else "unavailable")
         return
@@ -631,7 +651,7 @@ def _check_input(check: Run, input_entity: str) -> None:
 
 
 def _check_setting(check: Run, setting: str, value: Any) -> None:
-    state = check.state(setting)
+    state = check.read(setting)
     label = f"setting {setting} can be {value}"
     if state is None or state.get("state") == "unavailable":
         check.record(label, False, note="missing" if state is None else "unavailable")
@@ -684,6 +704,13 @@ def _restore_patiently(check: Run, original: float) -> None:
                 return
             # The hold was lost: Home Assistant is restarting, and until cave_heating has loaded
             # its services answer "Service not found". Wait for it, like for an unreachable one.
+            if ctx.monotonic() >= deadline and not check.hold_requested:
+                # The hold itself was refused to the end: Home Assistant answers, cave_heating
+                # has not loaded, so the controller does not run, and once it starts it adopts
+                # no report for a while. Put the thermostat back without a hold rather than
+                # leave it at the check's target.
+                _restore_unheld(check, original, error)
+                return
             if ctx.monotonic() >= deadline:
                 check.record(
                     label,
@@ -694,6 +721,7 @@ def _restore_patiently(check: Run, original: float) -> None:
                 return
             ctx.sleep(RETRY_PAUSE)
         except (HoldLost, HAUnreachable) as error:
+            check.hold_lost = True
             if ctx.monotonic() >= deadline:
                 reason = "the hold kept ending" if isinstance(error, HoldLost) else str(error)
                 check.record(
@@ -704,6 +732,38 @@ def _restore_patiently(check: Run, original: float) -> None:
                 check.restore_recorded = True
                 return
             ctx.sleep(RETRY_PAUSE)
+
+
+def _restore_unheld(check: Run, original: float, why: HAError) -> None:
+    """The last resort of ``_restore_patiently``: send the original target without a hold, and
+    wait for the report as long as for the check's own."""
+    ctx = check.ctx
+    label = f"original target {original:g} °C restored"
+    reason = f"cave_heating had not loaded within {CLEANUP_PATIENCE / 60:.0f} min ({why})"
+    check.say(f"Restoring {original:g} °C without a hold: {reason} ...")
+    start = ctx.monotonic()
+    try:
+        check.set_target(original)
+        check.restore_sent = True
+        value: float | None = None
+        while True:
+            try:
+                value = check.target()
+            except HAUnreachable:
+                value = None
+            if _close(value, original) or ctx.monotonic() - start >= check.timeout:
+                break
+            ctx.sleep(check.interval)
+    except (HAError, HAUnreachable) as error:
+        check.record(label, False, note=f"sent without a hold, which failed too: {error}")
+        check.restore_recorded = True
+        return
+    took = ctx.monotonic() - start
+    note = f"without a hold: {reason}"
+    if not _close(value, original):
+        note += f"; not reported within {check.timeout:g} s"
+    check.record(label, _close(value, original), took, note)
+    check.restore_recorded = True
 
 
 def _restore(check: Run, original: float) -> None:

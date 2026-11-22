@@ -5,6 +5,8 @@ from __future__ import annotations
 
 import json
 import os
+import subprocess
+import sys
 
 import pytest
 
@@ -194,3 +196,41 @@ def test_root_refuses_a_linked_cave_directory(tmp_path, as_root):
 
     assert list(elsewhere.iterdir()) == []
     assert as_root == []
+
+
+def test_a_holder_that_could_not_write_its_name_is_not_named_after_one_that_has_ended(tmp_path):
+    """Issue #25: the service user cannot write a lock file that is still root's, so the name in
+    it is whoever wrote last. A refused command named that one, long gone; now only a holder whose
+    process lives is named."""
+    ended = subprocess.Popen([sys.executable, "-c", "pass"])
+    ended.wait()
+    path = tmp_path / ".cave" / "lock"
+    path.parent.mkdir()
+    path.write_text(f"`cave backup` (pid {ended.pid}, since 2026-11-22 02:30:00)\n")
+    path.chmod(0o444)
+    now = [0.0]
+
+    def sleep(seconds):
+        now[0] += seconds
+
+    with Lock(path, "apply"):  # holds it, and cannot write its name
+        assert lock_module.held_by(path) == "another cave command"
+        with pytest.raises(LockBusy) as busy:
+            Lock(path, "update", sleep=sleep, monotonic=lambda: now[0]).acquire()
+
+    assert "`cave backup`" not in str(busy.value)
+    assert "another cave command is running" in str(busy.value)
+
+
+def test_a_holder_whose_process_lives_is_named(tmp_path):
+    path = tmp_path / ".cave" / "lock"
+    now = [0.0]
+
+    def sleep(seconds):
+        now[0] += seconds
+
+    with Lock(path, "backup"):
+        assert lock_module.held_by(path).startswith("`cave backup` (pid ")
+        with pytest.raises(LockBusy, match="`cave backup`"):
+            Lock(path, "update", sleep=sleep, monotonic=lambda: now[0]).acquire()
+    assert now[0] >= lock_module.PATIENCE, "it gave up before its patience was over"

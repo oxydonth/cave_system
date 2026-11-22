@@ -118,7 +118,7 @@ def _why(error: BaseException) -> str:
         return "the receiver could not be reached"
     if isinstance(error, TimeoutError):
         return f"no answer within {TIMEOUT:g} s"
-    if isinstance(error, ValueError):
+    if isinstance(error, ValueError | http.client.InvalidURL):
         return f"{VARIABLE} is not a usable http or https URL"
     if isinstance(error, OSError):
         detail = f": {error.strerror}" if error.strerror else ""

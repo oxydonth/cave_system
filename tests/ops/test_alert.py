@@ -107,12 +107,13 @@ def test_a_token_in_the_url_goes_to_the_receiver_only(ctx, alert_endpoint, journ
     assert TOKEN not in _everything_printed(ctx, journal)
 
 
-@pytest.mark.parametrize("mode", ["refuse", "error", "redirect", "not a url", "ftp"])
+@pytest.mark.parametrize("mode", ["refuse", "error", "redirect", "not a url", "ftp", "bad port"])
 def test_a_failed_send_says_why_without_the_url(ctx, alert_endpoint, journal, mode):
     secret_url = {
         "refuse": alert_endpoint.refusing_url + f"?auth={TOKEN}",
         "not a url": f"ntfy.fritz.box/{TOKEN}",
         "ftp": f"ftp://ntfy.fritz.box/{TOKEN}",
+        "bad port": f"http://ntfy.fritz.box:{TOKEN}/cave",
     }.get(mode, alert_endpoint.url + f"?auth={TOKEN}")
     alert_endpoint.mode = mode
     ctx.env["CAVE_ALERT_URL"] = secret_url
@@ -127,6 +128,7 @@ def test_a_failed_send_says_why_without_the_url(ctx, alert_endpoint, journal, mo
         "redirect": "answered 302",
         "not a url": "not a usable http or https URL",
         "ftp": "not a usable http or https URL",
+        "bad port": "not a usable http or https URL",
     }[mode]
     assert expected in sent.error
     printed = _everything_printed(ctx, journal)
