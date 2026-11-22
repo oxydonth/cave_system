@@ -27,6 +27,7 @@ from tests.packages.helpers import (
     PACKAGE,
     Shown,
     advance,
+    failed_copy,
     load_package,
     room,
     set_helper,
@@ -112,15 +113,28 @@ async def test_with_a_service_the_message_goes_there_as_well(
     assert [call.data for call in phone] == [{"title": "Update", "message": "Updated to 1.2.0"}]
 
 
-@pytest.mark.parametrize("value", ["notify.does_not_exist", "does_not_exist", "not a service!"])
+MISSING = "Action notify.does_not_exist not found"
+
+
+@pytest.mark.parametrize(
+    ("value", "reason"),
+    [
+        ("notify.does_not_exist", MISSING),
+        ("does_not_exist", MISSING),
+        ("not a service!", "Template rendered invalid service: notify.not a service!"),
+    ],
+)
 async def test_a_wrong_service_name_does_not_break_the_notification(
     hass: HomeAssistant,
     shown: Shown,
     phone: list[ServiceCall],
     caplog: pytest.LogCaptureFixture,
+    expected_errors: list[str],
     value: str,
+    reason: str,
 ) -> None:
     """The persistent notification is there, the call returns normally, nothing is sent."""
+    expected_errors.extend(failed_copy(reason))
     await set_helper(hass, "cave_notify_service", value)
 
     await _call_script(hass, title="Disk", message="Disk is 90 % full")
@@ -166,9 +180,10 @@ async def test_only_a_notify_action_is_ever_called(
 
 
 async def test_a_service_that_fails_does_not_break_the_notification(
-    hass: HomeAssistant, shown: Shown
+    hass: HomeAssistant, shown: Shown, expected_errors: list[str]
 ) -> None:
     """A phone service that raises (no connection, for example) does not fail the script."""
+    expected_errors.extend(failed_copy("push service is down"))
 
     async def broken(call: ServiceCall) -> None:
         raise HomeAssistantError("push service is down")
@@ -182,9 +197,10 @@ async def test_a_service_that_fails_does_not_break_the_notification(
 
 
 async def test_the_script_keeps_working_after_a_failed_service_call(
-    hass: HomeAssistant, shown: Shown, phone: list[ServiceCall]
+    hass: HomeAssistant, shown: Shown, phone: list[ServiceCall], expected_errors: list[str]
 ) -> None:
     """A wrong name once and the right name next: the second message arrives."""
+    expected_errors.extend(failed_copy(MISSING))
     await set_helper(hass, "cave_notify_service", "notify.does_not_exist")
     await _call_script(hass, title="First", message="one")
     await set_helper(hass, "cave_notify_service", "notify.test_phone")

@@ -6,14 +6,16 @@ the package watches the real ``binary_sensor.cave_living_room_window_open`` and 
 The thermostat and the contacts are the fake devices of ``tests/cave_heating/fakes.py``.
 """
 
+import math
 import re
 from collections.abc import Iterator
-from datetime import timedelta
+from datetime import UTC, timedelta
 from pathlib import Path
 from typing import Any
 
 import pytest
 import yaml
+from aiohttp.web_log import AccessLogger
 from freezegun.api import FrozenDateTimeFactory
 from homeassistant.core import HomeAssistant
 from homeassistant.helpers import entity_registry as er
@@ -232,10 +234,15 @@ async def test_the_room_is_a_device_in_the_area_of_its_name(
 
 
 async def test_what_the_real_reload_answers_over_rest_reaches_the_person_through_apply(
-    hass: HomeAssistant, home: FakeHome, hass_client: Any
+    hass: HomeAssistant, home: FakeHome, hass_client: Any, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     """An invalid applied copy: Home Assistant's real 400 answer, read by `cave_ops`' client."""
     from cave_ops.ha import HAClient, HAError
+
+    # The test server's access log asks for the local UTC offset, which the frozen clock's
+    # `localtime` does not have, and logs "Error in logging" for every request. Give it one.
+    monkeypatch.setattr(AccessLogger, "_cached_tz", UTC)
+    monkeypatch.setattr(AccessLogger, "_cached_tz_expires", math.inf)
 
     assert await async_setup_component(hass, "api", {})
     await start(home)

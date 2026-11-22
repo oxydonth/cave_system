@@ -6,6 +6,7 @@ entities come back with a fresh ``last_changed`` and sometimes as ``unknown`` or
 and the start event is fired.
 """
 
+import copy
 from datetime import timedelta
 from typing import Any
 from unittest.mock import patch
@@ -638,7 +639,12 @@ async def test_reloading_the_template_entities_does_not_push_what_is_reported_ag
 
     package = load_yaml_dict(str(PACKAGE))
     reloaded = {"homeassistant": {"packages": {"cave_notifications": package}}}
-    with patch("homeassistant.config.load_yaml_config_file", return_value=reloaded):
+    # A fresh copy for every read: Home Assistant merges the packages into what it read, and a
+    # second read of the same object would merge them twice ("duplicate key").
+    with patch(
+        "homeassistant.config.load_yaml_config_file",
+        side_effect=lambda *_args, **_kwargs: copy.deepcopy(reloaded),
+    ):
         await hass.services.async_call("template", "reload", blocking=True)
         await hass.async_block_till_done()
     await advance(hass, freezer, 5)
