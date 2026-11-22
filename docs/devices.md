@@ -42,12 +42,18 @@ uv run pytest --junitxml=test-results.xml
 uv run python -m tests.devices.matrix test-results.xml
 ```
 
-**Findings.** None is open: the three this suite found in the integration (F1, F2, F3) were
-fixed in pull request #15, and every device test passes. Should the suite find another while its
-fix is still under way, the test keeps asserting the concept, and the case is recorded in
-`capabilities.py` (`FINDINGS`, and the capability's `findings`) as a strict expected failure whose
-reason starts with `finding:`. Such a case holds only the assertions the finding breaks, so the
-mark hides nothing else, and it fails the run as soon as the fix lands, so the mark has to go.
+**Findings.** Where the integration or a simulator does not do what the concept requires, the
+test keeps asserting the concept, and the case is recorded in `capabilities.py` (`FINDINGS`, and
+the capability's `findings`) as a strict expected failure whose reason starts with `finding:`.
+Such a case holds only the assertions the finding breaks, so the mark hides nothing else, and it
+fails the run as soon as the fix lands, so the mark has to go. The three the suite found first
+(F1, F2, F3) were fixed in pull request #15. One is open:
+
+- **F4** ([issue #21](https://github.com/oxydonth/cave_system/issues/21)): a live room sensor
+  in a perfectly steady room is taken for stale after `sensor_stale`. Home Assistant's MQTT
+  entities do not record a repeated identical value, so none of the sensor's entities is
+  reported although the device reports every hour; the room falls back to the thermostats'
+  readings and the feed stops. Case: `sensor_stays_fresh_while_it_reports[SNZB-02P-everything-steady]`.
 
 **Behaviours not confirmed on real hardware** (concept section 12) are tested in every variant the
 simulators can play, and each test says which one it covers: a Sonoff that does or does not go
@@ -122,7 +128,9 @@ summer mode as off and, in holiday mode, no target at all.
 The room shows its temperature and humidity; it feeds the thermostats' inputs; when it falls
 silent, the room counts it as stale three hours after its device last reported, shows the
 average of the thermostats' readings and stops the feed, which writes again at once when the
-sensor answers. It reports by its configured reporting (1 °C or 1 %, at least hourly); real ones
+sensor answers. While its humidity still changes, a steady temperature does not make it stale
+and the feed goes on. In a room where neither changes for three hours it is taken for stale
+although it still reports (finding F4, above). It reports by its configured reporting (1 °C or 1 %, at least hourly); real ones
 may report smaller changes.
 
 ### Sonoff SNZB-04P (window contact)
@@ -144,7 +152,9 @@ server:
 
 Name a **radiator thermostat**, as listed under `trvs` in `heating.yaml`, never a room
 thermostat `climate.cave_<room>`: setting a temperature on that would put the whole room into an
-override. The command refuses `climate.cave_*` and anything else that belongs to `cave_heating`.
+override. The command refuses `climate.cave_*` and anything else that belongs to `cave_heating`
+(by its room IDs and by Home Assistant's entity registry). A radiator thermostat whose entity ID
+happens to start with `climate.cave_` has to be renamed in Home Assistant first.
 
 It needs the script token (`./cave bootstrap` creates it) and a running Home Assistant. It asks
 the real device what the tests ask the simulators:
@@ -164,13 +174,18 @@ the real device what the tests ask the simulators:
    session (SIGHUP), it sends the original target back, waits until the thermostat reports it (if
    the half degree was never reported, it watches for a late report for another `--timeout` and
    undoes it), and then, in a step of its own that runs even if the restore failed, releases the
-   hold. If Home Assistant restarts meanwhile, it holds the thermostat again for the whole restore
-   and keeps trying for 15 minutes.
+   hold. The clean-up does not depend on the terminal: once a dropped session has taken it away,
+   the command goes on without printing. If Home Assistant restarts meanwhile, it holds the
+   thermostat again for the whole restore and keeps trying for 15 minutes, also while
+   `cave_heating` has not loaded yet and its services are not found; a reading that fails is
+   retried the same way.
 
 **What it changes while it runs.** The thermostat's target, by half a degree, until it is put
 back. The external input, with the room sensor's current reading, which is what the controller
-writes anyway; if the room sensor is unavailable or stale, the controller's feed is stopped and
-the check writes nothing there (that row is skipped). And for the duration of the hold, the
+writes anyway. If the room sensor is unavailable, or its temperature has not been reported for
+`sensor_stale`, the check writes nothing there and skips that row with the reason. (The
+controller also counts the sensor's other readings as reports, so it may still be feeding it;
+skipping is the safe side.) And for the duration of the hold, the
 controller leaves the thermostat alone: during the check it ignores a window pause, the room's
 schedule and every change made in the UI, for at most the length of the hold.
 
@@ -179,8 +194,11 @@ schedule or override, and every other thermostat. After the release the controll
 thermostat back to its room's target, whatever happened.
 
 If the hold could not be released (Home Assistant unreachable), the output says when it ends by
-itself. Interrupting a second time while it puts the thermostat back abandons that, and the hold
-then ends by itself at the time it prints.
+itself. An interrupt during the check starts the clean-up and says so. Interrupting again skips
+putting the thermostat back: the hold is still released, and the controller then brings the
+thermostat to its room's target. Without a hold (`--not-in-heating-yaml`) the thermostat then
+stays at the check's target, which the message names. The table then shows the original target
+as not confirmed, with whether it was sent, and the check as not completed.
 
 | Option | Default | Meaning |
 |---|---|---|

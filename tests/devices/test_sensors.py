@@ -80,6 +80,38 @@ async def test_sensor_going_stale(rig: Rig, device: str) -> None:
     assert rig.state(ROOM_CLIMATE).attributes["current_temperature"] == 22.0
 
 
+@pytest.mark.parametrize(("device", "case"), devices("sensor_stays_fresh_while_it_reports"))
+async def test_sensor_stays_fresh_while_it_reports(rig: Rig, device: str, case: str) -> None:
+    """Concept 5.4: the room sensor counts as stale only when neither it nor any other entity of
+    the same device has reported for sensor_stale (3 h), because Home Assistant does not record a
+    repeated identical value as a new report. In a steady room (19 °C inside and out, comfort
+    19 °C) the temperature never changes for 4.5 hours; the sensor stays fresh, so the room keeps
+    showing its reading and the feed keeps writing it every 25 minutes past the three hours.
+
+    ``humidity-changing``: the humidity changes every half hour, so the device's humidity entity
+    reports. ``everything-steady``: nothing changes; the SNZB-02P still reports every hour (its
+    maximum reporting interval), so the device is alive.
+    """
+
+    async def steady(rig: Rig) -> None:
+        rig.sim.home.set_outdoor_temperature(19.0)
+
+    await rig.start(TRVZB, contact=False, room={"comfort_temperature": 19.0}, before_heating=steady)
+    humidity = 50
+    for half_hour in range(1, 10):
+        if case == "humidity-changing":
+            humidity = 52 if humidity == 50 else 50
+            rig.sim.home.set_room_humidity(ROOM, humidity)
+        await rig.advance(30 * MIN)
+        if half_hour == 6:
+            rig.mark()  # three hours in: what follows is past sensor_stale
+    assert float(rig.state(TEMPERATURE).state) == 19.0, "the temperature never changed"
+    writes = rig.writes(TRVZB.name, EXTERNAL)
+    assert len(writes) >= 3, f"the feed goes on past sensor_stale, got {writes}"
+    assert set(writes) == {19.0}
+    assert rig.state(ROOM_CLIMATE).attributes["current_temperature"] == 19.0
+
+
 @pytest.mark.parametrize("device", devices("contact_starts_and_ends_window_pause"))
 async def test_contact_starts_and_ends_window_pause(rig: Rig, device: str) -> None:
     """Concept 5.3, window pause: it starts when the contact has been open for window_open_delay

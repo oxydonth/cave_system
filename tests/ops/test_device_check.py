@@ -12,6 +12,8 @@ must say that it could not be and when the hold ends by itself.
 
 from __future__ import annotations
 
+import errno
+import io
 import json
 import os
 import signal
@@ -146,17 +148,27 @@ class Faults:
     ``fail[(domain, service)]`` is a list of answers for the successive calls of that service:
     ``None`` passes the call through, ``500`` answers with that status without reaching Home
     Assistant, ``"timeout"`` lets the call through and then raises a timeout, as when Home
-    Assistant applies it but answers too late. ``down`` refuses every connection.
+    Assistant applies it but answers too late. ``fail_reads[entity_id]`` does the same for
+    ``GET /api/states/<entity_id>``, once ``reads_armed`` is set. ``down`` refuses every
+    connection.
     """
 
     def __init__(self, fake_ha: Any) -> None:
         self.fake_ha = fake_ha
         self.fail: dict[tuple[str, str], list[Any]] = {}
+        self.fail_reads: dict[str, list[Any]] = {}
+        self.reads_armed = True
         self.down = False
 
     def __call__(self, method, url, headers, body, timeout):
         if self.down:
             raise ConnectionRefusedError("connection refused")
+        if "/api/states/" in url and self.reads_armed:
+            answers = self.fail_reads.get(url.rsplit("/", 1)[-1])
+            if answers:
+                answer = answers.pop(0)
+                if answer is not None:
+                    return answer, b'{"message": "a read failed in the fake"}'
         if "/api/services/" in url:
             domain, service = url.rsplit("/", 2)[-2:]
             answers = self.fail.get((domain, service))
@@ -413,7 +425,12 @@ def test_the_external_input_is_written_only_with_a_fresh_room_sensor_reading(
 
     assert result.code == 0, result.out
     assert rows(result.out)[f"external input {INPUT} accepts the room's temperature"] == "skipped"
-    assert "the controller's feed is stopped" in result.out
+    if sensor == "unavailable":
+        assert "unavailable: the controller's feed is stopped" in result.out
+    else:
+        assert "has not reported a new temperature for 3.0 h, so the check writes nothing" in (
+            result.out
+        )
     assert "set_value" not in services(fake_ha)
     assert thermostat.input_value == 19.0
 
@@ -500,7 +517,7 @@ def test_a_hold_call_that_timed_out_is_still_released(run_cave, fake_ha, thermos
     result = run_cave("device-check", ENTITY)
 
     assert result.code == 2
-    assert "could not be reached" in result.out
+    assert "Home Assistant did not answer" in result.out
     assert thermostat.hold_calls
     assert thermostat.release_calls
     assert not thermostat.held
@@ -542,7 +559,7 @@ def test_home_assistant_down_until_the_hold_ends_is_reported_as_ended(
     result = run_cave("device-check", ENTITY, "--timeout", "60")
 
     assert result.code == 2
-    assert "Home Assistant could not be reached" in result.out
+    assert "Home Assistant did not answer" in result.out
     assert rows(result.out)["original target 21 °C restored"] == "FAIL"
     assert "the controller brings it to the room's target once it runs" in result.out
     assert "it had ended by itself" in result.out
@@ -598,9 +615,16 @@ def test_interrupted_it_restores_releases_and_prints_the_table(
     result = run_cave("device-check", ENTITY)
 
     assert result.code == 130
-    assert "Interrupting again leaves it as it is; its hold then ends by itself at about" in (
-        result.out
+    assert (
+        "Interrupted: putting the thermostat back to 21 °C. Interrupting again skips that; the "
+        "hold is still released, and the controller then brings the thermostat to its room's "
+        "target." in result.out
     )
+    assert (
+        f"The check could not complete: interrupted ({how if how != 'ctrl-c' else 'Ctrl-C'})."
+        in (result.out)
+    )
+    assert "interrupted ()" not in result.out
     assert rows(result.out)["hold released"] == "pass"
     assert "original target 21 °C restored" in rows(result.out)
     assert thermostat.target == 21.0
@@ -628,5 +652,151 @@ def test_a_second_interrupt_abandons_the_restore_but_still_releases(
 
     assert result.code == 130
     assert rows(result.out)["clean-up"] == "skipped"
+    assert "interrupted during the clean-up (Ctrl-C)" in result.out
+    assert rows(result.out)["original target 21 °C restored"] == "FAIL"
+    assert "not confirmed: sent; the controller brings it to its room's target" in result.out
     assert rows(result.out)["hold released"] == "pass"
+    assert "Every check passed." not in result.out
+    assert thermostat.release_calls
+
+
+# --- review round 2 ------------------------------------------------------------------------
+
+
+class HangingUp(io.StringIO):
+    """A terminal that goes away: once ``hung_up`` is set, every write fails as on a real
+    hung-up terminal after a dropped SSH session (EIO)."""
+
+    hung_up = False
+
+    def write(self, text: str) -> int:
+        if self.hung_up:
+            raise OSError(errno.EIO, "Input/output error")
+        return super().write(text)
+
+
+@pytest.mark.skipif(not hasattr(signal, "SIGHUP"), reason="no SIGHUP")
+def test_a_dropped_ssh_session_still_restores_and_releases(
+    run_cave, ctx, clock, fake_ha, thermostat, monkeypatch
+):
+    """The SSH session drops while the check waits for the report: the terminal hangs up and
+    SIGHUP arrives. Writing to the terminal now fails, which must not stop the clean-up: the
+    original target is sent back and the hold released, silently."""
+    terminal = HangingUp()
+
+    def hang_up() -> None:
+        terminal.hung_up = True
+        os.kill(os.getpid(), signal.SIGHUP)
+
+    _interrupt_on_first_sleep(ctx, clock, hang_up)
+    original_say = ctx.say
+
+    def say(message: str = "") -> None:
+        ctx.out = terminal
+        original_say(message)
+
+    monkeypatch.setattr(ctx, "say", say)
+
+    result = run_cave("device-check", ENTITY)
+
+    assert result.code == 130
+    assert ("climate", "set_temperature", {"entity_id": ENTITY, "temperature": 21.0}) in calls(
+        fake_ha
+    ), "the original target is sent back"
+    assert thermostat.release_calls, "the hold is released"
+    assert not thermostat.held
+    assert thermostat.target == 21.0
+    assert "Interrupted" not in terminal.getvalue(), "nothing could be written after the hang-up"
+
+
+def test_the_interrupt_notice_without_a_hold(run_cave, ctx, clock, fake_runner, thermostat):
+    """Without a hold (--not-in-heating-yaml) a second interrupt would leave the thermostat at
+    the check's target, and the notice says so instead of promising a hold that does not exist."""
+    answer(fake_runner, configured(found=False))
+    _interrupt_on_first_sleep(ctx, clock, _keyboard_interrupt)
+
+    result = run_cave("device-check", ENTITY, "--not-in-heating-yaml")
+
+    assert result.code == 130
+    assert (
+        "Interrupted: putting the thermostat back to 21 °C. Interrupting again leaves it at "
+        "21.5 °C." in result.out
+    )
+    assert "hold" not in result.out.split("Interrupted:", 1)[1].split("\n", 1)[0]
+    assert thermostat.target == 21.0
+
+
+def test_a_single_interrupt_during_the_late_report_watch(run_cave, ctx, clock, fake_ha, thermostat):
+    """The thermostat did not report the check's target in time, so after restoring the check
+    watches for a late report; one Ctrl-C there. The result says the clean-up was interrupted,
+    whether the original target was sent, and that the check could not complete; the hold is
+    released all the same."""
+    thermostat.confirms = False
+    sleep = clock.sleep
+
+    def interrupt_in_the_watch(seconds: float) -> None:
+        if clock.now > 300:
+            ctx.sleep = sleep
+            raise KeyboardInterrupt
+        sleep(seconds)
+
+    ctx.sleep = interrupt_in_the_watch
+
+    result = run_cave("device-check", ENTITY, "--timeout", "300")
+
+    assert result.code == 130
+    assert "Watching 300 s for a late report" in result.out
+    assert rows(result.out)["clean-up"] == "skipped"
+    assert "interrupted during the clean-up (Ctrl-C)" in result.out
+    assert rows(result.out)["original target 21 °C restored"] == "FAIL"
+    assert "not confirmed: sent; the controller brings it to its room's target" in result.out
+    assert "The check could not complete: interrupted during the clean-up (Ctrl-C)." in result.out
+    assert "Every check passed." not in result.out
+    assert thermostat.release_calls
+    assert not thermostat.held
+
+
+def test_a_restart_before_cave_heating_has_loaded_is_waited_for(
+    run_cave, fake_ha, thermostat, faults
+):
+    """Home Assistant restarts during the check and answers before cave_heating has loaded:
+    taking the hold again gets 400 "Service not found" for a while. That is the restart, not a
+    refusal: the check keeps trying within its patience, then restores and releases."""
+    thermostat.lose_hold_on_set = True
+    faults.fail[("cave_heating", "hold")] = [None, 400, 400, 400]
+
+    result = run_cave("device-check", ENTITY)
+
+    assert result.code == 2
+    assert "did Home Assistant restart?" in result.out
+    assert rows(result.out)["original target 21 °C restored"] == "pass"
+    assert rows(result.out)["hold released"] == "pass"
+    assert "refused" not in result.out
+    assert thermostat.target == 21.0
+    assert not thermostat.held
+
+
+def test_a_failed_read_during_the_restore_is_not_a_refusal(
+    run_cave, fake_ha, clock, thermostat, faults
+):
+    """One 500 on reading the thermostat while watching for a late report: the watch goes on
+    and the restore is judged on the next reads."""
+    thermostat.confirms = False
+    faults.fail_reads[ENTITY] = []
+    original = faults.fake_ha
+
+    def arm_after_the_timeout(method, url, headers, body, timeout):
+        if clock.now > 300 and not faults.fail_reads[ENTITY] and not getattr(faults, "_done", 0):
+            faults.fail_reads[ENTITY] = [500]
+            faults._done = 1
+        return original(method, url, headers, body, timeout)
+
+    faults.fake_ha = arm_after_the_timeout
+
+    result = run_cave("device-check", ENTITY, "--timeout", "300")
+
+    assert getattr(faults, "_done", 0) == 1, "the failing read happened"
+    assert rows(result.out)["original target 21 °C restored"] == "pass"
+    assert "refused" not in result.out
+    assert "no late report came" in result.out
     assert thermostat.release_calls

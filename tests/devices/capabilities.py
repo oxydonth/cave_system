@@ -51,8 +51,14 @@ REFUSALS: Final = (
 # Open findings: a case in which the integration or a simulator does not do what the concept
 # requires, by name (F1, F2, ...) with its description and the fix that closes it. A capability
 # names the cases it marks in its ``findings``; :func:`devices` makes each a strict expected
-# failure. F1, F2 and F3 were fixed by pull request #15; none is open.
-FINDINGS: Final[dict[str, str]] = {}
+# failure. F1, F2 and F3 were fixed by pull request #15.
+FINDINGS: Final[dict[str, str]] = {
+    "F4": "F4: a live room sensor in a perfectly steady room is taken for stale after "
+    "sensor_stale: Home Assistant's MQTT entities do not record a repeated identical value, so "
+    "none of the sensor's entities is reported although the device reports every hour; the room "
+    "falls back to the thermostats and the feed stops "
+    "(https://github.com/oxydonth/cave_system/issues/21)",
+}
 
 
 @dataclass(frozen=True)
@@ -276,7 +282,14 @@ CAPABILITIES: Final[dict[str, Capability]] = {
         "The FRITZ!Box's own window detection, with both things it may report",
         "Model-specific",
         ("FRITZ-302",),
-        _FRITZ_ONLY,
+        {
+            **dict.fromkeys(
+                ZIGBEE_THERMOSTATS,
+                "the FRITZ!Box's own detection; the Zigbee thermostats' on-device window "
+                "detection is switched off, see window_detection_switched_off",
+            ),
+            **dict.fromkeys(SENSORS, NOT_A_THERMOSTAT),
+        },
         variants={"FRITZ-302": ("target-unchanged", "target-off")},
     ),
     # --- sensors ----------------------------------------------------------------------------
@@ -288,6 +301,14 @@ CAPABILITIES: Final[dict[str, Capability]] = {
         "Sensors",
         ("SNZB-02P",),
         _SENSOR_ONLY,
+    ),
+    "sensor_stays_fresh_while_it_reports": _only(
+        "A sensor that keeps reporting in a steady room stays fresh: the feed goes on",
+        "Sensors",
+        ("SNZB-02P",),
+        _SENSOR_ONLY,
+        variants={"SNZB-02P": ("humidity-changing", "everything-steady")},
+        findings={"SNZB-02P-everything-steady": "F4"},
     ),
     "contact_starts_and_ends_window_pause": _only(
         "Starts and ends the window pause", "Sensors", ("SNZB-04P",), _CONTACT_ONLY

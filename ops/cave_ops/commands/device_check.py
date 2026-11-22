@@ -121,6 +121,11 @@ class HoldLost(Exception):
     """The hold ended underneath the check: Home Assistant restarted, or someone released it."""
 
 
+class ReadFailed(HAUnreachable):
+    """Reading a state failed with an error status: retried like an unreachable Home Assistant,
+    because only a refused service call is a refusal."""
+
+
 @dataclass
 class Row:
     """One line of the result table."""
@@ -171,6 +176,21 @@ class Run:
     wanted: float | None = None  # the target the check sends
     changed: bool = False  # the check may have changed the target: it must be put back
     confirmed: bool = False  # the thermostat reported the check's target
+    hold_lost: bool = False  # the hold disappeared once: Home Assistant may be restarting
+    restore_sent: bool = False  # the original target was sent back
+    restore_recorded: bool = False  # the table has a row for the original target
+    muted: bool = False  # writing to the terminal failed (a dropped SSH session)
+
+    # --- output ------------------------------------------------------------------------------
+
+    def say(self, message: str = "") -> None:
+        """Print, if the terminal is still there; never let a failed write stop the clean-up."""
+        if self.muted:
+            return
+        try:
+            self.ctx.say(message)
+        except (OSError, ValueError):  # a hung-up terminal, or a closed stream
+            self.muted = True
 
     # --- results -----------------------------------------------------------------------------
 
@@ -192,7 +212,10 @@ class Run:
     # --- Home Assistant ----------------------------------------------------------------------
 
     def state(self, entity_id: str) -> dict[str, Any] | None:
-        return self.client.get_state(entity_id)
+        try:
+            return self.client.get_state(entity_id)
+        except HAError as error:
+            raise ReadFailed(f"reading {entity_id} failed: {error}") from error
 
     def problem_sensor(self) -> str:
         room = self.config.room if self.config is not None else ""
@@ -208,6 +231,7 @@ class Run:
 
     def ensure_held(self) -> None:
         if not self.still_held():
+            self.hold_lost = True
             raise HoldLost
 
     def hold(self, seconds: float) -> None:
@@ -350,7 +374,9 @@ def _own_entity(entity: str) -> str:
     return (
         f"{entity} belongs to cave_heating itself (a room thermostat climate.cave_<room>): "
         "setting a temperature on it starts an override for the whole room. Name a radiator "
-        "thermostat of the room instead, as listed under its trvs in heating.yaml"
+        "thermostat of the room instead, as listed under its trvs in heating.yaml. (Every "
+        "climate.cave_* name is refused, because it is the room thermostats' pattern; a "
+        "radiator thermostat named like that has to be renamed in Home Assistant first.)"
     )
 
 
@@ -417,30 +443,67 @@ def run(ctx: Context, args: argparse.Namespace) -> int:
     interrupted = False
     with _signals_interrupt():
         try:
-            _check(check)
-        except HoldLost:
-            check.incomplete = (
-                "the hold ended during the check (did Home Assistant restart?); the results so "
-                "far are shown"
-            )
-        except HAUnreachable as error:
-            check.incomplete = f"Home Assistant could not be reached: {error}"
-        except HAError as error:
-            check.incomplete = f"Home Assistant refused a request: {error}"
-        except KeyboardInterrupt as stop:
-            interrupted = True
-            check.incomplete = f"interrupted ({stop or 'Ctrl-C'})"
-            ctx.say(
-                "Interrupted: putting the thermostat back. Interrupting again leaves it as it "
-                f"is; its hold then ends by itself {check.hold_ends()}."
-            )
-        try:
-            _clean_up(check)
-        except KeyboardInterrupt:
-            interrupted = True
-            check.skip("clean-up", "abandoned by a second interrupt")
+            try:
+                _check(check)
+            except HoldLost:
+                check.incomplete = (
+                    "the hold ended during the check (did Home Assistant restart?); the results "
+                    "so far are shown"
+                )
+            except HAUnreachable as error:
+                check.incomplete = f"Home Assistant did not answer: {error}"
+            except HAError as error:
+                check.incomplete = f"Home Assistant refused a request: {error}"
+            except KeyboardInterrupt as stop:
+                interrupted = True
+                check.incomplete = f"interrupted ({str(stop) or 'Ctrl-C'})"
+                check.say(_interrupt_notice(check))
+        finally:
+            # Also when something above failed in a way not foreseen: the thermostat is put back
+            # and the hold released in any case. Output is best effort from here on.
+            try:
+                _clean_up(check)
+            except KeyboardInterrupt as stop:
+                interrupted = True
+                _interrupted_during_clean_up(check, str(stop) or "Ctrl-C")
     code = _report(check)
     return 130 if interrupted else code
+
+
+def _interrupt_notice(check: Run) -> str:
+    """What happens now, and what a second interrupt would do, in words."""
+    if not check.changed or check.original is None:
+        nothing = "Interrupted: the thermostat's target was not changed."
+        return nothing + (" Releasing the hold." if check.hold_requested else "")
+    back = f"Interrupted: putting the thermostat back to {check.original:g} °C."
+    if check.hold_requested:
+        return (
+            f"{back} Interrupting again skips that; the hold is still released, and the "
+            "controller then brings the thermostat to its room's target."
+        )
+    left = f"{check.wanted:g} °C" if check.wanted is not None else "the check's target"
+    return f"{back} Interrupting again leaves it at {left}."
+
+
+def _interrupted_during_clean_up(check: Run, how: str) -> None:
+    """An interrupt while the thermostat was being put back: say what state it was left in."""
+    check.skip("clean-up", f"interrupted during the clean-up ({how})")
+    if check.changed and check.original is not None and not check.restore_recorded:
+        sent = "sent" if check.restore_sent else "not sent"
+        then = (
+            "the controller brings it to its room's target after the release"
+            if check.hold_requested or check.config is not None
+            else f"it may be left at {check.wanted:g} °C"
+            if check.wanted is not None
+            else "it may be left at the check's target"
+        )
+        check.record(
+            f"original target {check.original:g} °C restored",
+            False,
+            note=f"not confirmed: {sent}; {then}",
+        )
+        check.restore_recorded = True
+    check.incomplete = check.incomplete or f"interrupted during the clean-up ({how})"
 
 
 def _check(check: Run) -> None:
@@ -490,7 +553,7 @@ def _check(check: Run) -> None:
     if maximum is not None and wanted > maximum:
         wanted = original - STEP
     check.original, check.wanted = original, wanted
-    ctx.say(f"Setting {wanted:g} °C and waiting up to {check.timeout:g} s for the report ...")
+    check.say(f"Setting {wanted:g} °C and waiting up to {check.timeout:g} s for the report ...")
     start = ctx.monotonic()
     check.set_target(wanted)
     took = check.wait_for(check.target, wanted, check.timeout, start)
@@ -523,8 +586,16 @@ def _fresh_sensor_reading(check: Run) -> tuple[float | None, str]:
         when = datetime.fromisoformat(str(reported))
     except ValueError:
         return None, f"room sensor {sensor} does not say when it reported"
-    if when.tzinfo is None or _utcnow() - when >= timedelta(seconds=check.sensor_stale):
-        return None, f"room sensor {sensor} is stale: the controller's feed is stopped"
+    if when.tzinfo is None:
+        return None, f"room sensor {sensor} does not say when it reported"
+    age = _utcnow() - when
+    if age >= timedelta(seconds=check.sensor_stale):
+        hours = age.total_seconds() / 3600
+        return None, (
+            f"room sensor {sensor} has not reported a new temperature for {hours:.1f} h, so the "
+            "check writes nothing (the controller judges freshness on all of the sensor's "
+            "readings and may still be feeding it)"
+        )
     return value, ""
 
 
@@ -599,15 +670,29 @@ def _restore_patiently(check: Run, original: float) -> None:
     deadline = ctx.monotonic() + CLEANUP_PATIENCE
     while True:
         try:
-            if check.config is not None and not check.still_held():
+            # A hold refused during a restart left none at all: take it, too.
+            if check.config is not None and (not check.hold_requested or not check.still_held()):
                 # Hold again, for the whole restore, so that it is not taken for a dial turn.
                 check.hold(rehold_seconds(check.timeout))
             _restore(check, original)
             return
         except HAError as error:
-            check.record(label, False, note=f"refused: {error}")
-            check.incomplete = check.incomplete or f"Home Assistant refused to restore: {error}"
-            return
+            if not check.hold_lost:
+                check.record(label, False, note=f"refused: {error}")
+                check.restore_recorded = True
+                check.incomplete = check.incomplete or f"Home Assistant refused to restore: {error}"
+                return
+            # The hold was lost: Home Assistant is restarting, and until cave_heating has loaded
+            # its services answer "Service not found". Wait for it, like for an unreachable one.
+            if ctx.monotonic() >= deadline:
+                check.record(
+                    label,
+                    False,
+                    note=f"{error}; the controller brings it to the room's target once it runs",
+                )
+                check.restore_recorded = True
+                return
+            ctx.sleep(RETRY_PAUSE)
         except (HoldLost, HAUnreachable) as error:
             if ctx.monotonic() >= deadline:
                 reason = "the hold kept ending" if isinstance(error, HoldLost) else str(error)
@@ -616,6 +701,7 @@ def _restore_patiently(check: Run, original: float) -> None:
                     False,
                     note=f"{reason}; the controller brings it to the room's target once it runs",
                 )
+                check.restore_recorded = True
                 return
             ctx.sleep(RETRY_PAUSE)
 
@@ -629,15 +715,17 @@ def _restore(check: Run, original: float) -> None:
     whole timeout, and the original is sent once more if the late report comes.
     """
     ctx = check.ctx
-    ctx.say(f"Restoring {original:g} °C ...")
+    check.say(f"Restoring {original:g} °C ...")
     label = f"original target {original:g} °C restored"
     start = ctx.monotonic()
     check.set_target(original)
+    check.restore_sent = True
     if check.confirmed:
         took = check.wait_for(check.target, original, check.timeout, start)
         check.record(label, took is not None, took)
+        check.restore_recorded = True
         return
-    ctx.say(f"Watching {check.timeout:g} s for a late report of {check.wanted:g} °C ...")
+    check.say(f"Watching {check.timeout:g} s for a late report of {check.wanted:g} °C ...")
     resent = False
     value: float | None = None
     while True:
@@ -650,15 +738,17 @@ def _restore(check: Run, original: float) -> None:
         ctx.sleep(check.interval)
         try:
             value = check.target()
-        except HAUnreachable:
+        except HAUnreachable:  # also a failed read: keep watching
             continue
         check.ensure_held()
         if _close(value, check.wanted) and not resent:
             check.set_target(original)
             resent = True
-    value = check.target()
+    with contextlib.suppress(HAUnreachable):  # if the last read fails, the one before stands
+        value = check.target()
     note = "the late report came and was undone" if resent else "no late report came"
     check.record(label, _close(value, original), ctx.monotonic() - start, note)
+    check.restore_recorded = True
 
 
 def _release(check: Run) -> None:
@@ -680,6 +770,9 @@ def _release(check: Run) -> None:
                 return
             ctx.sleep(RETRY_PAUSE)
         except HAError as error:
+            if check.hold_lost and ctx.monotonic() < deadline:
+                ctx.sleep(RETRY_PAUSE)  # cave_heating not loaded yet after a restart
+                continue
             check.record("hold released", False, note=f"refused: {error}; it ends by itself")
             return
         else:
@@ -689,25 +782,25 @@ def _release(check: Run) -> None:
 
 
 def _report(check: Run) -> int:
-    ctx = check.ctx
+    say = check.say
     width = max([len(row.check) for row in check.rows] + [5])
-    ctx.say("")
-    ctx.say(f"{'Check'.ljust(width)}  Result   Time     Note")
+    say("")
+    say(f"{'Check'.ljust(width)}  Result   Time     Note")
     for row in check.rows:
         took = f"{row.seconds:.1f} s" if row.seconds is not None else ""
-        ctx.say(f"{row.check.ljust(width)}  {row.result.ljust(7)}  {took.ljust(7)}  {row.note}")
-    ctx.say("")
+        say(f"{row.check.ljust(width)}  {row.result.ljust(7)}  {took.ljust(7)}  {row.note}")
+    say("")
     if check.hold_requested:
-        ctx.say(
+        say(
             f"The hold on {check.entity} could not be released; it ends by itself "
             f"{check.hold_ends()}, and the controller then brings the thermostat back to its "
             "room's target."
         )
     if check.incomplete:
-        ctx.say(f"The check could not complete: {check.incomplete}.")
+        say(f"The check could not complete: {check.incomplete}.")
         return 2
     if any(row.result == "FAIL" for row in check.rows):
-        ctx.say("The check failed.")
+        say("The check failed.")
         return 1
-    ctx.say("Every check passed.")
+    say("Every check passed.")
     return 0
