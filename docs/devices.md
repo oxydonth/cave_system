@@ -46,14 +46,12 @@ uv run python -m tests.devices.matrix test-results.xml
 test keeps asserting the concept, and the case is recorded in `capabilities.py` (`FINDINGS`, and
 the capability's `findings`) as a strict expected failure whose reason starts with `finding:`.
 Such a case holds only the assertions the finding breaks, so the mark hides nothing else, and it
-fails the run as soon as the fix lands, so the mark has to go. The three the suite found first
-(F1, F2, F3) were fixed in pull request #15. One is open:
-
-- **F4** ([issue #21](https://github.com/oxydonth/cave_system/issues/21)): a live room sensor
-  in a perfectly steady room is taken for stale after `sensor_stale`. Home Assistant's MQTT
-  entities do not record a repeated identical value, so none of the sensor's entities is
-  reported although the device reports every hour; the room falls back to the thermostats'
-  readings and the feed stops. Case: `sensor_stays_fresh_while_it_reports[SNZB-02P-everything-steady]`.
+fails the run as soon as the fix lands, so the mark has to go. None is open. The three the suite
+found first (F1, F2, F3) were fixed in pull request #15. F4
+([issue #21](https://github.com/oxydonth/cave_system/issues/21)), a live room sensor in a
+perfectly steady room taken for stale, was fixed in work package 10: its case,
+`sensor_stays_fresh_while_it_reports[SNZB-02P-everything-steady]`, now runs twelve hours of
+identical hourly reports and passes.
 
 **Behaviours not confirmed on real hardware** (concept section 12) are tested in every variant the
 simulators can play, and each test says which one it covers: a Sonoff that does or does not go
@@ -126,12 +124,16 @@ summer mode as off and, in holiday mode, no target at all.
 ### Sonoff SNZB-02P (room temperature and humidity)
 
 The room shows its temperature and humidity; it feeds the thermostats' inputs; when it falls
-silent, the room counts it as stale three hours after its device last reported, shows the
+silent, the room counts it as stale three hours after Zigbee2MQTT last heard it, shows the
 average of the thermostats' readings and stops the feed, which writes again at once when the
-sensor answers. While its humidity still changes, a steady temperature does not make it stale
-and the feed goes on. In a room where neither changes for three hours it is taken for stale
-although it still reports (finding F4, above). It reports by its configured reporting (1 °C or 1 %, at least hourly); real ones
-may report smaller changes.
+sensor answers. A sensor that keeps reporting stays fresh even when none of its values changes
+for twelve hours: its `sensor.<name>_last_seen` changes with every message (concept 5.4). That
+entity is enabled by this project's Zigbee2MQTT settings (`device_options` in `compose.yaml`);
+one that Home Assistant registered disabled before is enabled by `cave_heating`, and the reload of
+the MQTT integration that follows, with a window pause in effect, sends no command and ends no
+pause (`sensor_last_seen_enabled_after_an_upgrade`). It reports by its configured reporting (1 °C
+or 1 %, at least hourly); real ones may report smaller changes, and how often a real one repeats
+both readings exactly is on the [hardware acceptance checklist](hardware-acceptance.md).
 
 ### Sonoff SNZB-04P (window contact)
 

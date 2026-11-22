@@ -193,7 +193,7 @@ def test_the_recorder_turns_a_device_s_messages_into_a_fixture() -> None:
                         }
                     ],
                 }
-            ]
+            ],
         }
     )
     broker = InMemoryBroker()

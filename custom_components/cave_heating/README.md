@@ -93,7 +93,7 @@ in quotes, or a number of seconds.
 | `feed_threshold` | 0.2 K | Change of the room temperature that is written to the thermostat... |
 | `feed_min_interval` | 10 min | ...once this long has passed since the last write. |
 | `feed_max_interval` | 25 min | The temperature is written at least this often. |
-| `sensor_stale` | 3 h | A room sensor counts as unavailable when neither it nor any other entity of its device (its humidity or battery reading, say) has reported for this long. Home Assistant does not record a repeated identical value, so the temperature alone looks silent in a steady room. |
+| `sensor_stale` | 3 h | A room sensor counts as unavailable when its device has not been heard from for this long: by the value of its Zigbee2MQTT `last_seen` sensor where it has one, otherwise by the newest report of any entity of its device (its humidity or battery reading, say). Home Assistant does not record a repeated identical value, so in a steady room every reading can look silent; `last_seen` changes with every message. See "The room sensor's `last_seen`" below. |
 | `window_unavailable_grace` | 30 min | A window contact that goes silent while open keeps the pause this long. |
 | `presence_unavailable_grace` | 30 min | A presence entity that becomes unavailable keeps its last reading this long. |
 
@@ -164,6 +164,31 @@ Setting a temperature or preset, or boosting, is refused with a message while th
 `missing_<room>_<entity>` for an entity named in the file that Home Assistant does not have, and
 `unresponsive_<entity>` for a thermostat that does not confirm its commands, or that kept differing
 from what is wanted for `budget_exhausted_hours`.
+
+## The room sensor's `last_seen`
+
+A Zigbee2MQTT room sensor is judged by its device's `sensor.<name>_last_seen` (concept section
+5.4): the time Zigbee2MQTT last heard it, which moves with every message, also when all its
+readings repeat. Its value counts, not the time Home Assistant wrote it, so a sensor that died
+before a restart of Home Assistant or Zigbee2MQTT is stale at once afterwards instead of
+`sensor_stale` later; a value later than its arrival counts from its arrival. Without a value
+(before Zigbee2MQTT's first message, or with `last_seen` disabled) the newest report of any entity
+of the device counts, as before. The entity is recognised by Zigbee2MQTT's unique ID
+(`<IEEE address>_last_seen_<base topic>`), so renaming it changes nothing.
+
+`compose.yaml` makes Zigbee2MQTT enable it for every device it discovers. One that Home Assistant
+registered disabled before that is enabled by the integration when Home Assistant has started,
+on each reload (`./cave apply`), and when the sensor's device gains it later; only one disabled by
+its integration, never one the owner disabled. Home Assistant then reloads its MQTT integration
+about 30 seconds later, once for all of them: every MQTT entity is unavailable for a moment and
+unknown until Zigbee2MQTT sends the states again, 30 seconds after Home Assistant's birth message.
+The controller treats that like any short outage: a window pause in effect continues (the grace
+for a contact that goes silent while open is 30 minutes), a thermostat that comes back is not
+sent a command if it matches, and its device settings are written once more where their entities
+were still unknown when it came back.
+
+Thermostats and FRITZ! devices are not judged by age at all: a thermostat's reading is used while
+the thermostat is available, and the FRITZ! integration polls the box every 30 seconds.
 
 ## Restarts
 

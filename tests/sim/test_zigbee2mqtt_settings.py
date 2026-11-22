@@ -16,7 +16,6 @@ from __future__ import annotations
 
 import copy
 import json
-import os
 import re
 import shutil
 import subprocess
@@ -50,9 +49,7 @@ def _docker() -> bool:
     if shutil.which("docker") is None:
         return False
     try:
-        result = subprocess.run(
-            ["docker", "info"], capture_output=True, timeout=30, check=False
-        )
+        result = subprocess.run(["docker", "info"], capture_output=True, timeout=30, check=False)
     except subprocess.TimeoutExpired:
         return False
     return result.returncode == 0
@@ -66,7 +63,7 @@ def _interpolate(value: str) -> str:
 
     def replace(match: re.Match[str]) -> str:
         name, operator, rest = match.group(1), match.group(2), match.group(3)
-        if name in ENVIRONMENT and ENVIRONMENT[name]:
+        if ENVIRONMENT.get(name):
             return ENVIRONMENT[name]
         if operator == ":-":
             return rest or ""
@@ -117,8 +114,8 @@ def _read(path: Path) -> dict[str, Any]:
 
 
 def _paths(value: Any, prefix: tuple[str, ...] = ()) -> dict[tuple[str, ...], Any]:
-    """Every leaf of a mapping, by its path."""
-    if not isinstance(value, dict) or not value:
+    """Every leaf of a mapping, by its path. An empty mapping has none (``serial: {}``)."""
+    if not isinstance(value, dict):
         return {prefix: value}
     leaves: dict[tuple[str, ...], Any] = {}
     for key, item in value.items():
@@ -153,7 +150,6 @@ def _changed_outside_environment(
 def data(tmp_path: Path) -> Path:
     directory = tmp_path / "zigbee2mqtt"
     directory.mkdir()
-    os.chmod(directory, 0o777)  # the container may run as another user
     return directory
 
 
@@ -182,7 +178,5 @@ def test_device_options_set_elsewhere_are_replaced(data: Path) -> None:
     (data / "configuration.yaml").write_text(yaml.safe_dump(before), encoding="utf-8")
     _start(data)
     after = _read(data / "configuration.yaml")
-    assert after["device_options"] == {
-        "homeassistant": {"last_seen": {"enabled_by_default": True}}
-    }
+    assert after["device_options"] == {"homeassistant": {"last_seen": {"enabled_by_default": True}}}
     assert _changed_outside_environment(before, after) == set()

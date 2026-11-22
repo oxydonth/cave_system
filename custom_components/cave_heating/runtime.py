@@ -574,9 +574,10 @@ class HeatingRuntime:
         which every MQTT entity is briefly unavailable.
         """
         registry = er.async_get(self.hass)
+        by_integration = er.RegistryEntryDisabler.INTEGRATION
         for sensor in self._sensor_devices:
             for entry in self._device_entries(sensor):
-                if is_last_seen(entry) and entry.disabled_by is er.RegistryEntryDisabler.INTEGRATION:
+                if is_last_seen(entry) and entry.disabled_by is by_integration:
                     _LOGGER.info(
                         "Enabling %s, so that every message of the room sensor %s counts",
                         entry.entity_id,

@@ -598,9 +598,7 @@ def discover_device(device: DeviceInfo, settings: Settings) -> dict[str, dict[st
     return messages
 
 
-def entity_options(
-    settings: Settings, own: Mapping[str, Any] | None = None
-) -> dict[str, Any]:
+def entity_options(settings: Settings, own: Mapping[str, Any] | None = None) -> dict[str, Any]:
     """``Device.options`` in ``lib/model/device.ts``: ``{...device_options, ...deviceOptions}``.
 
     A shallow merge: a device whose own options have a ``homeassistant`` key does not see the

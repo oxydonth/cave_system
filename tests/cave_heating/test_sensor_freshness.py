@@ -60,9 +60,7 @@ def _sensor_device(
     humidity = create(f"{IEEE}_humidity_zigbee2mqtt", "wohnzimmer_humidity")
     seen = ""
     if last_seen:
-        seen = create(
-            LAST_SEEN_ID, "wohnzimmer_last_seen", disabled_by=last_seen_disabled_by
-        )
+        seen = create(LAST_SEEN_ID, "wohnzimmer_last_seen", disabled_by=last_seen_disabled_by)
     return temperature, humidity, seen
 
 
