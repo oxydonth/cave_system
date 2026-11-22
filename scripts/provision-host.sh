@@ -266,18 +266,21 @@ python3 -c 'import sys; sys.exit(sys.version_info < (3, 11))' ||
   die "python3 is older than 3.11; the cave command needs 3.11 or newer"
 docker compose version >/dev/null || die "docker compose does not work"
 
-cat <<EOF
-
-Done. Next, as the service user:
-
-  # clone the repository into the empty $APP_DIR as $SERVICE_USER (docs/install.md, step 2)
-  cd $APP_DIR && sudo -u $SERVICE_USER ./cave init
-  # edit .env, then:  sudo -u $SERVICE_USER ./cave up
-
-See docs/install.md.
-EOF
 if [ "$UNITS_INSTALLED" -eq 0 ]; then
-  say ""
-  say "The nightly update and backup are not installed yet: run $APP_DIR/scripts/provision-host.sh"
-  say "again after cloning (docs/operations.md)."
+  cat <<EOF
+
+Done. Next, in this order (docs/install.md, "Get the code, and install the timers" and after):
+
+  1. clone the repository into the empty $APP_DIR as $SERVICE_USER
+  2. run $APP_DIR/scripts/provision-host.sh again: it installs the nightly update and backup
+  3. then, as $SERVICE_USER in $APP_DIR: ./cave init, edit .env, ./cave check, ./cave up,
+     ./cave bootstrap
+EOF
+else
+  cat <<EOF
+
+Done. Next, as $SERVICE_USER in $APP_DIR (docs/install.md, "Create the configuration" and after):
+
+  ./cave init, edit .env, ./cave check, ./cave up, ./cave bootstrap
+EOF
 fi

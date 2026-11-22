@@ -427,17 +427,20 @@ was waiting; should that start fail, the start stays owed.
 
 ### Onto a new server
 
-1. Provision the new server and clone the repository as in [install.md](install.md), steps 1 and 2,
-   but do **not** run `./cave init`.
+1. Do the steps of [install.md](install.md) up to the clone, but not the configuration: put the
+   operating system on it and give it a fixed address, [provision the host](install.md#3-provision-the-host),
+   and [get the code and install the timers](install.md#4-get-the-code-and-install-the-timers).
+   Stop there: do **not** run `./cave init` ([create the configuration](install.md#5-create-the-configuration)),
+   because the restore brings `.env` and the state.
 2. Copy the archive onto the server, for example to `/var/backups/cave/`.
 3. `cd /opt/cave && sudo ./cave restore /var/backups/cave/cave-backup-….tar.gz`. With no `.env`
    yet, it restores into the default state directory, `/var/lib/cave` (it says so), whatever
-   directory the archive was taken from; give `--data DIR` for another.
+   directory the archive was taken from; give `--data DIR` for another. A restore is finished only
+   once it has started the stack: wait for the command to end, and see
+   [A restore that cannot finish](#a-restore-that-cannot-finish) if it does not.
 4. `sudo -u cave ./cave init`: it creates what this release needs and the archive lacks (a
    variable a newer release added to `.env`, the `tools/` directory) and changes nothing else.
    Without it, a release that needs a new variable would be refused at the Compose check every
    night.
 5. If the coordinator's address or the FRITZ!Box changed, edit `.env` and run
    `sudo -u cave ./cave up`.
-6. Run `sudo /opt/cave/scripts/provision-host.sh` once more: it installs the nightly update and
-   backup now that the checkout is there.

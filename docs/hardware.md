@@ -72,9 +72,10 @@ The system needs about 2 GB of memory and little processor power. What matters i
 If you use a Raspberry Pi it needs:
 
 - 4 GB of memory or more.
-- An SSD to boot from (USB 3, or NVMe through a HAT). SD cards wear out under the database writes.
 - The official power supply.
 - A 64-bit operating system: Raspberry Pi OS Lite 64-bit.
+
+An SSD is a recommendation for reliability, not a requirement. An SD card works and is fine for a trial. But the system writes to its database all the time, and consumer SD cards wear out under that in months to a couple of years, and corrupt more easily when the power fails. Before you rely on the Pi for a winter, move to a small SSD in a USB 3 enclosure (or NVMe through a HAT) and boot from it. If you stay on an SD card, use a high-endurance one, and take the nightly backup seriously: it matters more on a card.
 
 Either way the server runs Debian 13 (on the Pi, Raspberry Pi OS Lite), with Docker Engine, the Compose plugin, Git and the system Python. All images the system uses exist for x86-64 and ARM64. The install guide covers the rest.
 
