@@ -20,8 +20,9 @@ the commands, because these devices run on two AA cells. Time is simulated, so t
 under a minute although it covers days of heating.
 
 The tests are parametrised by device, so their names read as a matrix:
-`test_<capability>[<device>]`. A capability that does not apply to a device is still listed for
-it, skipped with the reason. The list of capabilities and where each applies is
+`test_<capability>[<device>]`, or `[<device>-<variant>]` where a capability has several cases. A
+capability that does not apply to a device is still listed for it, skipped with the reason. The
+capabilities, where each applies, and the variants each device must run are
 `tests/devices/capabilities.py`.
 
 ```sh
@@ -31,9 +32,9 @@ uv run pytest tests/devices -k FRITZ-302    # only one device
 ```
 
 **The matrix.** Every pipeline run shows the devices against the capabilities in its job summary
-(job `test`, step "Device matrix"). A cell says `pass`, `FAIL`, `n/a` (with the reason in
-`capabilities.py`), `GAP` (the capability applies but no test ran for it, which fails the step),
-or ⚠️ with a finding number. To make it locally:
+(job `test`, step "Device matrix", also printed in its log). A cell says `pass`, `FAIL`, `n/a`
+(with the reason in `capabilities.py`), `GAP` (the capability, or one of its declared variants,
+applies but did not run, which fails the step), or ⚠️ with a finding number. To make it locally:
 
 ```sh
 uv run pytest --junitxml=test-results.xml
@@ -41,9 +42,11 @@ uv run python -m tests.devices.matrix test-results.xml
 ```
 
 **Findings.** Where the integration or a simulator does not do what the concept requires, the
-test still asserts the concept and is marked as an expected failure whose reason starts with
-`finding:` and a number (F1, F2, ...). The mark is strict: once the finding is fixed, the test
-passes, the run fails, and the mark has to go.
+test still asserts the concept, and the case is marked as an expected failure whose reason starts
+with `finding:` and a number (F1, F2, ...), listed in `capabilities.py` with the fix that closes
+it. A finding's case holds only the assertions the finding breaks, so the mark hides nothing else.
+The mark is strict: once the finding is fixed, the case passes, the run fails, and the mark has
+to go.
 
 **Behaviours not confirmed on real hardware** (concept section 12) are tested in every variant the
 simulators can play, and each test says which one it covers: a Sonoff that does or does not go
@@ -59,20 +62,23 @@ simulator and the real device that matter here are listed with it; the full list
 
 ### Every thermostat
 
-Discovery (entity IDs, range and step); heat at a target, rounded half up to the step and clamped
-to the range; off and back to heat, with the command forms of concept 5.5; confirmation by the
+Discovery (entity IDs, range and step); a room target arriving on the thermostat's step (every
+model has 0.5 K, like the room) and, on the FRITZ!, clamped to its narrower 8 to 28 °C range; off
+and back to heat, with the command forms of concept 5.5; confirmation by the
 device's report; an unanswered command resent three times, then `unresponsive` with a repair
 notice and retried every 30 minutes; a dial turned on the device becoming the room's override; a
 mode changed on the device put back; the mode never set to heat without the target; unavailable
 and back, with a dial turned meanwhile not adopted; the battery level; the hold `device-check`
-uses; and a room built from the model: comfort and eco by schedule, window pause, away, boost, and
-an override that ends with the schedule. A mixed room with all four models stays in step whichever
+uses, a hold that ends by itself, and (FRITZ!) a late report after the release that is not
+adopted; and a room built from the model: comfort and eco by schedule, window pause with a dial
+turned during it, away, boost, and an override that ends with the schedule. A mixed room with all four models stays in step whichever
 dial is turned.
 
 ### Sonoff TRV Gen2 (TRV-ZBT) and Sonoff TRVZB
 
 Also: the room temperature reaches `number.<name>_external_temperature_input`, at once at the
-start, after 10 minutes for a change and at least every 25; the sensor selection
+start, after 10 minutes for a change and every 25 minutes in a steady room, no more often; not at
+all while the room is switched off, and at once when it is back on; the sensor selection
 (`select.<name>_temperature_sensor_select: remote_temperature`) is written once and left alone
 when the device switches to `remote_source_offline` by itself two hours after the feed stops;
 when the device does not go back by itself, it is written again five minutes after the feed
@@ -127,42 +133,74 @@ the problem sensor on.
 
 ## Checking a real thermostat: `cave device-check`
 
-Once a thermostat is paired and its room is in the applied `heating.yaml`, run on the server:
+Once a radiator thermostat is paired and its room is in the applied `heating.yaml`, run on the
+server:
 
 ```sh
 ./cave device-check climate.bad_heizung
 ./cave device-check climate.wohnzimmer_heizung_fenster --timeout 300
 ```
 
+Name a **radiator thermostat**, as listed under `trvs` in `heating.yaml`, never a room
+thermostat `climate.cave_<room>`: setting a temperature on that would put the whole room into an
+override. The command refuses `climate.cave_*` and anything else that belongs to `cave_heating`.
+
 It needs the script token (`./cave bootstrap` creates it) and a running Home Assistant. It asks
 the real device what the tests ask the simulators:
 
 1. It reads the thermostat's entry from the applied `heating.yaml`, with the integration's own
-   loader in a one-off Home Assistant container: its room, external input and settings.
+   loader in a one-off Home Assistant container: its room, external input and settings, and from
+   Home Assistant's entity registry which integration the entity belongs to.
 2. It holds the thermostat with `cave_heating.hold`, so the controller neither reacts to the
    check nor passes it on to the room. The hold is longer than the check can take (three times
-   `--timeout`, plus 6 minutes), and ends by itself if the command is killed. A thermostat that is
-   not in the file is checked without a hold: the controller does not drive it.
+   `--timeout`, plus 6 minutes: 66 minutes by default), and ends by itself if the command is
+   killed outright.
 3. It checks that the entity exists, is available and reports a temperature; that it accepts a
-   target half a degree higher and reports it back, and **how long that took**; where the file
-   names them, that the external input accepts the room's temperature and that the settings
-   entities exist with the configured options (it does not change the settings).
-4. Whatever happens, also on an error or Ctrl-C, it sends the original target back, waits until
-   the thermostat reports it (if the half degree was never reported, it watches for a late report
-   for another `--timeout` and undoes it), and releases the hold. Nothing is changed permanently.
+   target half a degree higher and reports it back, and how long that took (see below); where
+   the file names them, that the external input accepts the room sensor's current reading, and
+   that the settings entities exist with the configured options.
+4. Whatever happens, also on an error from Home Assistant, Ctrl-C, SIGTERM or a dropped SSH
+   session (SIGHUP), it sends the original target back, waits until the thermostat reports it (if
+   the half degree was never reported, it watches for a late report for another `--timeout` and
+   undoes it), and then, in a step of its own that runs even if the restore failed, releases the
+   hold. If Home Assistant restarts meanwhile, it holds the thermostat again for the whole restore
+   and keeps trying for 15 minutes.
+
+**What it changes while it runs.** The thermostat's target, by half a degree, until it is put
+back. The external input, with the room sensor's current reading, which is what the controller
+writes anyway; if the room sensor is unavailable or stale, the controller's feed is stopped and
+the check writes nothing there (that row is skipped). And for the duration of the hold, the
+controller leaves the thermostat alone: during the check it ignores a window pause, the room's
+schedule and every change made in the UI, for at most the length of the hold.
+
+**What it never changes.** The device settings (it only reads them), the room's mode, target,
+schedule or override, and every other thermostat. After the release the controller brings the
+thermostat back to its room's target, whatever happened.
+
+If the hold could not be released (Home Assistant unreachable), the output says when it ends by
+itself. Interrupting a second time while it puts the thermostat back abandons that, and the hold
+then ends by itself at the time it prints.
 
 | Option | Default | Meaning |
 |---|---|---|
 | `--timeout SECONDS` | 1200 | How long to wait for the thermostat to report a target: 20 minutes, enough for a FRITZ! thermostat. A Zigbee thermostat answers within seconds; 300 is plenty. |
 | `--interval SECONDS` | 2 | Time between two looks at the thermostat. |
+| `--not-in-heating-yaml` | off | Check a thermostat that is paired but not yet in the applied `heating.yaml`. It is checked without a hold, because the controller does not drive it; without this option such a thermostat is refused, so that a typing error in the entity cannot check something the controller does not know. |
 
-It prints a table of the checks with pass, FAIL or skipped and the time each took, and exits
-with 0 when every check passed, 1 when one failed, and 2 when **the check could not complete**:
-the thermostat is off (its room is switched off, paused or in summer mode; run it while the room
-heats), or the hold disappeared during the check, which happens when Home Assistant restarts. In
-that case it holds the thermostat again to restore it, and the result says so rather than
+It always prints a table of the checks with pass, FAIL or skipped and the time each took, and
+exits with 0 when every check passed, 1 when one failed, 2 when **the check could not complete**,
+and 130 when it was interrupted. "Could not complete" means: Home Assistant refused a request (a
+FRITZ! thermostat with its key lock on, for example) or could not be reached; the hold
+disappeared during the check, which happens when Home Assistant restarts; or the thermostat is
+off or shows no target (its room switched off or paused, summer mode, a FRITZ! thermostat in
+holiday mode); run it again while the room heats. In these cases the result says so rather than
 blaming the device.
 
-The time a thermostat takes to report a target back is one of the open points of concept section
-12 (does a FRITZ!Box report a setpoint before the valve has it?). Note it for each thermostat in
-the hardware acceptance checklist.
+**What the measured time means.** The clock starts before the command is sent and stops when
+Home Assistant shows the new target. For a Zigbee thermostat that is the device's own answer,
+through Zigbee2MQTT. For a FRITZ! thermostat it is what the FRITZ!Box reports, which Home
+Assistant polls every 30 seconds (and once right after the command). Whether the box reports a
+new setpoint before the valve has it is one of the open points of concept section 12: a time near
+zero on a FRITZ! thermostat means the box reports it at once, and the valve's real delay has to be
+read on the thermostat's display. Note both for each thermostat in the hardware acceptance
+checklist.

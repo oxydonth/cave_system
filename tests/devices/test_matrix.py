@@ -33,11 +33,13 @@ def _junit(tmp_path: Path, *cases: str) -> Path:
 
 
 def _all_passing() -> list[str]:
+    """Every case the registry declares, passing; the inapplicable ones skipped as n/a."""
     cases = []
     for name, entry in CAPABILITIES.items():
         for device in DEVICES:
-            result = "" if device in entry.applies else NA
-            cases.append(_case(f"test_{name}[{device}]", result))
+            if device not in entry.applies:
+                cases.append(_case(f"test_{name}[{device}]", NA))
+            cases.extend(_case(f"test_{name}[{test_id}]") for test_id in entry.test_ids(device))
     return cases
 
 
@@ -61,7 +63,7 @@ def test_all_passing_gives_no_gap_and_exit_status_zero(tmp_path: Path, capsys) -
     assert matrix.main([str(junit)]) == 0
     out = capsys.readouterr().out
     assert "| Discovery: entities, entity IDs, range and step (`discovery`) | ✅ pass" in out
-    assert "GAP" not in out
+    assert "**GAP**" not in out
     assert "FAIL" not in out
 
 
@@ -74,6 +76,21 @@ def test_a_missing_test_is_a_gap_not_a_blank(tmp_path: Path, capsys) -> None:
     cells = [cell.strip() for cell in row.strip("|").split("|")][1:]
     assert cells[list(DEVICES).index("BTH-RA")] == "🕳️ **GAP**"
     assert "- `room_away` has no test for BTH-RA" in out
+
+
+def test_a_missing_variant_is_a_gap(tmp_path: Path, capsys) -> None:
+    """The variants are the unconfirmed hardware behaviours: dropping one must show."""
+    dropped = "test_fritz_window_detection[FRITZ-302-target-off]"
+    cases = [case for case in _all_passing() if dropped not in case]
+    assert matrix.main([str(_junit(tmp_path, *cases))]) == 1
+    out = capsys.readouterr().out
+    assert "- `fritz_window_detection` has no test for FRITZ-302-target-off" in out
+
+
+def test_an_undeclared_variant_is_reported(tmp_path: Path, capsys) -> None:
+    extra = _case("test_fritz_window_detection[FRITZ-302-target-purple]")
+    assert matrix.main([str(_junit(tmp_path, *_all_passing(), extra))]) == 1
+    assert "FRITZ-302-target-purple" in capsys.readouterr().out
 
 
 def test_a_skip_for_another_reason_is_a_gap(tmp_path: Path) -> None:
@@ -91,11 +108,8 @@ def test_variants_failures_and_findings(tmp_path: Path, capsys) -> None:
     finding = '<skipped type="pytest.xfail" message="finding: F9: something is off"/>'
     replaced = {
         "test_discovery[TRVZB]": _case("test_discovery[TRVZB]", failure),
-        "test_mode_changed_on_device_is_put_back[BTH-RA]": "".join(
-            (
-                _case("test_mode_changed_on_device_is_put_back[BTH-RA-pause]"),
-                _case("test_mode_changed_on_device_is_put_back[BTH-RA-schedule]", finding),
-            )
+        "test_mode_changed_on_device_is_put_back[BTH-RA-schedule]": _case(
+            "test_mode_changed_on_device_is_put_back[BTH-RA-schedule]", finding
         ),
     }
     cases = []

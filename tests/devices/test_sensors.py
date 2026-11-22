@@ -148,18 +148,7 @@ async def _contact_silent_while_open_until_the_grace_ends(rig: Rig) -> None:
     assert rig.commands(TRVZB) == heat(TRVZB, 21.0, with_mode=True)
 
 
-F2_STALE_OPEN_ON_RETURN = (
-    "F2: when a contact that went silent while open answers again, Home Assistant shows its "
-    "last state (open) for an instant before the new one (closed); the integration dates that "
-    "opening from the old one, so the window pause starts again at once and lasts "
-    "window_close_delay: radiators off for 2 minutes and two extra commands per thermostat"
-)
-
-
-@pytest.mark.parametrize(
-    "device",
-    devices("contact_returns_closed_after_grace", findings={"SNZB-04P": F2_STALE_OPEN_ON_RETURN}),
-)
+@pytest.mark.parametrize("device", devices("contact_returns_closed_after_grace"))
 async def test_contact_returns_closed_after_grace(rig: Rig, device: str) -> None:
     """Concept 5.3 and 5.4: after the grace has ended the pause, the contact answers again and
     reports the window closed. The window pause starts when a contact has been open for

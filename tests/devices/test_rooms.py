@@ -33,11 +33,16 @@ from tests.devices.rig import (
 pytestmark = pytest.mark.usefixtures("hass")
 
 
+# The tests that use Home Assistant's schedule helper (rig.start(schedule=True)).
+_WITH_SCHEDULE = {"test_room_comfort_and_eco_by_schedule", "test_room_override_expires"}
+
+
 @pytest.fixture
-def expected_lingering_timers() -> bool:
+def expected_lingering_timers(request: pytest.FixtureRequest) -> bool:
     """Home Assistant's schedule helper leaves the timer of its next change behind when Home
-    Assistant stops; the test library would report it as a leak of the test."""
-    return True
+    Assistant stops, which the test library would report as a leak of the test. Only the tests
+    that use it allow that; in the others a leaked timer is still reported."""
+    return request.node.originalname in _WITH_SCHEDULE
 
 
 def _settle(model: ThermostatModel) -> float:
@@ -68,8 +73,11 @@ async def test_room_comfort_and_eco_by_schedule(rig: Rig, device: str) -> None:
 @pytest.mark.parametrize("device", devices("room_window_pause"))
 async def test_room_window_pause(rig: Rig, device: str) -> None:
     """Row 3: the radiators are off during the window pause, while the room keeps showing its
-    target; a dial turned during the pause is not adopted (nothing is adopted while the
-    radiators are off). The pause ends with one heat command."""
+    target. A dial turned during the pause is not adopted: nothing is adopted while the
+    radiators are off. A Zigbee thermostat stays off when its dial is turned (its mode is off,
+    which is what is wanted), so it receives nothing; a FRITZ! dial switches the thermostat from
+    OFF to a temperature, so it is put back off with one command. The pause ends with one heat
+    command."""
     model = MODELS[device]
     await rig.start(model)
     await rig.past_start_window()
@@ -81,14 +89,26 @@ async def test_room_window_pause(rig: Rig, device: str) -> None:
     await rig.refresh_fritzbox()
     assert rig.state(model.climate).state == "off"
     assert rig.commands(model) == OFF
+
+    await rig.device(lambda: rig.sim.home.turn_dial(model.device_id, 24.0))
+    await rig.advance(5 * SEC)
+    put_back = [] if model.zigbee else OFF
+    assert rig.commands(model) == OFF + put_back
+    await rig.advance(1 * MIN)
+    assert rig.room() == (21.0, "comfort", "window"), "the dial is not adopted"
+    await rig.refresh_fritzbox()
+    assert rig.state(model.climate).state == "off"
+
     rig.sim.home.set_window(CONTACT_ID, False)
     await rig.advance(2 * MIN + 5 * SEC)
     assert rig.room() == (21.0, "comfort", "comfort")
     await rig.advance(_settle(model))
     assert rig.state(model.climate).state == "heat"
-    assert rig.commands(model) == OFF + heat(model, 21.0, with_mode=True)
+    assert rig.state(model.climate).attributes["temperature"] == 21.0
+    expected = OFF + put_back + heat(model, 21.0, with_mode=True)
+    assert rig.commands(model) == expected
     await rig.advance(30 * MIN)
-    assert rig.commands(model) == OFF + heat(model, 21.0, with_mode=True)
+    assert rig.commands(model) == expected
     assert rig.status(model) == "ok"
 
 

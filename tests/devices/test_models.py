@@ -88,21 +88,31 @@ async def test_feed_reaches_external_input(rig: Rig, device: str) -> None:
 
 @pytest.mark.parametrize("device", devices("feed_at_least_every_30_minutes"))
 async def test_feed_at_least_every_30_minutes(rig: Rig, device: str) -> None:
-    """Concept 5.5: the reading is written after feed_max_interval (25 min) in any case, because
-    a Bosch falls back to its own sensor after 30 minutes without a value, and a Sonoff after
-    two hours. In a steady room, over three hours, no gap between writes exceeds 25 minutes and
-    the device never falls back."""
+    """Concept 5.5: the reading is written when it has changed by feed_threshold (0.2 K) and
+    feed_min_interval (10 min) has passed, and after feed_max_interval (25 min) in any case,
+    because a Bosch falls back to its own sensor after 30 minutes without a value, and a Sonoff
+    after two hours.
+
+    In a steady room (19 °C inside and out, comfort 19 °C, so no valve opens and nothing
+    changes) the reading never changes, so over three hours the input is written exactly every
+    25 minutes: at the start and then 7 times, no more, and the device never falls back."""
     model = MODELS[device]
-    await rig.start(model, contact=False)
+
+    async def steady(rig: Rig) -> None:
+        rig.sim.home.set_outdoor_temperature(19.0)
+
+    await rig.start(model, contact=False, room={"comfort_temperature": 19.0}, before_heating=steady)
     prop, _ = _input(rig, model)
-    gap = longest = 0.0
-    seen = len(rig.writes(model.name, prop))
-    for _ in range(180):
+    assert len(rig.writes(model.name, prop)) == 1, "at once when the feed starts"
+    writes_at: list[int] = []
+    seen = 1
+    for minute in range(1, 181):
         await rig.advance(1 * MIN)
         count = len(rig.writes(model.name, prop))
-        gap = 0.0 if count > seen else gap + 1 * MIN
+        assert count - seen <= 1, "never two writes within a minute"
+        if count > seen:
+            writes_at.append(minute)
         seen = count
-        longest = max(longest, gap)
         state = rig.sim.home.device_state(model.device_id)
         received = state.get("remote_received") or state.get("external_received")
         assert received is not None
@@ -110,8 +120,33 @@ async def test_feed_at_least_every_30_minutes(rig: Rig, device: str) -> None:
         assert age < 30 * MIN, f"the device has had no value for {age / 60:.0f} minutes"
         if model.key != "BTH-RA":
             assert state["state"]["temperature_sensor_select"] == "remote_temperature"
-    assert seen >= 7, "about every 25 minutes"
-    assert longest <= 25 * MIN
+    assert float(rig.state(TEMPERATURE).state) == 19.0, "the room stayed steady"
+    assert writes_at == [25, 50, 75, 100, 125, 150, 175]
+    assert set(rig.writes(model.name, prop)) == {19.0}
+
+
+@pytest.mark.parametrize("device", devices("feed_stops_while_the_room_is_off"))
+async def test_feed_stops_while_the_room_is_off(rig: Rig, device: str) -> None:
+    """Concept 5.5: the feed stops while the room is switched off (the thermostat falls back to
+    its own sensor), and when it starts again it writes at once, because the last write was more
+    than feed_min_interval ago. Exactly one write then, and no device setting is written again,
+    since the settings still match five minutes after the feed resumed."""
+    model = MODELS[device]
+    await rig.start(model, contact=False)
+    prop, _ = _input(rig, model)
+    await rig.advance(1 * MIN)
+    rig.mark()
+    await rig.room_off()
+    await rig.advance(1 * HOUR)
+    assert rig.writes(model.name, prop) == [], "nothing while the room is off"
+    await rig.room_on()
+    await rig.advance(3 * SEC)
+    assert rig.writes(model.name, prop) == [half_up(_sensor(rig), _input(rig, model)[1])]
+    await rig.advance(6 * MIN)
+    assert len(rig.writes(model.name, prop)) == 1
+    for setting in model.settings:
+        name = setting.split(".", 1)[1].removeprefix(f"{model.device_id}_")
+        assert rig.writes(model.name, name) == [], setting
 
 
 # --- Sonoff sensor selection ----------------------------------------------------------------
@@ -224,19 +259,17 @@ async def test_window_detection_switched_off(rig: Rig, device: str) -> None:
 
 # --- FRITZ! ----------------------------------------------------------------------------------
 
-REPORT_DELAYS = {"FRITZ-302": ["at-once", "after-3-min", "after-15-min"]}
 _DELAY_SECONDS = {"at-once": 0.0, "after-3-min": 180.0, "after-15-min": 900.0}
 
 
-@pytest.mark.parametrize(
-    ("device", "behaviour"), devices("fritz_reporting_behaviours", REPORT_DELAYS)
-)
+@pytest.mark.parametrize(("device", "behaviour"), devices("fritz_reporting_behaviours"))
 async def test_fritz_reporting_behaviours(rig: Rig, device: str, behaviour: str) -> None:
     """Concept 3.1 and 12: a new setpoint reaches a FRITZ! valve after about 3 minutes (up to 15
     on the 301), and whether the box reports it before then is unconfirmed. A FRITZ! thermostat
     is slow (confirm_timeout_slow, 20 min): whether the report comes at once or only after the
-    delay, the command is sent once, waits as pending (not a problem), and is confirmed. The late
-    report is not a hand change, also after the start's five-minute exemption window."""
+    delay, the command is sent once, waits as pending (not a problem), and is confirmed. The
+    second command is sent after the start's five-minute exemption window, so that its report is
+    not a hand change because of the queue of sent targets, not because of the window."""
     delay = _DELAY_SECONDS[behaviour]
     await rig.start(FRITZ_302, contact=False, sensor=False, fritzbox={"report_delay": delay})
     assert rig.commands(FRITZ_302) == heat(FRITZ_302, 21.0)
@@ -248,9 +281,13 @@ async def test_fritz_reporting_behaviours(rig: Rig, device: str, behaviour: str)
     await rig.advance(40 * SEC)
     assert rig.state(FRITZ_302.climate).attributes["temperature"] == 21.0
     assert rig.status(FRITZ_302) == "ok"
+    await rig.past_start_window()
 
     rig.mark()
     await rig.set_comfort(22.0)
+    await rig.advance(3 * SEC)
+    if delay:
+        assert rig.status(FRITZ_302) == "pending"
     await rig.advance(delay + 40 * SEC)
     assert rig.state(FRITZ_302.climate).attributes["temperature"] == 22.0
     await rig.advance(1 * HOUR)
@@ -286,46 +323,14 @@ async def test_late_report_while_a_later_command_waits(rig: Rig, device: str) ->
     assert rig.room() == (23.0, "comfort", "comfort")
 
 
-REFUSALS = {
-    "FRITZ-302": [
-        "summer-mode",
-        "holiday-mode",
-        "key-lock",
-        "lock-not-yet-polled-refused",
-        "lock-not-yet-polled-ignored",
-    ]
-}
-
-
-F1_NO_TARGET_RETRIES = (
-    "F1: a blocked thermostat that reports no target (a FRITZ! in summer or holiday mode) is "
-    "retried on every report, not every retry_interval: driver.same(None, None) is False, so "
-    "every report counts as a target change"
-)
-
-
-@pytest.mark.parametrize(
-    ("device", "case"),
-    devices(
-        "refused_command_makes_blocked",
-        REFUSALS,
-        findings={
-            "FRITZ-302-summer-mode": F1_NO_TARGET_RETRIES,
-            "FRITZ-302-holiday-mode": F1_NO_TARGET_RETRIES,
-        },
-    ),
-)
-async def test_refused_command_makes_blocked(rig: Rig, device: str, case: str) -> None:
-    """Concept 5.5, refused commands: if Home Assistant rejects a command, as for a FRITZ!
-    thermostat in summer mode, holiday mode or key lock, the thermostat is blocked, the problem
-    sensor says why, and it is not resent into: it is tried again every retry_interval (30 min),
-    or sooner when its availability, mode or target changes. Once the box accepts commands
-    again, it is brought in line.
+async def _until_blocked(rig: Rig, case: str) -> tuple[int, int]:
+    """Make the FRITZ! thermostat blocked the way ``case`` says, and check that it is.
 
     Home Assistant refuses by the lock it last polled. In the up to 30 s before the next poll
     the command reaches the box, whose answer is unconfirmed: an HTTP error (refused), or
     acceptance without effect (ignored), which shows as an unconfirmed command until the poll
-    makes Home Assistant refuse the resend.
+    makes Home Assistant refuse the resend. Returns how many commands reached the box and how
+    many climate calls the controller had made before.
     """
     await rig.start(FRITZ_302, contact=False, sensor=False)
     home = rig.sim.home
@@ -365,17 +370,17 @@ async def test_refused_command_makes_blocked(rig: Rig, device: str, case: str) -
     assert sent == (1 if case.startswith("lock-not-yet-polled") else 0)
     box = rig.sim.home.fritzbox.thermostats[FRITZ_AIN]
     assert box.device_tsoll == 42, "the box kept 21 °C"
-    tries = len(rig.controller_calls(FRITZ_302.climate)) - calls_before
-    await rig.advance(29 * MIN)
-    assert len(rig.controller_calls(FRITZ_302.climate)) - calls_before == tries, "no resend"
-    assert rig.status(FRITZ_302) == "blocked"
-    await rig.advance(1 * MIN + 5 * SEC)
-    assert len(rig.controller_calls(FRITZ_302.climate)) - calls_before == tries + 1, (
-        "tried again after retry_interval, and refused again"
-    )
-    assert rig.status(FRITZ_302) == "blocked"
-    assert len(rig.commands(FRITZ_302)) == sent, "Home Assistant refused it before the box"
+    return sent, calls_before
 
+
+@pytest.mark.parametrize(("device", "case"), devices("refused_command_makes_blocked"))
+async def test_refused_command_makes_blocked(rig: Rig, device: str, case: str) -> None:
+    """Concept 5.5, refused commands: if Home Assistant rejects a command, as for a FRITZ!
+    thermostat in summer mode, holiday mode or key lock, the thermostat is blocked and the
+    problem sensor says why. A change of its mode or target is the trigger to try again; once the
+    box accepts commands again, it is brought in line."""
+    sent, _ = await _until_blocked(rig, case)
+    home = rig.sim.home
     # Released. Summer and holiday mode: the mode and target the box reports change back,
     # which is the trigger to retry at once, and 21 °C matches, so nothing needs sending. The
     # key lock: nothing the thermostat reports changes, so the retry waits for retry_interval.
@@ -395,10 +400,25 @@ async def test_refused_command_makes_blocked(rig: Rig, device: str, case: str) -
     assert rig.commands(FRITZ_302)[sent:] == expected
 
 
-WINDOW_REPORTS = {"FRITZ-302": ["target-unchanged", "target-off"]}
+@pytest.mark.parametrize(("device", "case"), devices("blocked_not_retried_before_retry_interval"))
+async def test_blocked_not_retried_before_retry_interval(rig: Rig, device: str, case: str) -> None:
+    """Concept 5.5: a blocked thermostat is not resent into; while nothing it reports changes
+    (its measured temperature does not count), it is tried again only after retry_interval
+    (30 min), and Home Assistant refuses that try again before it reaches the box."""
+    sent, calls_before = await _until_blocked(rig, case)
+    tries = len(rig.controller_calls(FRITZ_302.climate)) - calls_before
+    await rig.advance(29 * MIN)
+    assert len(rig.controller_calls(FRITZ_302.climate)) - calls_before == tries, "no resend"
+    assert rig.status(FRITZ_302) == "blocked"
+    await rig.advance(1 * MIN + 5 * SEC)
+    assert len(rig.controller_calls(FRITZ_302.climate)) - calls_before == tries + 1, (
+        "tried again after retry_interval, and refused again"
+    )
+    assert rig.status(FRITZ_302) == "blocked"
+    assert len(rig.commands(FRITZ_302)) == sent, "Home Assistant refused it before the box"
 
 
-@pytest.mark.parametrize(("device", "report"), devices("fritz_window_detection", WINDOW_REPORTS))
+@pytest.mark.parametrize(("device", "report"), devices("fritz_window_detection"))
 async def test_fritz_window_detection(rig: Rig, device: str, report: str) -> None:
     """Concept 5.6: a FRITZ! thermostat's own window detection may stay on. What the box reports
     meanwhile is unconfirmed (concept 12).

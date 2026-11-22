@@ -41,6 +41,7 @@ class Cell:
     outcomes: list[str] = field(default_factory=list)
     findings: list[str | None] = field(default_factory=list)  # per test, for FINDING outcomes
     tests: list[str] = field(default_factory=list)
+    ids: list[str] = field(default_factory=list)  # the parameter IDs, ``<device>[-<variant>]``
 
 
 @dataclass
@@ -49,7 +50,7 @@ class Matrix:
 
     cells: dict[tuple[str, str], str]
     findings: dict[str, list[str]]  # finding text -> test IDs
-    gaps: list[tuple[str, str]]
+    gaps: list[tuple[str, str]]  # capability, missing test ID (``<device>[-<variant>]``)
     failures: list[str]
     unknown: list[str]  # device tests whose capability or device is not in the registry
     counts: dict[tuple[str, str], tuple[int, int]]  # cases passed, cases run
@@ -94,14 +95,19 @@ def build(junit: Path) -> Matrix:
         capability, params = match["capability"], match["params"]
         device = _device_of(params)
         test_id = f"{classname}::{case.get('name')}"
-        if capability not in CAPABILITIES or device is None:
+        entry = CAPABILITIES.get(capability)
+        if entry is None or device is None:
             unknown.append(test_id)
             continue
         outcome, finding = _outcome(case)
+        if device in entry.applies and params not in entry.test_ids(device):
+            unknown.append(test_id)  # a variant the registry does not declare
+            continue
         cell = cells[(capability, device)]
         cell.outcomes.append(outcome)
         cell.tests.append(test_id)
         cell.findings.append(finding)
+        cell.ids.append(params)
 
     result: dict[tuple[str, str], str] = {}
     findings: dict[str, list[str]] = defaultdict(list)
@@ -123,9 +129,16 @@ def build(junit: Path) -> Matrix:
                 )
             elif not applies:
                 status = NOT_APPLICABLE
-            elif not ran:
+            elif missing := [
+                test_id
+                for test_id in entry.test_ids(device)
+                if not any(
+                    ran_id == test_id and outcome not in (NOT_APPLICABLE, SKIPPED)
+                    for ran_id, outcome in zip(cell.ids, cell.outcomes, strict=True)
+                )
+            ]:
                 status = GAP
-                gaps.append((capability, device))
+                gaps.extend((capability, test_id) for test_id in missing)
             elif FINDING in ran:
                 status = FINDING
                 for finding, test in zip(cell.findings, cell.tests, strict=True):
@@ -182,9 +195,10 @@ def render(matrix: Matrix) -> str:
     lines.append("")
     lines.append(
         "n/a: the capability does not apply to the device; the reason is the skip message of "
-        "its test and is listed in `tests/devices/capabilities.py`. ⚠️: the case passes except "
-        "for a recorded finding, a test that asserts the concept and is marked as an expected "
-        "failure until the finding is fixed."
+        "its test and is listed in `tests/devices/capabilities.py`. GAP: a case the registry "
+        "declares for the device did not run. ⚠️ Fn (k of n cases pass): the other cases are an "
+        "open finding, each a test that asserts the concept and is a strict expected failure "
+        "until the fix; the finding's cases are kept to the assertions the finding breaks."
     )
     if matrix.findings:
         lines += ["", "### Findings", ""]
@@ -193,7 +207,7 @@ def render(matrix: Matrix) -> str:
     if matrix.gaps:
         lines += ["", "### Gaps", ""]
         lines += [
-            f"- `{capability}` has no test for {device}" for capability, device in matrix.gaps
+            f"- `{capability}` has no test for {test_id}" for capability, test_id in matrix.gaps
         ]
     if matrix.failures:
         lines += ["", "### Failures", ""]

@@ -64,13 +64,17 @@ jobs:
       - run: make test
         env:
           PYTEST_ADDOPTS: --junitxml=test-results.xml
-      # The device-by-capability matrix of the device integration tests (WP7), in the job
-      # summary of every run. It fails on a capability without a test for a device it applies to.
-      - name: Device matrix
-        if: ${{ !cancelled() }}
-        run: uv run --locked python -m tests.devices.matrix test-results.xml >> "${GITHUB_STEP_SUMMARY}"
       # The `cave` command must also run on the oldest Python it supports, without Home Assistant.
       - run: make test-py311
+        if: ${{ !cancelled() }}
+      # The device-by-capability matrix of the device integration tests (WP7), in the job
+      # summary of every run and in the log. It fails on a capability, or a declared variant,
+      # without a test for a device it applies to.
+      - name: Device matrix
+        if: ${{ !cancelled() }}
+        # An explicit `bash` runs with pipefail, so the script's exit status survives the tee.
+        shell: bash
+        run: uv run --locked python -m tests.devices.matrix test-results.xml | tee -a "${GITHUB_STEP_SUMMARY}"
 
   hassfest:
     name: hassfest

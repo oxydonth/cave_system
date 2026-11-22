@@ -62,35 +62,63 @@ async def test_discovery(rig: Rig, device: str) -> None:
         assert attributes["target_temp_step"] == model.step
 
 
-@pytest.mark.parametrize("device", devices("rounding_and_clamping"))
-async def test_rounding_and_clamping(rig: Rig, device: str) -> None:
-    """Concept 5.5: the target is rounded half up to the step and clamped to the range.
+@pytest.mark.parametrize(("device", "case"), devices("rounding_to_the_step"))
+async def test_rounding_to_the_step(rig: Rig, device: str, case: str) -> None:
+    """Concepts 5.2 and 5.5: the room's target is in 0.5 K steps, and a target is rounded half up
+    to the thermostat's step before it is sent and compared.
 
-    A boost to 22.25 °C must reach every model as 22.5 (half up, not to even); a boost to 30 °C
-    reaches each model at its maximum at most; an eco of 5 °C at its minimum at least. A clamped
-    target is compared as such: once the device has it, nothing more is sent.
+    Every recommended model has a 0.5 K step (the FRITZ! one through its precision, as it has no
+    ``target_temp_step``), so a room target arrives unchanged; that is what ``room-step`` checks
+    (22.5 °C must arrive as 22.5, neither 22 nor 23). Rounding to a step other than the room's
+    can therefore not occur on these models; WP4's tests cover it with fake thermostats, and the
+    Bosch's 0.2 K external input is rounded in ``feed_reaches_external_input``.
+
+    ``boost-off-grid``: a boost to 22.25 °C through ``cave_heating.boost``. Concept 5.2 puts the
+    room's target on the 0.5 K grid, so the room shows 22.5 (half up), and the thermostat gets
+    22.5 with one command.
     """
     model = MODELS[device]
     await rig.start(model, contact=False, sensor=False)
     await rig.advance(1 * MIN)
     rig.mark()
-    await rig.boost(temperature=22.25)
+    if case == "room-step":
+        await rig.set_comfort(22.5)
+    else:
+        await rig.boost(temperature=22.25)
     await rig.advance(5 * SEC)
+    assert rig.room()[0] == 22.5
     assert rig.commands(model) == heat(model, 22.5)
+    await rig.refresh_fritzbox()
+    assert rig.state(model.climate).attributes["temperature"] == 22.5
+    await rig.advance(30 * MIN)
+    assert rig.commands(model) == heat(model, 22.5), "it matches: nothing more is sent"
+    assert rig.status(model) == "ok"
 
+
+@pytest.mark.parametrize("device", devices("clamping_to_the_range"))
+async def test_clamping_to_the_range(rig: Rig, device: str) -> None:
+    """Concept 5.5: a target is clamped to the thermostat's range before it is sent and before it
+    is compared. Only the FRITZ! range (8 to 28 °C) is narrower than the room's 5 to 30 °C, so
+    only there can a room target lie outside it: a boost to 30 °C is sent as 28, an eco of 5 °C as
+    8, and once the thermostat has the clamped value nothing more is sent."""
+    model = MODELS[device]
+    await rig.start(model, contact=False, sensor=False)
+    await rig.advance(1 * MIN)
     rig.mark()
     await rig.boost(temperature=30.0)
     await rig.advance(5 * SEC)
-    assert rig.commands(model) == heat(model, min(30.0, model.max_temp))
+    assert rig.room()[0] == 30.0
+    assert rig.commands(model) == heat(model, model.max_temp)
 
     rig.mark()
     await rig.call(DOMAIN, "resume_schedule", entity_id=ROOM_CLIMATE)
     await rig.call("climate", "set_preset_mode", entity_id=ROOM_CLIMATE, preset_mode="eco")
     await rig.set_eco(5.0)
     await rig.advance(5 * SEC)
-    assert rig.commands(model)[-1:] == heat(model, max(5.0, model.min_temp))[-1:]
+    assert rig.room()[0] == 5.0
+    assert rig.commands(model) == heat(model, model.min_temp)
     await rig.advance(30 * MIN)
-    assert rig.commands(model) == heat(model, max(5.0, model.min_temp)), (
+    assert rig.commands(model) == heat(model, model.min_temp), (
         "the clamped target matches: nothing more is sent"
     )
     assert rig.status(model) == "ok"
@@ -225,17 +253,7 @@ async def test_dial_becomes_room_override(rig: Rig, device: str) -> None:
     assert rig.status(model) == "ok"
 
 
-MODE_CHANGES = {
-    "TRV-ZBT": ["off", "auto"],
-    "TRVZB": ["off", "auto"],
-    "BTH-RA": ["pause", "schedule"],
-    "FRITZ-302": ["off", "on"],
-}
-
-
-@pytest.mark.parametrize(
-    ("device", "mode"), devices("mode_changed_on_device_is_put_back", MODE_CHANGES)
-)
+@pytest.mark.parametrize(("device", "mode"), devices("mode_changed_on_device_is_put_back"))
 async def test_mode_changed_on_device_is_put_back(rig: Rig, device: str, mode: str) -> None:
     """Concept 5.5: only the target is adopted; a thermostat that changes its mode on its own is
     put back with one command, and the room's target is unchanged.
@@ -418,3 +436,54 @@ async def test_hold_for_device_check(rig: Rig, device: str) -> None:
     assert rig.room() == (22.0, "comfort", "comfort")
     assert rig.status(model) == "ok"
     assert rig.commands(model) == [*own, *heat(model, 22.0)]
+
+
+@pytest.mark.parametrize("device", devices("hold_ends_by_itself"))
+async def test_hold_ends_by_itself(rig: Rig, device: str) -> None:
+    """Concept 5.5, hold: it ends by itself after its duration, so a check that is killed cannot
+    leave a thermostat outside the controller. A check killed with the thermostat at +0.5 K: when
+    the ten-minute hold ends, the thermostat is brought back with one command, and its target is
+    not adopted (no report within confirm_timeout after a hold ends is a hand change)."""
+    model = MODELS[device]
+    await rig.start(model, contact=False, sensor=False)
+    await rig.past_start_window()
+    rig.mark()
+    await rig.hold(model, "00:10:00")
+    await rig.call("climate", "set_temperature", entity_id=model.climate, temperature=21.5)
+    await rig.refresh_fritzbox()
+    await rig.advance(9 * MIN + 50 * SEC)
+    assert rig.status(model) == "held"
+    assert rig.commands(model) == heat(model, 21.5), "only the killed check's command"
+    await rig.advance(15 * SEC)
+    assert rig.status(model) != "held"
+    await rig.advance(1 * MIN)
+    assert rig.commands(model) == heat(model, 21.5) + heat(model, 21.0)
+    assert rig.state(model.climate).attributes["temperature"] == 21.0
+    assert rig.room() == (21.0, "comfort", "comfort"), "the check's target is not adopted"
+    assert rig.status(model) == "ok"
+
+
+@pytest.mark.parametrize("device", devices("late_report_after_release_not_adopted"))
+async def test_late_report_after_release_not_adopted(rig: Rig, device: str) -> None:
+    """Concept 5.5: for confirm_timeout after a hold is released, no report from the thermostat
+    is a hand change. A FRITZ!Box that reports a setpoint three minutes after it was sent: the
+    check's +0.5 K is sent, the hold released before the box reports it; when the report comes it
+    is corrected with one command, and the room takes no override."""
+    model = MODELS[device]
+    await rig.start(model, contact=False, sensor=False, fritzbox={"report_delay": 180})
+    await rig.advance(4 * MIN)
+    await rig.past_start_window()
+    assert rig.status(model) == "ok"
+    rig.mark()
+    await rig.hold(model)
+    await rig.call("climate", "set_temperature", entity_id=model.climate, temperature=21.5)
+    await rig.release(model)
+    await rig.advance(3 * MIN + 35 * SEC)
+    assert rig.state(model.climate).attributes["temperature"] == 21.5, "the late report"
+    await rig.advance(1 * MIN)
+    assert rig.room() == (21.0, "comfort", "comfort"), "not taken for a dial turn"
+    assert rig.commands(model) == heat(model, 21.5) + heat(model, 21.0)
+    await rig.advance(5 * MIN)
+    assert rig.state(model.climate).attributes["temperature"] == 21.0
+    assert rig.room() == (21.0, "comfort", "comfort")
+    assert rig.status(model) == "ok"
