@@ -156,7 +156,9 @@ mount it at `/var/lib/cave` itself.
 as the service user. All five take the one lock of concept section 4.5 (`/var/lib/cave/.cave/lock`),
 in any order: taking it needs no write access to the file, and a root command gives `.cave` and
 the lock file to the owner of `/var/lib/cave` (the service user), so whichever ran first, the
-other can take it next. The state directory holds
+other can take it next. `cave device-check` changes no state of its own and takes no lock: a
+nightly update that restarts the stack during a check can spoil that check, not the home, so
+run checks by day. The state directory holds
 files that the containers created, owned by root or by the broker's user and readable only by them
 (Home Assistant's `.storage`, the broker's data). Only root can copy all of them and give a copy
 back its owner. Run as the service user, these commands stop at once with
