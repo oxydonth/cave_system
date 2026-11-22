@@ -42,7 +42,9 @@ Whether the FRITZ!Box reports a new target before the valve has it, or only afte
   a degree higher: a time near zero means the box reports at once. Then read the thermostat's own
   display: set a target in Home Assistant (the room's card, any change) and note after how many
   minutes the number on the thermostat's display follows. Do it three times and write down the
-  longest.
+  longest. A target set by hand is an override that lasts until the room's next schedule change or six
+  hours; press **Resume schedule** on the room's card when you have the numbers, and check that
+  the room reads its schedule's temperature again.
 - **Result:** report time ______ , valve time ______ .
 - **Do with it.** If the box reports within the time the valve takes (the first case), nothing to
   change. If the valve needs longer than 20 minutes, which is the controller's patience for a FRITZ!
@@ -62,6 +64,8 @@ box may then show the target unchanged, or as OFF. The simulator plays both.
   detected it, and the FRITZ!Box reports it as `binary_sensor.<name>_open_window_detected`. Watch
   `climate.<name>`: does it keep its target and mode, or show `off`? Watch the room's problem sensor
   and its `messages` for a minute after. If the detection never fires, write that down and move on.
+  Close the window again, and if the room has a window contact its pause ends two minutes later: check that the
+  room is back at its target.
 - **Result:** target unchanged / shows off (cross out one).
 - **Do with it.** Unchanged: nothing. Shown as `off`: the controller takes it for a mode changed by
   hand and puts the thermostat back to heat, which is a command to the thermostat every time the
@@ -95,10 +99,12 @@ documented to go back to its own sensor after two hours without a value, showing
 the TRV Gen2 that is assumed. It matters because, if a thermostat never lets go, a dead room-sensor
 battery leaves it regulating on a number that no longer changes.
 
-- **Observe.** In a room with a Sonoff, a room sensor and the feed running, stop the feed: switch
-  the room off in the dashboard (the feed stops while it is off). Open the History of
-  `select.<name>_temperature_sensor_select`. Wait three hours. Then switch the room back on: the
-  feed starts again at once. Watch the select for ten minutes.
+- **Observe.** Do this on a mild day, or in a room you do not need warm: for three hours the room is
+  switched off, which means its radiators heat only against frost. In a room with a Sonoff, a room
+  sensor and the feed running, switch the room off in the dashboard (the feed stops while it is off).
+  Open the History of `select.<name>_temperature_sensor_select`. Wait three hours. Then switch the
+  room back on: the feed starts again at once. Watch the select for ten minutes, and check that
+  the room's thermostat is in the mode `heat` and at the room's target again.
 - **Result:** went to `remote_source_offline` after ______ ; came back by itself / only after the controller's
   write (5 minutes after the feed resumed).
 - **Do with it.** Both ways are covered: the controller leaves the switch alone and writes the
@@ -113,10 +119,15 @@ With the thermostat in the mode `off` in a cold room, a Sonoff opens its valve b
 protection temperature (5 to 15 °C on the TRV Gen2, per its Zigbee2MQTT page). The simulator opens
 the valve and reports `off`. What a real one reports is not known.
 
-- **Observe.** Switch the room off in the dashboard. Let the room cool below the thermostat's frost
-  protection temperature (read it on its Zigbee2MQTT page: `frost_protection_temperature`; to
-  shorten the wait, put it at 15 °C for the test) and watch `climate.<name>` in the History:
-  does the mode stay `off`, does `hvac_action` show heating?
+- **Observe.** Switch the room off in the dashboard: its radiators now heat only against frost. Let
+  the room cool below the thermostat's frost protection temperature (read it on its Zigbee2MQTT
+  page: `frost_protection_temperature`; the room is cold only on a cold day or in an unheated room)
+  and watch `climate.<name>` in the History: does the mode stay `off`, does `hvac_action` show
+  heating? You may raise `frost_protection_temperature` to 15 °C to shorten the wait, but **write down
+  its value first**. The controller does not manage that setting, so if you leave it at 15 °C every
+  room you switch off later is heated to 15 °C and nothing on the dashboard says why. When you have
+  the result, set it back to the value you wrote down, and look at the device's Zigbee2MQTT page to
+  check that it is back. Switch the room on again.
 - **Result:** mode stays off / flips to ______ .
 - **Do with it.** Staying `off`: nothing. A mode that flips to `heat` is taken for a change by hand
   and put back, a command each time. The command budget (20 an hour) bounds it and turns the
@@ -127,8 +138,12 @@ the valve and reports `off`. What a real one reports is not known.
 Requirement R9: if the server is down, the radiators keep their last setpoint and their frost
 protection, and a radiator that was off stays off.
 
-- **Observe.** With one room heating and another switched off, run `sudo -u cave ./cave down` and
-  wait ten minutes, then `sudo -u cave ./cave up`.
+- **Observe.** With one room heating and another switched off, run `sudo -u cave ./cave down`,
+  and wait ten minutes: Home Assistant records nothing while it is down, so watch the thermostats'
+  displays (the targets they show, and whether the switched-off room's radiator stays cold) and
+  write them down. Then `sudo -u cave ./cave up`, wait until `sudo -u cave ./cave status` says
+  healthy, and check that the rooms are back at their targets. The radiators are not controlled
+  for those ten minutes.
 - **Result:** the thermostats kept their targets / did something else: ______ .
 - **Do with it.** Anything else than keeping their last setpoint is a defect to report.
 
@@ -173,10 +188,13 @@ coordinator, or a mains-powered Zigbee device, directly.
 The SMLIGHT SLZB-06MG24 is attached by network. Check that it holds.
 
 - [ ] **It reconnects after a reboot of the server.** `sudo reboot`; when the server is back, `sudo -u cave ./cave status`
-  is healthy, Zigbee2MQTT's page opens and the devices are available without pairing again.
-- [ ] **It survives its own power loss.** Unplug the coordinator for a minute and plug it back. Look at
+  is healthy, Zigbee2MQTT's page opens and the devices are available without pairing again. While the
+  server reboots, nothing controls the radiators; they keep their last setpoint.
+- [ ] **It survives its own power loss.** Unplug the coordinator for a minute and plug it back; meanwhile the Zigbee thermostats keep their
+  setpoint and receive nothing, and the room sensors and window contacts are not heard. Look at
   `sudo -u cave ./cave logs --tail 100 zigbee2mqtt`: does Zigbee2MQTT reconnect by itself, or exit? The
-  stack restarts it if it exits, but note how long the devices were unavailable.
+  stack restarts it if it exits, but note how long the devices were unavailable, and check that every
+  device is available again afterwards (**Unavailable devices** on the Maintenance view reads "All devices are available.").
 - [ ] **Its address is fixed.** The FRITZ!Box always gives it the same address ([install.md](install.md#2-give-the-server-a-fixed-address)),
   the same as `CAVE_Z2M_SERIAL_PORT` in `.env`.
 - [ ] **The network key is backed up.** `CAVE_DATA/zigbee2mqtt/configuration.yaml` is in the latest
@@ -190,11 +208,14 @@ needs, so presence from the FRITZ!Box is unproven until it runs against a real o
 
 - [ ] Your phone's tracker is enabled and reads `home` on the Wi-Fi, and is listed under `presence`
   ([phone-and-remote.md](phone-and-remote.md#3-presence-setting-the-heating-back-when-nobody-is-home)).
-- [ ] **Leaving.** Turn the phone's Wi-Fi off. Note how long the tracker takes to read `not_home`, and
+- [ ] **Leaving.** Turn the phone's Wi-Fi off (if someone else's phone is listed and at home, the home
+  stays occupied; do this when you are the one at home or take theirs off too). After `away_delay` the
+  rooms heat at the away temperature, until the Wi-Fi is back on, so do not leave it off for longer than the
+  test. Note how long the tracker takes to read `not_home`, and
   then how long `binary_sensor.cave_home_occupied` takes to go off (the tracker's delay plus `away_delay`).
   The rooms' reason (`sensor.cave_<room>_reason`) should read `away`.
-- [ ] **Returning.** Turn it on again: the home is occupied and the rooms go back to their schedule
-  within moments.
+- [ ] **Returning.** Turn the Wi-Fi on again: the home is occupied and the rooms go back to their
+  schedule within moments. Check that `sensor.cave_<room>_reason` no longer reads `away`.
 - [ ] **A sleeping phone.** Leave the phone idle on a table for an hour with the screen off. The home
   must stay occupied. If it flips to away, raise `away_delay` in `heating.yaml` or the tracker's
   **consider home** option ([phone-and-remote.md](phone-and-remote.md#35-what-the-away-delay-does)).

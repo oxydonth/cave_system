@@ -24,14 +24,20 @@ The server runs Debian 13, which on a Raspberry Pi is Raspberry Pi OS Lite 64-bi
 
 **Mini PC.** Install Debian 13 from the installer image on a USB stick. In the step "Software
 selection", untick the desktop environment and the print server, and keep "SSH server" and
-"standard system utilities". Create your own user; the system uses a separate service user that a
-later step creates.
+"standard system utilities". **Leave the root password empty** when the installer asks for it: that
+disables the root account and makes the user you create next an administrator who can use `sudo`,
+which every command of this guide does. If you set a root password, the installer does not install
+`sudo` and your user cannot use it. To fix that afterwards, log in as that user and run `su -`, then
+`apt-get install sudo` and `usermod -aG sudo <your user>`, `exit`, and log in again. The system uses
+a separate service user, which a later step creates.
 
 **Raspberry Pi.** Write Raspberry Pi OS Lite (64-bit) with Raspberry Pi Imager. In its options set a
-host name, your user name and password, and switch on SSH. Write it to an SSD if you can: an SD card
+host name, your user name and password (that user can use `sudo`), and switch on SSH. Write it to an SSD if you can: an SD card
 works for a trial but wears out under the database writes (see
 [the server section of hardware.md](hardware.md#the-server)). If you stay on a card, use a high-endurance one. The first start takes several minutes.
 
+Connect the machine to the FRITZ!Box with an Ethernet cable. Its address is in the FRITZ!Box under
+**Home Network** (Heimnetz), **Network** (Netzwerk); on the machine itself `ip -4 addr` shows it.
 Then log in over SSH and bring the system up to date:
 
 ```sh
@@ -44,8 +50,13 @@ python3 --version        # 3.11 or newer; Debian 13 has it
 ## 2. Give the server a fixed address
 
 Everything reaches the server by its address: your browser, the phone app, and later the
-VPN. In the FRITZ!Box open **Home Network**, **Network**, open the server's entry and
-switch on "Always assign this network device the same IPv4 address". If you intend to change the
+VPN. In the FRITZ!Box open **Home Network**, **Network**, the tab **Network Connections** (German
+interface: **Heimnetz**, **Netzwerk**, **Netzwerkverbindungen**), click the edit button (Bearbeiten)
+beside the server and tick "Always assign this network device the same IPv4 address" (German: "Diesem
+Netzwerkgerät immer die gleiche IPv4-Adresse zuweisen"). AVM's help page
+[Netzwerkgerät immer die gleiche IP-Adresse von FRITZ!Box zuweisen lassen](https://ch.fritz.com/service/wissensdatenbank/dok/FRITZ-Box-4020/201_Netzwerkgerat-immer-die-gleiche-IP-Adresse-von-FRITZ-Box-zuweisen-lassen/)
+has this for several models, and notes that the box gives a device the same address by default as long
+as there are addresses left; the setting makes it a promise. If you intend to change the
 FRITZ!Box's address range, do it now, before the install: [phone-and-remote.md](phone-and-remote.md#41-preparation)
 explains why. Give the coordinator a fixed address too, once you have it.
 
@@ -100,7 +111,7 @@ sudo /opt/cave/scripts/provision-host.sh
 systemctl list-timers 'cave-*'       # cave-backup.timer and cave-update.timer
 ```
 
-The nightly update starts to install releases only after step 8: it needs the script token that
+The nightly update starts to install releases only after [the first-run setup](#8-first-run-setup): it needs the script token that
 the first-run setup creates, and says so in the journal until then.
 
 ## 5. Create the configuration
@@ -226,7 +237,10 @@ sudo -u cave grep '^CAVE_HA_OWNER' /opt/cave/.env
 ```
 
 Save the password in your password manager. The sidebar has **Heizung**, the heating dashboard at
-`/cave-heating`: two views, Rooms and Maintenance, both empty until you describe rooms. Run
+`/cave-heating`. At this point it is only a placeholder: one view with the text "No rooms yet.
+Describe them in `cave/heating.yaml` and run `./cave apply`." That is right. The real dashboard, with
+a Rooms and a Maintenance view, appears when [pairing.md](pairing.md#apply-it) has you run
+`./cave apply` for the first rooms. Run
 `sudo -u cave ./cave status` to see the state in one place: the installed release, whether the
 stack is healthy, the last update and backup, and whether `heating.yaml` has changes that were not
 applied.

@@ -32,7 +32,7 @@ Do these in order, once. Each guide is written to be read from its top and acted
 |---|---|---|
 | 1. Try it without hardware | [The demo](docs/demo.md) | The whole system with simulated devices on any machine with Docker, in a few minutes. |
 | 2. Buy | [What to buy](docs/hardware.md) | The base first, then a trial room. |
-| 3. Install the server | [Installing the stack](docs/install.md) | A running, set-up Home Assistant with its broker, a nightly update and a nightly backup. |
+| 3. Install the server | [Installing the system](docs/install.md) | A running, set-up Home Assistant with its broker, a nightly update and a nightly backup. |
 | 4. Pair and describe the rooms | [Pairing devices and describing rooms](docs/pairing.md) | Thermostats and sensors paired, rooms applied, each thermostat checked. |
 | 5. Phone and access from outside | [Phone, presence and remote access](docs/phone-and-remote.md) | The app, notifications, heating set back when nobody is home, the FRITZ!Box VPN. |
 | 6. Check what only hardware can show | [Hardware acceptance](docs/hardware-acceptance.md) | A checklist, worked through once. |
@@ -78,7 +78,7 @@ make check   # lint, type check and tests: everything that can run locally
 | `make versions` | Home Assistant's version in `uv.lock`, `compose.yaml` and `ci.yml`, and its client libraries, agree |
 | `make check` | `lint`, `typecheck`, `test`, `test-py311` and `versions`: everything that can run locally |
 
-Configuration lives in `pyproject.toml` (dependencies, pytest, Ruff, mypy) and `.yamllint`. The pipeline is `.github/workflows/ci.yml`; the one check to wait for is `ci-ok`. The stack itself (`./cave init`, `./cave up`, [docs/install.md](docs/install.md)) and the `cave` command ([ops/README.md](ops/README.md)) need Docker; hassfest, Home Assistant's validator for integrations, the `stack` job and the `e2e` job (the demo and its scenarios, and the heating dashboard opened in a real browser, whose screenshots are an artifact of the run) run only in the pipeline, so a green `make check` does not replace a green pipeline. After editing dependencies in `pyproject.toml`, run `uv lock`.
+Configuration lives in `pyproject.toml` (dependencies, pytest, Ruff, mypy) and `.yamllint`. The pipeline is `.github/workflows/ci.yml`; the one check to wait for is `ci-ok`. The stack itself (`./cave up`, [docs/install.md](docs/install.md)) and the demo need Docker (the `cave` command, [ops/README.md](ops/README.md), needs only Python 3.11 or newer for `init`, `help` and `version`); hassfest, Home Assistant's validator for integrations, the `stack` job and the `e2e` job (the demo and its scenarios, and the heating dashboard opened in a real browser, whose screenshots are an artifact of the run) run only in the pipeline, so a green `make check` does not replace a green pipeline. After editing dependencies in `pyproject.toml`, run `uv lock`.
 
 Contributors and coding agents: see [CLAUDE.md](CLAUDE.md) for the delivery rules; the concept and work packages linked above say what is being built and how.
 

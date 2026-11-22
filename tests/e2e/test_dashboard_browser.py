@@ -102,6 +102,13 @@ def _errors(body: str) -> list[dict[str, str]]:
             "'<ha-alert alert-type=\"error\">Template error</ha-alert>';",
             "ha-alert (error)",
         ),
+        (
+            "const markdown = document.createElement('hui-markdown-card');"
+            "view.shadowRoot.appendChild(markdown);"
+            "markdown.attachShadow({mode: 'open'}).innerHTML = "
+            "'<ha-alert alert-type=\"warning\">Template warning</ha-alert>';",
+            "ha-alert (warning) in a markdown card",
+        ),
     ],
 )
 def test_detector_finds_what_the_frontend_shows_for_a_failed_card(snippet: str, tag: str) -> None:
@@ -113,6 +120,7 @@ def test_detector_leaves_a_healthy_dashboard_alone() -> None:
     snippet = (
         "view.shadowRoot.innerHTML = '<hui-thermostat-card></hui-thermostat-card>"
         '<ha-alert alert-type="info">Nothing to show</ha-alert>'
+        '<ha-alert alert-type="warning">A warning outside a markdown card</ha-alert>'
         "<p>An error is something the page says, not an element</p>';"
     )
     assert _errors(snippet) == []

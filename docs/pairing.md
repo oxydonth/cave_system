@@ -52,7 +52,7 @@ adapters). Sit near the coordinator for the first one if you can; range is for
 4. Watch the log in the web page. A line saying that the device was interviewed and has been paired
    (the wording differs between versions) means it is in. The device then appears under **Devices**
    with its IEEE address as its name.
-5. **Rename it** now, to the name from step 1: open the device and use the rename button next to its
+5. **Rename it** now, to the name from [step 1](#1-choose-the-names): open the device and use the rename button next to its
    name, with the option to update the Home Assistant entity ID switched on. (Zigbee2MQTT's rename
    request has it as `homeassistant_rename`: without it, Home Assistant keeps the old entity IDs.)
 6. In Home Assistant the device and its entities appear by themselves, through MQTT discovery.
@@ -118,41 +118,50 @@ thermostat up as soon as the box knows it. That login needs the Smart Home permi
 [phone-and-remote.md](phone-and-remote.md#31-prepare-the-fritzbox) says how to create it.
 
 1. Put the batteries in the thermostat.
-2. In the FRITZ!Box open **Smart Home**, **Devices and Groups** (Geräte und Gruppen), and start
-   registering a device (Gerät anmelden). The box then waits for two minutes.
-3. On the thermostat hold the **MENU** button, choose "Anmeldung starten" (start registration)
-   and confirm with OK. Alternatively press the Connect or DECT button on the box for 6 seconds. A
-   symbol on the display tells you it worked; only then mount it on the radiator. AVM's quick
-   guide ([FRITZ!Smart Thermo 302](https://assets.avm.de/files/docs/fritzsmart/fritzsmart-thermo-302/fritzsmart-thermo-302_qig_de_DE.pdf))
-   and its [knowledge base article](https://fritz.com/service/wissensdatenbank/dok/FRITZ-Smart-Thermo-302/1628_FRITZ-Heizkorperregler-einsetzen/)
-   have the details and the alternative registration if it does not work. Menu labels differ a little
-   between FRITZ!OS versions.
-4. Give it its name: in **Smart Home**, **Devices and Groups**, the edit icon (pencil) beside the
-   thermostat. Use the name from step 1 of this guide. The name decides the
-   entity IDs, so give it before the box and Home Assistant have settled on another; Home Assistant
-   polls the box every 30 seconds, so the thermostat shows up there shortly.
+2. On the thermostat press **MENU**: it starts the registration ("Anmeldung starten"). Then, within
+   the time the thermostat allows, press the **Connect** button on the FRITZ!Box, or hold its **DECT**
+   button for 6 seconds. (The box's own pages can start a registration too: **Smart Home**,
+   **Devices and Groups** (Geräte und Gruppen), register a device (Gerät anmelden), according to
+   [AVM's knowledge base article](https://fritz.com/service/wissensdatenbank/dok/FRITZ-Smart-Thermo-302/1628_FRITZ-Heizkorperregler-einsetzen/).)
+3. A symbol on the thermostat's display tells you that it worked; only then mount it on the radiator,
+   and let it adapt the valve stroke (it shows a temperature when it has). If the display says the
+   registration failed, AVM's "Alternatives Anmelden" is: hold **MENU** for 2 seconds, press the key
+   under the registration symbol, then Connect or DECT on the box again. Both are in AVM's quick guide
+   ([FRITZ!Smart Thermo 302](https://assets.avm.de/files/docs/fritzsmart/fritzsmart-thermo-302/fritzsmart-thermo-302_qig_de_DE.pdf),
+   pages 7 and 8). Menu labels on the box differ a little between FRITZ!OS versions.
+4. Give it its name: in **Smart Home**, **Devices and Groups**, the edit icon beside the thermostat
+   opens its Smart Home profile (AVM's quick guide, page 11). Use the name from
+   [the first step of this guide](#1-choose-the-names). The name decides the entity IDs, so give it
+   before Home Assistant has settled on another one; Home Assistant polls the box every 30 seconds, so
+   the thermostat shows up there shortly.
 
 ### Give it a timetable that changes nothing
 
-The FRITZ!Box has its own timetable (Zeitschaltung) for the thermostat, which switches between a
-comfort temperature (Komforttemperatur) and a saving temperature (Spartemperatur) during the day.
-This system is the only scheduler: if the box's timetable also switches, the two fight, and
-the thermostat would show up in Home Assistant as changing its target by itself. So, in the
-thermostat's profile under **Smart Home**, **Devices and Groups**:
+The FRITZ!Box has its own timetable (Zeitschaltung) for the thermostat: a comfort temperature
+(Komforttemperatur) and a setback temperature (Absenktemperatur), and up to 8 switching points
+(Schaltpunkte) a day. This system is the only scheduler. If the box's timetable also switches, the
+two fight: AVM's manual says that a temperature set by hand holds only until the next switching point
+is reached, so a switching point overwrites the target that Home Assistant set. In the thermostat's
+profile under **Smart Home**, **Devices and Groups**:
 
-1. Remove every switching time from the timetable.
-2. Set the comfort and the saving temperature to the same value, if the box asks for both, so that
-   nothing it does can change the target.
-3. Look for a period under "Heizung aus" (heating off) in the profile. The factory setting of the
-   older models is 1 June to 31 August, with the key lock active, and during such a period the box
-   refuses commands: Home Assistant then shows the thermostat as `blocked`. Delete the period if
-   you see one, and use the home mode `off` in the dashboard for the summer instead.
-4. The thermostat's own window detection may stay on in a room without a window contact.
+1. Remove the switching points from the timetable, if the box lets you. This is the intention: a
+   timetable without any change.
+2. If the box insists on a timetable, give the comfort and the setback temperature the same value.
+   That does not guarantee anything: whether a switch to either temperature still overwrites the
+   target is not settled by AVM's manual.
+3. Look in the profile for a period during which the box turns the heating off ("Heizung aus"), and
+   for a holiday setting (Urlaubsschaltung). AVM's manual says that during a holiday setting the
+   thermostat cannot be operated by hand, and the concept expects the box to refuse commands while
+   its summer or holiday mode or the key lock is active: Home Assistant then shows the thermostat as
+   `blocked`. Test reports and forum posts say that the box ships with a heating-off period of about
+   1 June to 31 August, with the key lock; I did not find that in AVM's manual for the 302. If you see
+   such a period, delete it, and use the home mode `off` in the dashboard for the summer instead.
+4. The thermostat's own window detection (Fenster-auf-Erkennung) may stay on in a room without a window
+   contact.
 
-What a timetable has to look like to stay neutral is **not confirmed without a real box**
-(concept section 12): points 1 and 2 are the intention, and point 3 is from AVM's manuals for the
-older models. [hardware-acceptance.md](hardware-acceptance.md#13-a-neutral-fritzbox-timetable) has the test:
-the thermostat's target must not change by itself over a day.
+What a timetable has to look like to stay neutral is **not confirmed without a real box** (concept
+section 12), and neither is the "Heizung aus" period. [hardware-acceptance.md](hardware-acceptance.md#13-a-neutral-fritzbox-timetable)
+has the test: the thermostat's target must not change by itself over a day.
 
 ## 4. Find the entity IDs
 
@@ -184,7 +193,7 @@ reloads it, so a typing error cannot stop Home Assistant. Edit it with:
 sudo -u cave editor /var/lib/cave/homeassistant/cave/heating.yaml
 ```
 
-The file starts with the home-wide values; leave them and add rooms under `rooms:`. This is a room
+The file starts with the home-wide values; leave them. It ends with the line `rooms: []`: remove the `[]` and put the rooms below `rooms:`, as here. This is a room
 with two Sonoff thermostats, a room sensor and a window contact, and one with a FRITZ! thermostat:
 
 ```yaml
@@ -242,7 +251,8 @@ problem sensor says so.
 
 A Sonoff goes back to its own sensor by itself after two hours without a temperature (the
 selection then reads `remote_source_offline`), and the controller deliberately does not fight
-that. Whether it returns by itself when the feed resumes is open (concept section 12); the controller
+that. The two hours were observed on the TRVZB only; for the TRV Gen2 they are an assumption.
+Whether it returns by itself when the feed resumes is open (concept section 12); the controller
 writes the selection again five minutes after the feed resumed, which covers it.
 
 ### Apply it
@@ -266,7 +276,7 @@ sudo -u cave ./cave bootstrap
 ```
 
 Open **Heizung** in Home Assistant. Each room has a card; the room's problem sensor (the badge in its
-heading) should say OK. If it names an entity as missing, check the spelling against step 4, edit and
+heading) should say OK. If it names an entity as missing, check the spelling against [the entity IDs](#4-find-the-entity-ids), edit and
 `./cave apply` again. Change the week's timetable under **Settings**, **Devices & services**,
 **Helpers**, on the schedule of the room. Adjust the temperatures on the room's card.
 
@@ -293,12 +303,15 @@ sudo -u cave ./cave device-check climate.wohnzimmer_heizung_fenster --timeout 30
 sudo -u cave ./cave device-check climate.bad_heizung
 ```
 
-Name the radiator thermostat as listed under `trvs`, never a room's `climate.cave_<room>`. For a
+Name the radiator thermostat as listed under `trvs`, never a room's `climate.cave_<room>` (the command
+refuses those). For a
 Zigbee thermostat 300 seconds is plenty. For a FRITZ! thermostat leave the default (20 minutes):
 the box passes a new target to the valve only about every three minutes (up to fifteen on the older
 301). The check holds the thermostat away from the controller meanwhile, sets its target half a
 degree higher, waits until it is reported back, restores the target and releases the hold, whatever
-happens. It prints a table with pass or fail and the time each took, and exits non-zero when a
+happens, also if your SSH session drops. In between, a few seconds on a Zigbee thermostat and
+minutes on a FRITZ! one, the thermostat sits half a degree above the room's target and the room's
+schedule, window pause and dial handling do not reach it. It prints a table with pass or fail and the time each took, and exits non-zero when a
 check failed. What each row means, the exit codes and how a failure looks are in
 [devices.md](devices.md#checking-a-real-thermostat-cave-device-check).
 

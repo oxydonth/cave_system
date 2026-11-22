@@ -81,7 +81,7 @@ The stack needs about 2 GB of memory and very little CPU. What matters is storag
 | Option | Price | Verdict |
 |---|---|---|
 | **Mini PC with Intel N100 or N150**, 8–16 GB RAM, NVMe SSD | €190–280 new, refurbished business mini PCs from about €150 | **Recommended for a new purchase.** Real SSD, more headroom, 6–8 W idle. |
-| **Raspberry Pi 4 or 5 you already own**, 4 GB or more | — | **Fine to start on**, provided it boots from an SSD (USB 3 or NVMe HAT) with the official power supply and a 64-bit OS. SD cards wear out under database writes. |
+| **Raspberry Pi 4 or 5 you already own**, 4 GB or more | — | **Fine to start on**, with the official power supply and a 64-bit OS. It works from an SD card; an SSD (USB 3 or NVMe HAT) is the reliability recommendation before relying on it for a winter, because consumer SD cards wear out under database writes. |
 | Raspberry Pi 5 bought new | US list price $110 (4 GB) / $175 (8 GB) for the bare board | Not recommended. After this year's memory price rises a complete mini PC costs about the same. The Pi's lower idle draw (about 3 W) saves roughly €14 a year. |
 | Home Assistant Green | €179 | Not recommended here. It is an appliance for Home Assistant OS; this design uses Container. |
 

@@ -15,7 +15,9 @@ What counts as a failed card was read from the frontend this project pins
 * ``hui-warning-element``: the same for a picture-elements element.
 * ``hui-error-badge``, ``hui-error-heading-badge``, ``hui-error-section``: the same for a badge,
   a badge of a heading card and a whole section.
-* ``ha-alert`` of the type ``error``, which the markdown card shows when its template fails.
+* ``ha-alert`` of the type ``error``, which the markdown card shows when its template fails, and
+  of the type ``warning`` inside a markdown card, which it shows for a template that only warns
+  (``hui-markdown-card`` renders ``<ha-alert .alertType=${level || "error"}>``).
 
 The elements live in shadow roots, so they are found by walking the shadow DOM. Searching the page
 for the word "error" would find nothing (the texts are translated, and the page is mostly shadow
@@ -107,15 +109,26 @@ JS_ERRORS = (
     });
     return (parts.join(' ') || el.textContent || '').replace(/\\s+/g, ' ').trim().slice(0, 200);
   };
+  const alertType = (el) => el.alertType || el.getAttribute('alert-type');
   const root = document.querySelector('home-assistant');
   if (!root) return found;
   const visit = (el) => {
     const tag = el.localName;
     if (tags.includes(tag)) {
       found.push({tag, text: text(el), config: JSON.stringify(el._config || null).slice(0, 300)});
-    } else if (tag === 'ha-alert' && (el.alertType === 'error' ||
-               el.getAttribute('alert-type') === 'error')) {
+    } else if (tag === 'ha-alert' && alertType(el) === 'error') {
       found.push({tag: 'ha-alert (error)', text: el.textContent.trim().slice(0, 200), config: ''});
+    } else if (tag === 'hui-markdown-card' && el.shadowRoot) {
+      // A template that only warns shows a yellow alert, whose level is `warning`.
+      for (const alert of el.shadowRoot.querySelectorAll('ha-alert')) {
+        if (alertType(alert) === 'warning') {
+          found.push({
+            tag: 'ha-alert (warning) in a markdown card',
+            text: alert.textContent.trim().slice(0, 200),
+            config: '',
+          });
+        }
+      }
     }
   };
   if (root.shadowRoot) deep(root.shadowRoot, visit);
