@@ -124,8 +124,11 @@ class _Archive:
 
     def owners(self, local_uid: int, local_gid: int) -> _server.Owners:
         """Files of the old server's service user become this server's service user's: its uid
-        depends on the order in which users were created."""
+        depends on the order in which users were created. The manifest says which ids those were;
+        root's (0) are never mapped, whatever it says, so that root's files stay root's."""
         old_uid, old_gid = self.owner
+        old_uid = old_uid if isinstance(old_uid, int) and old_uid != 0 else None
+        old_gid = old_gid if isinstance(old_gid, int) and old_gid != 0 else None
 
         def owner_of(member: tarfile.TarInfo) -> tuple[int, int]:
             uid = local_uid if old_uid is not None and member.uid == old_uid else member.uid
@@ -195,6 +198,9 @@ def run(ctx: Context, args: argparse.Namespace) -> int:
 
 
 SERVICE_ENTRIES = ("homeassistant", "mosquitto", "zigbee2mqtt")
+STEERING = ("CAVE_BACKUP_DIR", "CAVE_BACKUP_COPY_TO", "CAVE_Z2M_SERIAL_PORT", "COMPOSE_PROFILES")
+"""Restored settings that decide where the nightly backup writes or what is passed to a
+container; the restore names them so that the owner can check them."""
 RESERVED = (f".cave/{_server.OPS_DIR}", ".cave/lock")
 """No restored link may point at or below these: the commands' own records, snapshots and lock."""
 
@@ -388,6 +394,10 @@ def _restore(
             + ", ".join(ignored)
             + "."
         )
+    # Settings from the archive that decide where root writes later: say them, to be checked.
+    steering = [f"{name}={values[name]}" for name in STEERING if values.get(name)]
+    if steering:
+        done += " From the archive's .env, check: " + ", ".join(steering) + "."
     if current:
         done += f" The state before the restore is kept in {aside}; remove it when all is well."
     if args.no_start:

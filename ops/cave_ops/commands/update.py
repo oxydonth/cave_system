@@ -102,8 +102,13 @@ def add_arguments(parser: argparse.ArgumentParser) -> None:
     )
 
 
-# The validator's own words for a file it could not open (cave_heating/schema.py, read_file).
-_FILE_NOT_THERE = re.compile(r"^the file .+ (does not exist$|cannot be read: )", re.MULTILINE)
+# The validator's own words for a file it could not open (cave_heating/schema.py, read_file):
+# "The file <path> does not exist." and "The file <path> cannot be read: [Errno ...]". A file
+# that opens but is not UTF-8 is also "cannot be read", but without "[Errno": that is a problem
+# of the file itself, a rejection.
+_FILE_NOT_THERE = re.compile(
+    r"^the file \S+ (does not exist\.?$|cannot be read: \[Errno )", re.MULTILINE | re.IGNORECASE
+)
 
 
 def could_not_run(result: Result, what: str) -> str | None:
