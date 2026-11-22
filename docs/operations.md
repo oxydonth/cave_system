@@ -55,7 +55,7 @@ Find the start of the message in the left column.
 | `The restore failed while unpacking: … The state is still half restored from the earlier attempt, so the stack was NOT started` | A repeat of a restore that stopped half-way failed before it moved anything. | Stack stopped; the state half restored; the marker stays. | See [A restore that cannot finish](#a-restore-that-cannot-finish). |
 | `Not applied: …` (`cave apply`) / `cave: not bootstrapping: …` | An update is interrupted or a restore stopped half-way; a change made now would be undone or land in a half-restored state. | Nothing was changed. | Finish that first (`sudo ./cave update --recover`, or see [A restore that cannot finish](#a-restore-that-cannot-finish)), then run it again. |
 | `cannot take the lock …/.cave/lock …` | `.cave` belongs to root (left by an earlier version) and the lock file is missing. | Nothing was changed. | The next root command that takes the lock (the nightly backup, or `sudo ./cave backup`) gives it back to the service user. |
-| `The restore failed while unpacking: …` | A restore could not unpack the archive; nothing was restored. | The stack runs again unchanged (or the message says it could not be started). If an update was interrupted, its way back was finished instead (`… was finished instead`), so the release and the state belong together; its own notification says how that went. | Read the reason (often a full disk). |
+| `The restore failed while unpacking: …` | A restore could not unpack the archive; nothing was restored. | The stack runs again unchanged (or the message says it could not be started). If an update was interrupted, its way back was finished instead (`… was finished instead`), so the release and the state belong together; its own notification says how that went. If an earlier restore had not been started yet, the stack was started on that restore's state (`… started on the state of the restore before this one`). | Read the reason (often a full disk). |
 | `Not updating: a restore of … was interrupted` / `No backup was made: a restore of … was interrupted` | A restore was cut off while moving the state into place. Update and backup wait for it. | The stack is stopped; the state may be half restored. | Run the same `sudo ./cave restore …` again; if it stops at the same place again, restore another archive. See [A restore that cannot finish](#a-restore-that-cannot-finish). |
 | `Update to v… failed earlier and was rolled back … That could not be recorded then` | An earlier way back had finished, but the disk was full when it wanted to record that. | The previous release runs, healthy; nothing was stopped. | Free space on the disk. |
 | `… Note: left in place, because they are not the new release's files: …` | After a rollback, files in `/opt/cave` that the new release would have added, but whose content is not the release's, were kept: they are yours. | As the rest of the message says. | Look at the named files; move them out of `/opt/cave` if they are in the way of the next release. |
@@ -417,6 +417,13 @@ refuses because of it, the boot does not start what you kept stopped, and
 `sudo -u cave ./cave up` starts it. The only case in which the boot leaves the stack stopped
 without you having asked for it is a state that is still half restored: starting that would
 start Home Assistant unconfigured, so `status` names the ways out above instead.
+
+A restore run while a start is still owed is a new restore, not a repeat: the state in place is
+complete, so it becomes this restore's state from before, in a `before-restore-*` directory of
+its own. If this restore stops half-way, the state is half restored as described above, the boot
+does not start it, and `--undo` brings back the complete state that was waiting and starts it.
+If it cannot unpack its archive, nothing is changed and it starts the stack on the state that
+was waiting; should that start fail, the start stays owed.
 
 ### Onto a new server
 

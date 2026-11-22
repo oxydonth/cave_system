@@ -289,7 +289,7 @@ def _restore(
     needed = archive.size + SPACE_MARGIN
     free = _server.free_bytes(existing)
     if free < needed:
-        pending = _read_marker(ops / _server.RESTORE_MARKER)
+        pending = _half_way(_read_marker(ops / _server.RESTORE_MARKER))
         raise CaveError(
             f"unpacking needs about {needed // 2**20} MiB, but only {free // 2**20} MiB are free "
             f"on {existing}. "
@@ -323,7 +323,11 @@ def _restore(
 
     info = ctx.paths.root.stat()
     marker = ops / _server.RESTORE_MARKER
-    earlier = _read_marker(marker)  # a restore that stopped half-way: this is a repeat
+    recorded = _read_marker(marker)
+    earlier = _half_way(recorded)  # a restore that stopped half-way: this is a repeat
+    # A restore before this one whose state is in place and whose start is still owed. This
+    # restore is a new one: it must not inherit "only the start is owed".
+    owed = recorded if earlier is None else None
     try:
         ctx.say(f"Unpacking into {staging} ...")
         staging.mkdir(parents=True, mode=0o700)
@@ -378,8 +382,13 @@ def _restore(
         _server.remove(staging)
         if earlier is not None:
             return _repeat_failed(ctx, error, ops, earlier)
-        marker.unlink(missing_ok=True)
-        return _unpack_failed(ctx, args, error, was_running)
+        if owed is None:
+            marker.unlink(missing_ok=True)
+            return _unpack_failed(ctx, args, error, was_running)
+        # Nothing of the state was touched, so the restore before this one is still complete
+        # and its start still owed: that stays on record until the stack has been started.
+        _write_marker(marker, owed)
+        return _unpack_failed(ctx, args, error, was_running, owed_start=marker)
 
     # The whole state from before the first attempt goes into one directory, `aside`, over all
     # repeats: an original entry is moved there; whatever an earlier attempt moved in (an entry
@@ -505,10 +514,17 @@ def _start(ctx: Context, args: argparse.Namespace, marker: Path, done: str) -> i
 
 
 def _unpack_failed(
-    ctx: Context, args: argparse.Namespace, error: BaseException, was_running: bool
+    ctx: Context,
+    args: argparse.Namespace,
+    error: BaseException,
+    was_running: bool,
+    owed_start: Path | None = None,
 ) -> int:
     """Nothing of the state was touched. Start what was running; if an update was interrupted,
-    finish that update's way back instead, because its release and state belong together."""
+    finish that update's way back instead, because its release and state belong together.
+
+    ``owed_start`` is the marker of a restore before this one whose state is in place and whose
+    start is still owed: it is removed only once the start was issued, as in ``_start``."""
     pending = load_update_record(ctx).switch
     head = f"The restore failed while unpacking: {error}. Nothing was restored."
     if pending is not None:
@@ -527,6 +543,16 @@ def _unpack_failed(
             if started.ok
             else f"{head} The stack could NOT be started again: {started.output.strip()[-300:]}"
         )
+        if owed_start is not None and started.ok:
+            owed_start.unlink(missing_ok=True)
+            message = (
+                f"{head} The stack was started on the state of the restore before this one, "
+                "which had not been started yet."
+            )
+        elif owed_start is not None:
+            message += (
+                ". The next `cave update` (at boot, or `sudo ./cave update --recover`) tries again."
+            )
     else:
         message = head
     ctx.warn(message)
@@ -551,6 +577,17 @@ def _read_marker(marker: Path) -> dict[str, Any] | None:
     raw.setdefault("original_entries", [])
     raw.setdefault("env_backup", None)
     return dict(raw)
+
+
+def _half_way(series: dict[str, Any] | None) -> dict[str, Any] | None:
+    """The record, if it is of a restore that stopped half-way, which the next restore repeats.
+
+    A marker in its last phase, ``start_owed``, is of a restore whose state is complete. A
+    restore after it is a new one with its own state from before; were it to take that marker
+    for an earlier attempt of its own, a cut while it moves the state in would leave "only the
+    start is owed" over a half-restored state, and the boot would start the stack on it.
+    """
+    return None if series is None or series.get("start_owed") else series
 
 
 def _write_marker(marker: Path, series: dict[str, Any]) -> None:
