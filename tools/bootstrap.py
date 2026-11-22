@@ -471,7 +471,7 @@ class Bootstrap:
             stored.notes.append("the stored token is not a long-lived token")
         elif not user.get("is_admin"):
             stored.notes.append("the stored token belongs to a user who is not an administrator")
-        elif username != owner:
+        elif _user_name(username) != _user_name(owner):
             stored.notes.append(
                 f"the stored token belongs to {username!r}, not to the owner {owner!r} "
                 "(CAVE_HA_OWNER_USER); it is replaced by one of the owner"
@@ -1064,6 +1064,12 @@ class Bootstrap:
                 await self.remove_onboarding_integrations(session.access_token, onboarded_now)
         finally:
             await self.close_session(session)
+
+
+def _user_name(value: str | None) -> str | None:
+    """A user name as Home Assistant stores and compares it: stripped and case-folded
+    (``auth/providers/homeassistant.py``, ``Data.normalize_username``)."""
+    return value.strip().casefold() if value is not None else None
 
 
 def _is_slug(value: str) -> bool:

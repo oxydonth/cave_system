@@ -29,6 +29,7 @@ from tools.bootstrap import (
     TOKEN_NAME,
     Api,
     BootstrapError,
+    Login,
     Output,
     Reply,
     Settings,
@@ -393,6 +394,50 @@ async def _assert_replaced_by_the_owners_script_token(home: Home, run: Any, note
     assert stored.client_name == TOKEN_NAME
     assert stored.token_type == TOKEN_TYPE_LONG_LIVED_ACCESS_TOKEN
     assert stored.user.is_owner
+
+
+async def test_the_owners_name_in_env_is_compared_as_home_assistant_compares_it(
+    home: Home,
+) -> None:
+    # The account is `max`; .env says ` Max`, which Home Assistant's login accepts as the same.
+    assert (await home.run()).ok
+    other_case = Login(" Max", home.settings.owner.password)
+    assert (await home.run(owner=other_case)).ok
+    before = await snapshot(home)
+
+    run = await home.run(owner=other_case)
+
+    assert run.ok, run.output
+    assert "changed:" not in run.output
+    assert await snapshot(home) == before
+
+
+async def test_an_onboarding_step_completed_by_someone_else_meanwhile_is_skipped(
+    home: Home,
+) -> None:
+    # The bootstrap read the onboarding status, then another client finished `analytics`.
+    original = Api.request
+    raced = {"done": False}
+
+    async def someone_was_faster(self: Api, method: str, path: str, **kwargs: Any) -> Reply:
+        if method == "POST" and path == "/api/onboarding/analytics" and not raced["done"]:
+            raced["done"] = True
+            await original(self, method, path, **kwargs)  # the other client's request
+        return await original(self, method, path, **kwargs)
+
+    with patch.object(Api, "request", someone_was_faster):
+        run = await home.run()
+
+    assert raced["done"]
+    assert run.ok, run.output
+    assert "completed the onboarding step analytics" not in run.output
+    assert "completed the onboarding step integration" in run.output
+    assert set(home.hass.data["onboarding"].steps["done"]) == {
+        "user",
+        "core_config",
+        "analytics",
+        "integration",
+    }
 
 
 async def test_a_valid_token_with_another_name_is_replaced(home: Home) -> None:
