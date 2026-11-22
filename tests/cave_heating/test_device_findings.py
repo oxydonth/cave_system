@@ -396,3 +396,87 @@ async def test_a_restart_holds_a_restored_pause_for_a_contact_first_heard_as_una
     assert trv.commands == [], "held while b may still be open"
     await home.advance(freezer, 1 * MIN + 3 * SEC)
     assert trv.commands == [heat(21.0, "heat")], "and resumed once the grace has run out"
+
+
+# --- Second review of #15: a reload under a restored pause, contact not there yet ---------------
+
+
+def _restored_pause(hass_storage: Any) -> None:
+    hass_storage[STORAGE_KEY] = {
+        "version": 1,
+        "minor_version": 1,
+        "key": STORAGE_KEY,
+        "data": {
+            "home": {"mode": "auto", "away_temperature": 16.0},
+            "rooms": {"living_room": {"mode": "heat", "window_paused": True}},
+        },
+    }
+
+
+async def _start_under_restored_pause(
+    hass: HomeAssistant, home: FakeHome, freezer: FrozenDateTimeFactory, file: dict[str, Any]
+) -> None:
+    """Home Assistant has started 10 minutes ago; the contact's entity does not exist yet."""
+    hass.set_state(CoreState.starting)
+    await home.start(file)
+    hass.set_state(CoreState.running)
+    hass.bus.async_fire(EVENT_HOMEASSISTANT_STARTED)
+    await hass.async_block_till_done()
+    await home.advance(freezer, 10 * MIN)
+
+
+async def test_reload_under_restored_pause_does_not_end_it_for_a_contact_not_yet_existing(
+    hass: HomeAssistant,
+    home: FakeHome,
+    freezer: FrozenDateTimeFactory,
+    hass_storage: Any,
+) -> None:
+    """Concept 5.4 and 5.5: the reload reads the missing contact again; it is still held."""
+    _restored_pause(hass_storage)
+    trv = await home.thermostat("climate.a", mode="off", target=21.0)
+    file = config(room("living_room", "climate.a", windows=["binary_sensor.a"]))
+    await _start_under_restored_pause(hass, home, freezer, file)
+    await home.reload(file)
+    await home.advance(freezer, 5 * MIN)
+    assert home.state(WINDOW_OPEN).state == "on", "the reload ended the restored pause"
+    home.set("binary_sensor.a", "on")
+    await home.advance(freezer, 5 * MIN)
+    assert trv.commands == [], "heat at the reload, off again when the contact appears"
+
+
+async def test_reload_under_restored_pause_holds_it_for_the_grace_while_the_contact_is_missing(
+    hass: HomeAssistant,
+    home: FakeHome,
+    freezer: FrozenDateTimeFactory,
+    hass_storage: Any,
+) -> None:
+    """The contact never appears: nothing is sent for 29 minutes, then the grace has run out."""
+    _restored_pause(hass_storage)
+    trv = await home.thermostat("climate.a", mode="off", target=21.0)
+    file = config(room("living_room", "climate.a", windows=["binary_sensor.a"]))
+    await _start_under_restored_pause(hass, home, freezer, file)
+    await home.reload(file)
+    await home.advance(freezer, 19 * MIN)
+    assert trv.commands == [], "29 minutes after start-up"
+    await home.advance(freezer, 1 * MIN + 3 * SEC)
+    assert trv.commands == [heat(21.0, "heat")], "and resumed once the grace has run out"
+
+
+async def test_a_silent_open_contact_whose_entity_is_removed_still_holds_the_pause_for_the_grace(
+    hass: HomeAssistant, home: FakeHome, freezer: FrozenDateTimeFactory
+) -> None:
+    """Concept 5.4: an entity that does not exist counts as unavailable."""
+    trv = await home.thermostat("climate.a", target=21.0)
+    home.set("binary_sensor.a", "off")
+    await home.start(config(room("living_room", "climate.a", windows=["binary_sensor.a"])))
+    home.set("binary_sensor.a", "on")
+    await home.advance(freezer, 2 * MIN)
+    assert trv.commands == [OFF]
+    home.set("binary_sensor.a", "unavailable")
+    await home.advance(freezer, MIN)
+    hass.states.async_remove("binary_sensor.a")
+    await home.advance(freezer, 25 * MIN)
+    assert home.state(WINDOW_OPEN).state == "on", "the removal ended the pause at once"
+    assert trv.commands == [OFF]
+    await home.advance(freezer, 5 * MIN)
+    assert trv.commands == [OFF, heat(21.0, "heat")], "and resumed once the grace has run out"
