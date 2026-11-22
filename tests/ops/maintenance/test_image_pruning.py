@@ -213,3 +213,26 @@ def test_a_variable_in_an_image_line_removes_nothing(server, run_cave, store):
 )
 def test_references_are_named_as_docker_lists_them(reference, normalised):
     assert _images.normalise(reference) == normalised
+
+
+def test_a_removal_cut_off_half_way_is_finished_by_the_next_update(server, run_cave, store, killed):
+    """Killed between two `docker image rm`: what is gone was not needed, what is kept is all
+    there, and the next update removes the rest."""
+    _obsolete(server, run_cave, store)
+    real_handle = store.handle
+
+    def cut_after_one(args):
+        if args[2] == "rm" and store.removed:
+            raise killed
+        return real_handle(args)
+
+    store.handle = cut_after_one
+    with pytest.raises(killed):
+        run_cave("update")
+    store.handle = real_handle
+    assert len(store.removed) == 1
+    assert images_of(RELEASES[1]) | images_of(RELEASES[2]) <= set(store.store)
+
+    run_cave("update")
+
+    assert project_images(store) == images_of(RELEASES[1]) | images_of(RELEASES[2])

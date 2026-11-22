@@ -485,7 +485,9 @@ def _restore(
     # owner chose --no-start): until then the marker says so (`start_owed`), and the same command
     # or the boot's `cave update --recover` starts the stack.
     if args.no_start:
-        note_stopped(ctx.paths, f"the restore of {archive.path.name} finished with --no-start")
+        note_stopped(
+            ctx.paths, f"the restore of {archive.path.name} finished with --no-start", ctx.wall()
+        )
         marker.unlink(missing_ok=True)
     else:
         series["start_owed"] = True
@@ -600,7 +602,9 @@ def _unpack_failed(
         )
     elif (was_running or owed_start is not None) and args.no_start:
         note_stopped(
-            ctx.paths, f"the restore of {archive} failed while unpacking, run with --no-start"
+            ctx.paths,
+            f"the restore of {archive} failed while unpacking, run with --no-start",
+            ctx.wall(),
         )
         if owed_start is not None:
             owed_start.unlink(missing_ok=True)

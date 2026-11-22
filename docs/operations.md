@@ -89,9 +89,11 @@ is how `./cave init` writes it, nothing leaves the server and nothing is sent.
 **The format** is [ntfy](https://ntfy.sh)'s: an HTTP POST with the text as a plain UTF-8 body and
 the title in a `Title` header. A self-hosted ntfy on the home network, with its app on the phone,
 is the intended receiver (`CAVE_ALERT_URL=http://<ntfy server>/<topic>`); most webhook receivers
-take the same, other servers are not targeted. A token goes into the URL, as ntfy accepts it
-(`?auth=…`) or as `https://user:token@…` (sent as basic authentication). Write the value in single
-quotes if it contains `#` or `$`.
+take the same, other servers are not targeted. A token goes into the URL: ntfy takes an access
+token as the password of basic authentication with an empty user name,
+`http://:<token>@<ntfy server>/<topic>` (a user name and password work the same way), or the
+`?auth=` parameter its documentation describes. Write the value in single quotes if it contains
+`#` or `$`.
 
 **What it says**, and nothing else: the server's name, the command (`cave watch`, `cave update`,
 `cave backup`, `cave restore`), what happened in fixed words, and the stack's state in fixed words
@@ -168,7 +170,9 @@ just created (before the first `./cave up`) record that the stack is stopped on 
 `NOT STARTED: … so the stack was not started: on purpose`, and `cave watch` raises no alert. Every
 start of the stack by `cave` removes it: `./cave up` before it starts anything, a restore, and the
 recovery. The record does not cover a stack that runs but is unhealthy, nor an interrupted update
-or a restore that stopped half-way: those are reported in any case.
+or a restore that stopped half-way: those are reported in any case. A record that containers still
+outlive five minutes after it was written (a `down` whose Docker failed, or a stack started with
+`docker compose` directly) is removed by `cave watch`, so that a later stop is reported.
 
 ## How an update works
 

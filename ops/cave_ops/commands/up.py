@@ -33,7 +33,13 @@ def add_arguments(parser: argparse.ArgumentParser) -> None:
 
 def run(ctx: Context, args: argparse.Namespace) -> int:
     require_initialised(ctx)
-    clear_stopped(ctx.paths)
+    try:
+        clear_stopped(ctx.paths)
+    except OSError as error:
+        ctx.warn(
+            f"Could not remove the record of a stack stopped on purpose ({error}); `cave status` "
+            "may still say so."
+        )
     # Always recreate: the code is bind-mounted, so Compose cannot see that a checkout changed
     # (concept section 4.2: "a changed checkout takes effect when the containers are recreated").
     started = ctx.compose("up", "--detach", "--force-recreate", capture=False)

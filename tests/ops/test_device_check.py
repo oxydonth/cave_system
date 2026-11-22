@@ -835,6 +835,32 @@ def test_a_restart_noticed_outside_a_hold_check_is_waited_for(
     assert not thermostat.held
 
 
+def test_a_restart_during_a_settings_read_is_waited_for(run_cave, fake_ha, thermostat, faults):
+    """Issue #24, item 1, as the review found it: Home Assistant restarts while the check reads a
+    setting, and every request succeeds. Only the clean-up finds the hold gone, through
+    still_held(), and the re-hold gets "Service not found" while cave_heating loads."""
+    original = faults.fake_ha
+    restarted = []
+
+    def restart_at_the_setting(method, url, headers, body, timeout):
+        if url.endswith(f"/api/states/{WINDOW}") and not restarted:
+            restarted.append(1)
+            thermostat.held = False
+            faults.fail[("cave_heating", "hold")] = [400, 400, 400]
+        return original(method, url, headers, body, timeout)
+
+    faults.fake_ha = restart_at_the_setting
+
+    result = run_cave("device-check", ENTITY)
+
+    assert restarted
+    assert "refused: Home Assistant answered 400" not in result.out
+    assert rows(result.out)["original target 21 °C restored"] == "pass"
+    assert rows(result.out)["hold released"] == "pass"
+    assert thermostat.target == 21.0
+    assert not thermostat.held
+
+
 def test_when_cave_heating_never_loads_the_target_is_put_back_without_a_hold(
     run_cave, fake_ha, clock, thermostat, faults
 ):

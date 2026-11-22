@@ -17,6 +17,9 @@ nothing at all while ``CAVE_ALERT_URL`` is unset. Otherwise, each run:
    (``alert.Memory``), which the service user may write and which no snapshot or backup
    contains. An alert that could not be delivered is tried again at the next run.
 
+A record of a stack stopped on purpose that containers still outlive by more than ``INTERVAL`` is
+removed: the stop did not happen, or the stack was started without ``cave``.
+
 Two runs more than ``GAP`` apart (the server was off, the clock jumped) start the count afresh,
 so that a stack that is still starting after a power cut is not reported for the hours it was off.
 """
@@ -31,7 +34,7 @@ from .. import alert
 from ..context import Context
 from ..health import Health, check_health
 from ..lock import held_by
-from ..records import stopped
+from ..records import clear_stopped, stopped
 from . import _server
 from . import _update_state as state
 from ._common import require_initialised
@@ -123,6 +126,11 @@ def run(ctx: Context, args: argparse.Namespace) -> int:
         return _save(ctx, memory)
 
     finding = assess(ctx)
+    record = stopped(ctx.paths)
+    if record is not None and finding.health.running and now - (record.at or 0.0) > INTERVAL:
+        # Containers run an interval after the stack was stopped on purpose: the stop did not
+        # happen (Docker failed under `cave down`), or the stack was started without `cave`.
+        clear_stopped(ctx.paths)
     if finding.kind == "healthy":
         memory.since = None
         if memory.alerted is not None:

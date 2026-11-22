@@ -354,3 +354,65 @@ def test_a_memory_that_cannot_be_written_is_said(server, run_cave, receiver, mon
 
     assert result.code == 1
     assert "cannot remember what it has alerted" in result.err
+
+
+# ------------------------------------------------------------------------------ cut off, failed
+def test_a_down_that_did_not_stop_the_stack_leaves_no_lasting_exemption(
+    server, run_cave, receiver, watch
+):
+    """`down` records the stop first. If Docker then fails to stop the stack, the record must not
+    keep the watch quiet for good: once containers still run an interval later, it is dropped."""
+    server.stack.fail["down"] = 1
+    assert run_cave("down").code != 0
+    del server.stack.fail["down"]
+    assert server.data.joinpath(".cave", "stopped.json").exists()
+
+    every_five_minutes(watch, 0, 10)
+    assert not server.data.joinpath(".cave", "stopped.json").exists()
+    server.stack.running = None  # it stops later, for another reason
+    every_five_minutes(watch, 15, 30)
+
+    assert headlines(receiver) == ["the stack is stopped"]
+
+
+def test_a_watch_cut_off_after_sending_sends_once_more(
+    server, receiver, watch, monkeypatch, killed
+):
+    """Killed after the alert went out, before it was remembered: the next run sends it again.
+    One repeat is the price of never losing an alert."""
+    server.stack.running = None
+    every_five_minutes(watch, 0, 10)
+    real_save = alert.save_memory
+
+    def cut(paths, memory):
+        if memory.alerted is not None:
+            raise killed
+        real_save(paths, memory)
+
+    monkeypatch.setattr(alert, "save_memory", cut)
+    with pytest.raises(killed):
+        watch(15)
+    monkeypatch.undo()
+    every_five_minutes(watch, 20, 40)
+
+    assert headlines(receiver) == ["the stack is stopped", "the stack is stopped"]
+
+
+def test_a_command_s_alert_that_could_not_be_remembered_is_alerted_by_the_watch(
+    server, run_cave, receiver, watch, monkeypatch
+):
+    server.release(NEW)
+    server.stack.fail_up.update({NEW, OLD})
+
+    def full(paths, memory):
+        raise OSError(errno.ENOSPC, "No space left on device")
+
+    monkeypatch.setattr(alert, "save_memory", full)
+    result = run_cave("update")
+    monkeypatch.undo()
+    assert result.code == 3
+    assert "What was alerted could not be recorded" in result.err
+
+    every_five_minutes(watch, 0, 20)
+
+    assert headlines(receiver) == ["update failed, act now", "an update was interrupted"]

@@ -90,9 +90,11 @@ def test_the_stack_is_described_in_fixed_words_only(ctx, alert_endpoint, health,
         assert problem not in body, "the problems may name more than the state"
 
 
-def test_a_token_in_the_url_goes_to_the_receiver_only(ctx, alert_endpoint, journal):
+@pytest.mark.parametrize("user", ["cave", ""])
+def test_a_token_in_the_url_goes_to_the_receiver_only(ctx, alert_endpoint, journal, user):
+    """As a password (ntfy takes an access token with an empty user name) and in the query."""
     host = alert_endpoint.base.removeprefix("http://")
-    ctx.env["CAVE_ALERT_URL"] = f"http://cave:{TOKEN}@{host}/cave-alerts?auth={TOKEN}"
+    ctx.env["CAVE_ALERT_URL"] = f"http://{user}:{TOKEN}@{host}/cave-alerts?auth={TOKEN}"
 
     sent = alert.warn_owner(ctx, "update", "update rolled back", "Rolled back.", HEALTHY)
 
@@ -100,7 +102,7 @@ def test_a_token_in_the_url_goes_to_the_receiver_only(ctx, alert_endpoint, journ
     (got,) = alert_endpoint.received
     assert (
         got.headers["Authorization"]
-        == "Basic " + base64.b64encode(f"cave:{TOKEN}".encode()).decode()
+        == "Basic " + base64.b64encode(f"{user}:{TOKEN}".encode()).decode()
     )
     assert got.path == f"/cave-alerts?auth={TOKEN}"
     assert TOKEN not in got.body

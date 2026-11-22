@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+import os
 
 import pytest
 
@@ -109,6 +110,34 @@ def test_down(initialised, run_cave, fake_runner):
 
     assert run_cave("down").code == 0
     assert fake_runner.ran("docker", "compose", "down")
+
+
+def test_down_records_the_stop_and_up_removes_the_record(
+    initialised, run_cave, fake_runner, stack_healthy, ctx
+):
+    fake_runner.on(["docker", "compose", "down"])
+
+    assert run_cave("down").code == 0
+    assert "`./cave down` stopped it" in ctx.paths.stopped_record.read_text()
+    assert run_cave("up").code == 0
+    assert not ctx.paths.stopped_record.exists()
+
+
+@pytest.mark.skipif(os.geteuid() == 0, reason="root writes any directory")
+def test_down_stops_the_stack_even_when_the_record_cannot_be_written(
+    initialised, run_cave, fake_runner, ctx
+):
+    fake_runner.on(["docker", "compose", "down"])
+    cave_dir = ctx.paths.stopped_record.parent
+    cave_dir.chmod(0o555)
+    try:
+        result = run_cave("down")
+    finally:
+        cave_dir.chmod(0o755)
+
+    assert result.code == 0
+    assert fake_runner.ran("docker", "compose", "down")
+    assert "Could not record that the stack is stopped on purpose" in result.err
 
 
 def test_restart_names_the_services_and_waits(initialised, run_cave, fake_runner, stack_healthy):

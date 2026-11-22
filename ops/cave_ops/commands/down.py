@@ -18,5 +18,12 @@ HELP = "Stop and remove the containers (the state directory is kept)"
 
 def run(ctx: Context, args: argparse.Namespace) -> int:
     require_initialised(ctx)
-    note_stopped(ctx.paths, "`./cave down` stopped it")
+    try:
+        note_stopped(ctx.paths, "`./cave down` stopped it", ctx.wall())
+    except OSError as error:
+        # Stopping matters more than the record: say what follows from its absence.
+        ctx.warn(
+            f"Could not record that the stack is stopped on purpose ({error}): `cave watch` will "
+            "report it as stopped after 15 minutes."
+        )
     return ctx.compose("down", capture=False).returncode

@@ -4,7 +4,9 @@
 restore or ``restore --undo`` with ``--no-start``, and ``cave init`` for a state directory it has
 just created write it; every start of the stack by ``cave`` removes it (``cave up`` before it
 starts, a restore and the recovery when they start). ``cave status`` shows it while the stack does
-not run, and ``cave watch`` raises no alert for a stopped stack while it exists. It does not cover
+not run, and ``cave watch`` raises no alert for a stopped stack while it exists. A record that
+containers still outlive by more than the watch's interval is stale (a ``down`` whose Docker
+failed): ``cave watch`` removes it. It does not cover
 a stack that runs but is unhealthy, nor an interrupted update or a restore that stopped half-way.
 
 It lies in ``.cave`` itself, which belongs to the service user, not in ``.cave/ops``, which is
@@ -20,6 +22,7 @@ import contextlib
 import datetime
 import json
 import os
+import time
 from dataclasses import dataclass
 from pathlib import Path
 
@@ -66,11 +69,15 @@ class Stopped:
 
     what: str
     since: str
+    at: float | None = None
+    """When it was written, in seconds since the epoch (``None`` for the note of v2026.11.22.1)."""
 
 
-def note_stopped(paths: Paths, what: str) -> None:
-    """Record that the stack is stopped on purpose; ``what`` says by what."""
-    text = json.dumps({"what": what, "since": utc_now()}) + "\n"
+def note_stopped(paths: Paths, what: str, at: float | None = None) -> None:
+    """Record that the stack is stopped on purpose; ``what`` says by what, ``at`` when (the
+    caller's ``ctx.wall()``; now if not given)."""
+    when = time.time() if at is None else at
+    text = json.dumps({"what": what, "since": utc_now(), "at": when}) + "\n"
     write_atomic(paths.stopped_record, text.encode(), 0o644)
 
 
@@ -88,7 +95,12 @@ def stopped(paths: Paths) -> Stopped | None:
         what = str(raw.get("what") or "a restore")
         if path != paths.stopped_record:
             what += " finished with --no-start"  # the wording v2026.11.22.1 had in status
-        return Stopped(what, str(raw.get("since") or "an unknown time"))
+        at = raw.get("at")
+        return Stopped(
+            what,
+            str(raw.get("since") or "an unknown time"),
+            float(at) if isinstance(at, int | float) else None,
+        )
     return None
 
 

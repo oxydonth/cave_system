@@ -136,6 +136,7 @@ def complete_undo(ctx: Context) -> bool:
             note_stopped(
                 ctx.paths,
                 f"the undo of the restore of {series.get('archive')} finished with --no-start",
+                ctx.wall(),
             )
             marker.unlink(missing_ok=True)
         elif not series.get("start_owed"):

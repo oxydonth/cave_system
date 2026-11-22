@@ -205,7 +205,9 @@ def run(ctx: Context, args: argparse.Namespace) -> int:
         _make_dir(report, directory)
     _make_dir(report, paths.token.parent, 0o700)
     if fresh:
-        note_stopped(paths, "`./cave init` created the state, and it has not been started yet")
+        note_stopped(
+            paths, "`./cave init` created the state, and it has not been started yet", ctx.wall()
+        )
     for relative in MOUNT_DIRS:
         _make_dir(report, paths.ha_config / relative)
 
