@@ -15,6 +15,7 @@ from __future__ import annotations
 
 import logging
 import math
+import re
 from collections.abc import Callable, Mapping
 from dataclasses import dataclass, field, fields, replace
 from datetime import datetime, timedelta
@@ -112,6 +113,8 @@ _CLIMATE_MAX: Final = 35.0
 _FEED_STEP: Final = 0.1
 # Only a missing or unavailable entity cannot be written; one that has no value yet can.
 _NOT_WRITABLE: Final = "unavailable"
+# The unique ID Zigbee2MQTT gives a device's last_seen sensor.
+_LAST_SEEN_UNIQUE_ID: Final = re.compile(r"(0x[0-9a-f]{16})_last_seen_(.+)")
 
 
 def applied_file_path(hass: HomeAssistant) -> Path:
@@ -158,6 +161,25 @@ def _float(value: object) -> float | None:
 
 def _writable(state: State | None) -> bool:
     return state is not None and state.state != _NOT_WRITABLE
+
+
+def is_last_seen(entry: er.RegistryEntry, sensor: er.RegistryEntry) -> bool:
+    """Whether ``entry`` is the ``last_seen`` sensor Zigbee2MQTT discovered for ``sensor``'s device.
+
+    Zigbee2MQTT's unique IDs are ``<IEEE address>_<object id>_<base topic>`` (homeassistant.ts,
+    ``discover``), which stay when the owner renames an entity. The base topic is taken from the
+    room sensor's own unique ID, so an entity whose object ID merely starts with ``last_seen_``
+    does not count.
+    """
+    match = _LAST_SEEN_UNIQUE_ID.fullmatch(entry.unique_id)
+    if entry.domain != "sensor" or entry.platform != "mqtt" or match is None:
+        return False
+    ieee, base_topic = match.groups()
+    return (
+        sensor.platform == "mqtt"
+        and sensor.unique_id.startswith(f"{ieee}_")
+        and sensor.unique_id.endswith(f"_{base_topic}")
+    )
 
 
 @dataclass(slots=True)
@@ -256,7 +278,11 @@ class HeatingRuntime:
         self._roles: dict[str, list[Callable[[State | None, datetime], None]]] = {}
         # Room sensor -> the other entities of its device, as last looked up.
         self._sensor_devices: dict[str, set[str]] = {}
+        # Every room sensor and every other entity of its device: what one message of a room
+        # sensor's device writes.
+        self._sensor_entities: set[str] = set()
         self._resubscribe = False
+        self._sensor_report_due = False
         self._listeners: list[CALLBACK_TYPE] = []
         self._room_adders: list[Callable[[list[RoomRuntime]], None]] = []
         self._unsub_events: list[CALLBACK_TYPE] = []
@@ -505,6 +531,7 @@ class HeatingRuntime:
     def _on_started(self, _hass: HomeAssistant) -> None:
         self._unsub_started = None
         self._started = True
+        self._enable_last_seen()
         self._read_all(dt_util.utcnow())
         self._evaluate()
 
@@ -529,17 +556,52 @@ class HeatingRuntime:
         while self._unsub_events:
             self._unsub_events.pop()()
 
-    def _device_entities(self, entity_id: str) -> set[str] | None:
-        """The entities of the device an entity belongs to; None if it has no known device."""
+    def _device_entries(self, entity_id: str) -> list[er.RegistryEntry]:
+        """The other entities of the device an entity belongs to, disabled ones included."""
         registry = er.async_get(self.hass)
         entry = registry.async_get(entity_id)
         if entry is None or entry.device_id is None:
-            return None
-        return {
-            item.entity_id
-            for item in er.async_entries_for_device(registry, entry.device_id)
+            return []
+        return [
+            item
+            for item in er.async_entries_for_device(
+                registry, entry.device_id, include_disabled_entities=True
+            )
             if item.entity_id != entity_id
-        }
+        ]
+
+    def _last_seen_entries(
+        self, sensor: str, entries: list[er.RegistryEntry]
+    ) -> list[er.RegistryEntry]:
+        """Of a room sensor's device's ``entries``, its Zigbee2MQTT ``last_seen`` sensor."""
+        own = er.async_get(self.hass).async_get(sensor)
+        if own is None:
+            return []
+        return [entry for entry in entries if is_last_seen(entry, own)]
+
+    @callback
+    def _enable_last_seen(self) -> None:
+        """Enable the ``last_seen`` sensor of each room sensor's device, if it was never enabled.
+
+        Zigbee2MQTT's discovery enables it for a device first seen with this project's
+        ``device_options`` (``compose.yaml``); one Home Assistant registered before that stays
+        disabled, because ``enabled_by_default`` counts only at registration. Without it a live
+        sensor whose values all repeat looks silent (concept section 5.4). Only an entity that its
+        integration disabled is enabled; one the owner disabled is left alone. Home Assistant
+        then reloads the MQTT integration about 30 seconds later, once for all of them, during
+        which every MQTT entity is briefly unavailable.
+        """
+        registry = er.async_get(self.hass)
+        by_integration = er.RegistryEntryDisabler.INTEGRATION
+        for sensor in self._sensor_devices:
+            for entry in self._last_seen_entries(sensor, self._device_entries(sensor)):
+                if entry.disabled_by is by_integration:
+                    _LOGGER.info(
+                        "Enabling %s, so that every message of the room sensor %s counts",
+                        entry.entity_id,
+                        sensor,
+                    )
+                    registry.async_update_entity(entry.entity_id, disabled_by=None)
 
     @callback
     def _subscribe(self) -> None:
@@ -571,9 +633,13 @@ class HeatingRuntime:
             if room.config.temperature_sensor
         }
         self._sensor_devices = {
-            sensor: self._device_entities(sensor) or set() for sensor in sensors
+            sensor: {entry.entity_id for entry in self._device_entries(sensor)}
+            for sensor in sensors
         }
+        if self._started:
+            self._enable_last_seen()
         reporters = sensors | {item for items in self._sensor_devices.values() for item in items}
+        self._sensor_entities = reporters
         if reporters:
             self._unsub_events.append(
                 async_track_state_report_event(self.hass, reporters, self._on_sensor_report)
@@ -590,17 +656,49 @@ class HeatingRuntime:
         state = event.data["new_state"]
         for role in self._roles.get(event.data["entity_id"], ()):
             role(state, now)
+        if event.data["entity_id"] in self._sensor_entities:
+            # The temperature or the humidity of a room sensor changed. The message that
+            # carries it carries the device's ``last_seen`` too, and that may be written after
+            # it: after a restart every entity is unknown until Zigbee2MQTT sends its states
+            # again, and an evaluation between the two writes would take the reading of a
+            # sensor that died before the restart for fresh and feed it to the thermostats.
+            self._evaluate_after_message()
+            return
         self._evaluate()
 
     @callback
     def _on_sensor_report(
         self, event: Event[EventStateReportedData] | Event[EventStateChangedData]
     ) -> None:
-        """A room sensor's device reported: only of interest while the sensor counts as stale."""
+        """A room sensor's device reported: only of interest while the sensor counts as stale.
+
+        Evaluated once the current message is through: Zigbee2MQTT sends all of a device's
+        values in one message, and Home Assistant writes its entities one after the other. Were
+        the device's ``last_seen`` written before its temperature, an evaluation at once would
+        take the old temperature for fresh and feed it to the thermostats.
+        """
         if any(
             not room.sensor_fresh and room.config.temperature_sensor for room in self.rooms.values()
         ):
+            self._evaluate_after_message()
+
+    @callback
+    def _evaluate_after_message(self) -> None:
+        """Evaluate once every entity of the message being written has its new state.
+
+        Home Assistant's MQTT integration writes the entities of one message one after the
+        other without giving up control, so the next turn of the event loop is after all of
+        them. One evaluation serves any number of writes of that message.
+        """
+        if self._sensor_report_due:
+            return
+        self._sensor_report_due = True
+
+        def evaluate() -> None:
+            self._sensor_report_due = False
             self._evaluate()
+
+        self.hass.loop.call_soon(evaluate)
 
     @callback
     def _read_all(self, now: datetime) -> None:
@@ -864,23 +962,43 @@ class HeatingRuntime:
         return value
 
     def _sensor_last_report(self, sensor: str) -> datetime | None:
-        """When the sensor's device last reported: the newest report of any of its entities.
+        """When the sensor's device last reported (concept section 5.4).
 
-        Home Assistant does not record a repeated identical value as a new report, so a steady
-        temperature alone would look like silence (concept section 5.4).
+        Where the device has Zigbee2MQTT's ``last_seen`` sensor with a value, that value: the
+        time Zigbee2MQTT last heard the device, which changes with every message even when all
+        its readings repeat. It is not moved by Home Assistant writing every entity again after
+        a restart of either, so a dead sensor is not taken for fresh then. It is capped at the
+        time Home Assistant received it. Otherwise the newest report of any entity of the
+        device: Home Assistant does not record a repeated identical value as a new report, so a
+        steady temperature alone would look like silence.
         """
         # Looked up each time: a device paired after the file named its sensor gains entities
-        # one by one. The subscriptions follow when the set changes.
-        siblings = self._device_entities(sensor) or set()
+        # one by one. The subscriptions follow when the set changes, and a last_seen sensor that
+        # was registered disabled is enabled then.
+        entries = self._device_entries(sensor)
+        siblings = {entry.entity_id for entry in entries}
         if siblings != self._sensor_devices.get(sensor, set()):
             self._sensor_devices[sensor] = siblings
             self._resubscribe = True
+        for entry in self._last_seen_entries(sensor, entries):
+            if (seen := self._last_seen(entry.entity_id)) is not None:
+                return seen
         times = []
         for entity_id in {sensor, *siblings}:
             state = self.hass.states.get(entity_id)
             if state is not None and state.state not in UNAVAILABLE_STATES:
                 times.append(state.last_reported)
         return max(times) if times else None
+
+    def _last_seen(self, entity_id: str) -> datetime | None:
+        """The time a ``last_seen`` sensor shows, at most the time it was received."""
+        state = self.hass.states.get(entity_id)
+        if state is None or state.state in UNAVAILABLE_STATES:
+            return None
+        seen = dt_util.parse_datetime(state.state)
+        if seen is None or seen.tzinfo is None:
+            return None
+        return min(seen, state.last_reported)
 
     def _number_state(self, entity_id: str | None) -> float | None:
         if not entity_id:

@@ -4,15 +4,27 @@ import json
 import shutil
 from pathlib import Path
 
+import pytest
+import yaml
+
 from cave_sim.clock import ManualClock
 from cave_sim.home import parse_home
 from cave_sim.mqtt import InMemoryBroker
 from cave_sim.runtime import SimulatedHome
 from cave_sim.zigbee import fixtures
-from cave_sim.zigbee.discovery import DeviceInfo, Settings, discover_device, serialize
+from cave_sim.zigbee.discovery import (
+    DeviceInfo,
+    Settings,
+    apply_options,
+    discover_device,
+    entity_options,
+    project_device_options,
+    serialize,
+)
 from cave_sim.zigbee.models import BTH_RA, SNZB_04P, TRVZB
 from cave_sim.zigbee.record import Recorder
 
+REPOSITORY = Path(__file__).resolve().parents[2]
 IEEE = "0x00158d0000000102"
 DEVICE = {
     "identifiers": [f"zigbee2mqtt_{IEEE}"],
@@ -162,9 +174,14 @@ def test_a_recorded_fixture_replaces_the_generated_one(tmp_path: Path) -> None:
 
 
 def test_the_recorder_turns_a_device_s_messages_into_a_fixture() -> None:
-    """Record the simulator itself: the result must equal the generated fixture."""
+    """Record the simulator itself: the result must equal the generated fixture.
+
+    A fixture holds what the device's definition yields, before Zigbee2MQTT's ``device_options``,
+    so the recording is made without them.
+    """
     home = parse_home(
         {
+            "zigbee2mqtt": {"device_options": {}},
             "rooms": [
                 {
                     "id": "r",
@@ -176,7 +193,7 @@ def test_the_recorder_turns_a_device_s_messages_into_a_fixture() -> None:
                         }
                     ],
                 }
-            ]
+            ],
         }
     )
     broker = InMemoryBroker()
@@ -211,3 +228,110 @@ def test_a_recording_that_disagrees_with_its_model_is_reported() -> None:
     assert any("switch_open_window" in p and "remove it" in p for p in problems)
     assert all("models.py, model TRV-ZBT" in p for p in problems)
     assert fixtures.differences(generated, generated) == []
+
+
+# --- device_options (homeassistant.ts, discover and getConfigs; lib/model/device.ts) -------------
+
+LAST_SEEN_TOPIC = f"sensor/{IEEE}/last_seen/config"
+
+
+def test_the_project_s_device_options_enable_last_seen_and_change_nothing_else() -> None:
+    """``device_options.homeassistant.last_seen.enabled_by_default: true``, as compose.yaml sets."""
+    plain = _trvzb()
+    assert plain[LAST_SEEN_TOPIC]["enabled_by_default"] is False, "Zigbee2MQTT's own default"
+    applied = apply_options(plain, entity_options(Settings()))
+    assert applied[LAST_SEEN_TOPIC]["enabled_by_default"] is True
+    assert {k: v for k, v in applied.items() if k != LAST_SEEN_TOPIC} == {
+        k: v for k, v in plain.items() if k != LAST_SEEN_TOPIC
+    }
+    assert {k: v for k, v in applied[LAST_SEEN_TOPIC].items() if k != "enabled_by_default"} == {
+        k: v for k, v in plain[LAST_SEEN_TOPIC].items() if k != "enabled_by_default"
+    }
+    assert apply_options(plain, {}) == plain, "without options, nothing changes"
+
+
+def test_a_device_s_own_homeassistant_option_replaces_device_options_entirely() -> None:
+    """``{...device_options, ...deviceOptions}`` is a shallow merge."""
+    settings = Settings()
+    own = {"homeassistant": {"name": "Sensor"}}
+    assert entity_options(settings, own) == own
+    assert entity_options(settings, {"retain": True}) == {
+        **project_device_options(),
+        "retain": True,
+    }
+
+
+def test_the_homeassistant_option_is_applied_as_zigbee2mqtt_applies_it() -> None:
+    """Scalars of ``homeassistant`` go to every entity except ``name``; an entity's own entry
+    also sets ``name``; ``null`` deletes a key; ``device`` is merged; an entity set to ``null``
+    is not discovered; a falsy ``homeassistant`` discovers nothing."""
+    plain = _trvzb()
+    options = {
+        "homeassistant": {
+            "name": "ignored for every entity",
+            "expire_after": 3600,
+            "device": {"suggested_area": "Wohnzimmer"},
+            "last_seen": {"name": "Zuletzt gesehen", "icon": None},
+            "linkquality": None,
+        }
+    }
+    applied = apply_options(plain, options)
+    assert set(applied) == set(plain) - {f"sensor/{IEEE}/linkquality/config"}
+    for topic, payload in applied.items():
+        assert payload["expire_after"] == 3600, topic
+        assert payload["device"] == {**plain[topic]["device"], "suggested_area": "Wohnzimmer"}
+        if topic != LAST_SEEN_TOPIC:
+            assert payload.get("name") == plain[topic].get("name"), topic
+    assert applied[LAST_SEEN_TOPIC]["name"] == "Zuletzt gesehen"
+    assert "icon" not in applied[LAST_SEEN_TOPIC]
+    assert plain[LAST_SEEN_TOPIC]["icon"] == "mdi:clock", "the input is not changed"
+    for falsy in (None, False, 0, ""):
+        assert apply_options(plain, {"homeassistant": falsy}) == {}, falsy
+    assert apply_options(plain, {"homeassistant": {}}) == plain, "{} is true in JavaScript"
+
+
+def test_renaming_an_entity_through_the_options_is_refused() -> None:
+    """``type`` and ``object_id`` in an entity's entry (getConfigs) are not transcribed."""
+    for key in ("type", "object_id"):
+        with pytest.raises(ValueError, match="not transcribed"):
+            apply_options(_trvzb(), {"homeassistant": {"last_seen": {key: "x"}}})
+
+
+def test_compose_sets_the_device_options_the_stand_in_assumes() -> None:
+    """``ZIGBEE2MQTT_CONFIG_DEVICE_OPTIONS`` in compose.yaml is the stand-in's default."""
+    compose = yaml.safe_load((REPOSITORY / "compose.yaml").read_text(encoding="utf-8"))
+    environment = compose["services"]["zigbee2mqtt"]["environment"]
+    assert json.loads(environment["ZIGBEE2MQTT_CONFIG_DEVICE_OPTIONS"]) == project_device_options()
+    assert Settings().device_options == project_device_options()
+
+
+def test_new_device_options_republish_only_the_discovery_that_changed() -> None:
+    """Zigbee2MQTT started again with other options: changed discovery again, gone cleared."""
+    home = parse_home(
+        {
+            "zigbee2mqtt": {"device_options": {}},
+            "rooms": [{"id": "r", "devices": [{"model": "TRVZB", "name": "Fixture Device"}]}],
+        }
+    )
+    broker = InMemoryBroker()
+    simulated = SimulatedHome(
+        home, ManualClock(), broker.client("sim"), fritz_username="u", fritz_password="p"
+    )
+    simulated.start()
+    start = len(broker.log)
+    simulated.zigbee.set_device_options(project_device_options())
+    republished = broker.log[start:]
+    assert [message.topic.split("/")[3] for message in republished] == ["last_seen"]
+    assert json.loads(republished[0].payload)["enabled_by_default"] is True
+    assert republished[0].retain
+    start = len(broker.log)
+    simulated.zigbee.set_device_options(project_device_options())
+    assert broker.log[start:] == [], "nothing changed, nothing published"
+    simulated.zigbee.set_device_options({"homeassistant": {"last_seen": None}})
+    cleared = broker.log[start:]
+    assert [(message.topic.split("/")[3], message.payload) for message in cleared] == [
+        ("last_seen", b"")
+    ]
+    assert simulated.state()["zigbee2mqtt"]["device_options"] == {
+        "homeassistant": {"last_seen": None}
+    }

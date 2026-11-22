@@ -17,6 +17,11 @@ Layout of a fixture file::
 
 Inside a fixture the device's friendly name, the object ID derived from it, its IEEE address and the
 coordinator's IEEE address are replaced by the placeholders below.
+
+A generated fixture holds the discovery the device's definition yields, before Zigbee2MQTT's
+``device_options``, which the stand-in applies when it publishes. A recording made on this
+project's Zigbee2MQTT carries them already (the ``last_seen`` sensor enabled by default); applying
+them again changes nothing.
 """
 
 import json

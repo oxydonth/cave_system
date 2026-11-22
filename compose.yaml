@@ -94,13 +94,29 @@ services:
     environment:
       TZ: ${TZ:-Europe/Berlin}
       # Overrides of the settings in configuration.yaml (Zigbee2MQTT's ZIGBEE2MQTT_CONFIG_* scheme),
-      # so that no secret is written into a file.
+      # so that no secret is written into a tracked file. Zigbee2MQTT 2.14.3 applies them by
+      # writing them into its configuration.yaml in CAVE_DATA at every start
+      # (lib/util/onboarding.ts calls settings.write(), lib/util/settings.ts), so that file holds
+      # them too, as it holds the network key.
       ZIGBEE2MQTT_CONFIG_MQTT_SERVER: mqtt://mosquitto:1883
       ZIGBEE2MQTT_CONFIG_MQTT_USER: ${CAVE_MQTT_USER:-cave}
       ZIGBEE2MQTT_CONFIG_MQTT_PASSWORD: ${CAVE_MQTT_PASSWORD:?run ./cave init first}
       ZIGBEE2MQTT_CONFIG_SERIAL_PORT: ${CAVE_Z2M_SERIAL_PORT:-}
       ZIGBEE2MQTT_CONFIG_SERIAL_ADAPTER: ${CAVE_Z2M_ADAPTER:-ember}
       ZIGBEE2MQTT_CONFIG_FRONTEND_AUTH_TOKEN: ${CAVE_Z2M_FRONTEND_TOKEN:?run ./cave init first}
+      # Options for every device: Home Assistant's `last_seen` sensor of each device is enabled
+      # when it is first discovered, so that cave_heating sees every message a room sensor sends,
+      # also when all its values repeat (concept section 5.4). Zigbee2MQTT 2.14.3 reads the whole
+      # `device_options` object from this variable and writes it into its configuration.yaml
+      # whenever it writes that file (at every start, and at every change made in its web UI),
+      # replacing what was there; it touches nothing else in that file. A device option set in
+      # the web UI therefore never takes effect. To add one, do not edit this tracked file
+      # (`cave update` refuses a checkout with local changes): set this variable in
+      # compose.override.yaml, which Compose merges and Git ignores (docs/install.md), and keep
+      # the `"homeassistant":{"last_seen":{"enabled_by_default":true}}` entry in it. Entities
+      # registered before this was set are enabled by cave_heating
+      # (custom_components/cave_heating/README.md).
+      ZIGBEE2MQTT_CONFIG_DEVICE_OPTIONS: '{"homeassistant":{"last_seen":{"enabled_by_default":true}}}'
     ports:
       # The web UI, on the LAN, protected by the token.
       - 8080:8080

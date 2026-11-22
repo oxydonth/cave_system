@@ -156,24 +156,37 @@ protection, and a radiator that was off stays off.
 
 ### 1.7 A room sensor in a perfectly steady room
 
-Known limitation, [issue #21](https://github.com/oxydonth/cave_system/issues/21): the room counts as
-having a stale sensor when neither the sensor nor any other entity of its device has reported for
-three hours (`sensor_stale`). Home Assistant records a state only when a value changed, so a sensor
-that is alive and reports every hour, but whose temperature, humidity and battery level all stay
-exactly the same for three hours, looks silent. The room then shows the average of its thermostats'
-own readings, and the temperature feed stops (a Bosch thermostat returns to its own sensor 30
-minutes later), until one value changes. How often a real SNZB-02P repeats both readings exactly is
-not known without hardware.
+Home Assistant records a state only when a value changed, so a sensor that is alive and reports
+every hour, but whose temperature, humidity and battery level all stay exactly the same, would look
+silent ([issue #21](https://github.com/oxydonth/cave_system/issues/21)). The room therefore judges
+the sensor by its `sensor.<name>_last_seen`, which Zigbee2MQTT moves with every message (concept
+section 5.4). This was proven against the simulators only: whether a real SNZB-02P sends a message
+at least every three hours when nothing changes, and whether Zigbee2MQTT then moves `last_seen`, is
+what this point checks.
 
-- **Observe.** In a room that is empty and steady for at least three hours (the first night will
-  do), open the **History** of the room sensor's temperature, humidity and battery level. Is there a
-  stretch of three hours or more in which none of them changes? If so, the room shows the
-  thermostats' average reading during it instead of the sensor's, which you can see by comparing
-  the room's `climate.cave_<room>` current temperature with the sensor's.
-- **Result:** longest steady stretch ______ ; the room showed the thermostats' reading: yes / no.
-- **Do with it.** Degraded, not unsafe: the room is controlled on the thermostat's own reading, which
-  is high next to a radiator, and recovers by itself. Report what you saw on the issue, with the
-  length of the stretch: it decides how urgent the fix is.
+- **Observe.** After pairing, open the room sensor's device page in Home Assistant: `Last seen`
+  is listed under Diagnostic, enabled, with a time. If it is disabled, open the entity's settings:
+  when Home Assistant says it was disabled by the integration, run `./cave apply` (or restart Home
+  Assistant), which enables it; when it says disabled by the user, enable it there by hand
+  (`cave_heating` leaves an owner's choice alone). Then look again a minute later: about half a
+  minute after it was enabled every Zigbee device shows unavailable for a moment (Home Assistant
+  reloads its MQTT integration), and their values return within another half minute. Note how
+  long it took, and whether a thermostat received anything but its settings meanwhile
+  (`sudo -u cave ./cave logs --tail 200 zigbee2mqtt`). Then, after a night in which the room was
+  empty and steady, open the **History** of the sensor's temperature and humidity. Is there a
+  stretch of three hours or more in which neither changed? If so, did the room's
+  `climate.cave_<room>` show the sensor's temperature throughout (not the thermostats' average)?
+  `Last seen` has no history (the recorder leaves it out, `homeassistant/configuration.yaml`):
+  how often the sensor sent during the stretch shows in Zigbee2MQTT's log, one `MQTT publish`
+  line on `zigbee2mqtt/<name>` per message. For a whole night:
+  `sudo -u cave ./cave logs --since 12h --tail all zigbee2mqtt | grep "topic 'zigbee2mqtt/<name>'"`.
+  A restart of Home Assistant or Zigbee2MQTT adds one such line that is not a message from the
+  sensor: Zigbee2MQTT sending its states again.
+- **Result:** longest steady stretch ______ ; longest gap between two messages of the sensor
+  ______ ; the room showed the thermostats' reading: yes / no.
+- **Do with it.** A gap between messages longer than three hours means the sensor reports less often
+  than assumed: raise `sensor_stale` in the `timing:` block above that gap, and report it on the
+  issue. The room showing the thermostats' reading while `Last seen` moved is a defect to report.
 
 ## 2. Radio range
 

@@ -7,6 +7,8 @@
 #   serial.adapter  CAVE_Z2M_ADAPTER          coordinator driver
 #   frontend.auth_token  CAVE_Z2M_FRONTEND_TOKEN
 #   mqtt.server, mqtt.user, mqtt.password     the broker of this stack
+#   device_options  options for every device: the `last_seen` sensor enabled in Home Assistant
+# Zigbee2MQTT writes these into this file's copy at every start; the environment wins.
 version: 5
 
 mqtt:
@@ -46,6 +48,8 @@ advanced:
   pan_id: GENERATE
   ext_pan_id: GENERATE
   # Add `last_seen` to every device's state, so that the dashboard and the problem sensors can
-  # tell how long a device has been silent.
+  # tell how long a device has been silent, and cave_heating can tell a room sensor that keeps
+  # reporting the same values from one that has stopped (its `last_seen` sensor is enabled through
+  # `device_options` in compose.yaml).
   last_seen: ISO_8601
   log_level: info

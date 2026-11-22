@@ -45,6 +45,12 @@ ssdp:
 recorder:
   purge_keep_days: 30
   commit_interval: 30
+  # Every Zigbee device's "Last seen" changes with every message it sends (enabled through
+  # device_options in compose.yaml, for cave_heating's room sensors). Recording it would add a
+  # row per message per device. Nothing reads its history: cave_heating uses its current value.
+  exclude:
+    entity_globs:
+      - sensor.*_last_seen
 
 # Only warnings and errors, plus two kinds of line that others read: "Setting up <integration>"
 # (the pipeline's stack job, to see that `cave_heating` was loaded) and "Home Assistant

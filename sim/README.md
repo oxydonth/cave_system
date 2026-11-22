@@ -57,6 +57,7 @@ fritzbox:
   locked_command: refuse          # sethkrtsoll while locked: refuse (HTTP 400) or ignore (200, no effect)
 zigbee2mqtt:                      # optional
   passive_timeout_minutes: 1500   # until a silent battery device shows as unavailable
+  device_options: {}              # Zigbee2MQTT's device_options; default: those of compose.yaml
 rooms:
   - id: living_room               # used by the control API
     name: Wohnzimmer
@@ -104,14 +105,33 @@ devices show:
 | BTH-RA | none: the remote temperature is used whenever it is fresher than 30 minutes | `switch.<name>_window_detection: "off"` |
 
 Every Zigbee device also has the entities Zigbee2MQTT creates for all its exposes (the full lists,
-model by model, are in `tests/sim/test_home_assistant_mqtt.py`), a `sensor.<name>_last_seen` and a
-`sensor.<name>_linkquality` (both disabled by default) and an `update.<name>`. The bridge adds
+model by model, are in `tests/sim/test_home_assistant_mqtt.py`), a `sensor.<name>_last_seen`
+(enabled by this project's `device_options`, see below), a `sensor.<name>_linkquality` (disabled
+by default) and an `update.<name>`. The bridge adds
 `binary_sensor.zigbee2mqtt_bridge_connection_state` and its siblings.
 
 ## MQTT topics
 
 Zigbee2MQTT's settings as the stand-in assumes them: base topic `zigbee2mqtt`, discovery prefix
-`homeassistant`, availability on, `last_seen: ISO_8601`, `cache_state: true`, output `json`.
+`homeassistant`, availability on, `last_seen: ISO_8601`, `cache_state: true`, output `json`, and
+the `device_options` of `compose.yaml` (`ZIGBEE2MQTT_CONFIG_DEVICE_OPTIONS`):
+`{"homeassistant": {"last_seen": {"enabled_by_default": true}}}`. A test keeps the two equal.
+
+**Device options.** The fixtures hold the discovery a device's definition yields; the stand-in
+applies the options when it publishes, as Zigbee2MQTT 2.14.3 does: a device's options are
+`device_options` merged shallowly with its own (`lib/model/device.ts`, `get options()`), and in
+`lib/extension/homeassistant.ts` a falsy `homeassistant` option discovers nothing (`discover`), an
+entity whose entry is `null` is dropped (`getConfigs`), and after the converter's own override the
+scalar values of `homeassistant` go into every payload (`name` excepted) and those of
+`homeassistant.<object id>` into that entity's (`add` in `discover`), where `null` deletes a key
+and `device` is merged. Renaming an entity through `type` or `object_id` is not transcribed; the
+stand-in refuses such options. `Zigbee2Mqtt.set_device_options` stands for Zigbee2MQTT started
+again with other options: changed discovery is published again, and discovery that is gone is
+cleared. The stand-in's devices have no options of their own. The real Zigbee2MQTT applies its
+`ZIGBEE2MQTT_CONFIG_*` variables by writing them into its `configuration.yaml` at every start
+(`lib/util/onboarding.ts`, `onboard`, calls `settings.write()`, which applies them in
+`lib/util/settings.ts`, `applyEnvironmentVariables`); `tests/sim/test_zigbee2mqtt_settings.py`
+runs the pinned image in the pipeline to check that nothing else in that file changes.
 
 | Topic | Direction | Content |
 |---|---|---|
@@ -160,7 +180,7 @@ Requests and responses are JSON. Unknown room or device: 404; invalid request: 4
 | `POST /api/rooms/{id}/humidity` | `{"humidity": 70}` | Set a room's humidity |
 | `POST /api/outdoor` | `{"temperature": -5}` | Set the outdoor temperature |
 | `POST /api/fritzbox` | `{"report_delay": 180, "summer": true, "holiday": false, "txbusy_while_pending": false, "window_target": "off", "locked_command": "ignore"}` | Change the FRITZ!Box's behaviour; omitted fields stay |
-| `POST /api/zigbee2mqtt` | `{"passive_timeout_minutes": 5}` | Zigbee2MQTT's `availability.passive.timeout`, in minutes, counted from each device's last message |
+| `POST /api/zigbee2mqtt` | `{"passive_timeout_minutes": 5}` | Zigbee2MQTT's `availability.passive.timeout`, in minutes, counted from each device's last message; answers with the Zigbee2MQTT part of `/api/state`, `device_options` included |
 
 ### What the control API returns
 
@@ -172,7 +192,8 @@ Requests and responses are JSON. Unknown room or device: 404; invalid request: 4
   "outdoor_temperature": 5.0,
   "fritzbox": {"report_delay": 0.0, "summer": false, "holiday": false, "txbusy_while_pending": false,
                "window_target": "unchanged", "locked_command": "refuse"},
-  "zigbee2mqtt": {"passive_timeout_minutes": 1500.0},
+  "zigbee2mqtt": {"passive_timeout_minutes": 1500.0,
+                  "device_options": {"homeassistant": {"last_seen": {"enabled_by_default": true}}}},
   "rooms": {"bedroom": {"name": "Schlafzimmer", "temperature": 18.0, "humidity": 55.0, "open_windows": 0,
                         "devices": ["schlafzimmer_heizung", "schlafzimmer", "schlafzimmer_fenster"]}},
   "devices": {"<device id>": "<as GET /api/devices/{id}>"}

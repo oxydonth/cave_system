@@ -65,6 +65,10 @@ class SimulatedHome:
         settings = dataclasses.replace(
             settings or Settings(), passive_timeout=spec.zigbee2mqtt.passive_timeout_minutes * 60
         )
+        if spec.zigbee2mqtt.device_options is not None:
+            settings = dataclasses.replace(
+                settings, device_options=dict(spec.zigbee2mqtt.device_options)
+            )
         self.zigbee = Zigbee2Mqtt(transport, clock, settings)
         self.fritzbox = FakeFritzBox(
             clock, fritz_username, fritz_password, report_delay=spec.fritzbox.report_delay
@@ -351,7 +355,10 @@ class SimulatedHome:
                 "window_target": self.fritzbox.window_target,
                 "locked_command": self.fritzbox.locked_command,
             },
-            "zigbee2mqtt": {"passive_timeout_minutes": self.zigbee.passive_timeout / 60},
+            "zigbee2mqtt": {
+                "passive_timeout_minutes": self.zigbee.passive_timeout / 60,
+                "device_options": dict(self.zigbee.settings.device_options),
+            },
             "rooms": {
                 room.room_id: {
                     "name": room.name,

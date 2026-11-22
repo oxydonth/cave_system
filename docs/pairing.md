@@ -177,6 +177,18 @@ services**, **Entities** and search for the device's name. What you need, for a 
 | Room sensor | `sensor.<name>_temperature`, `sensor.<name>_humidity` |
 | Window contact | `binary_sensor.<name>_contact` |
 
+Every Zigbee device also has a `sensor.<name>_last_seen` (shown as "Last seen" under Diagnostic):
+when Zigbee2MQTT last heard from the device. This project's Zigbee2MQTT enables it for every
+device it discovers (`device_options` in `compose.yaml`). It does not go into `heating.yaml`, but
+`cave_heating` relies on the room sensor's: it tells a sensor whose readings stay the same from
+one that has stopped sending. Leave it enabled. If you paired devices before this was set, their
+`Last seen` is disabled; `cave_heating` enables the room sensors' itself when it starts or when
+you run `./cave apply`, and Home Assistant then reloads its MQTT integration about half a minute
+later, which makes every Zigbee device unavailable for a moment. A `Last seen` you disabled
+yourself is left alone, and the room then judges the sensor by its readings alone. Further
+device options for Zigbee2MQTT go into `compose.override.yaml`, not its web UI, as the comment at
+`ZIGBEE2MQTT_CONFIG_DEVICE_OPTIONS` in `compose.yaml` explains.
+
 The names follow Zigbee2MQTT's and the FRITZ! integration's scheme; the entity page in Home
 Assistant is the final word, and a name that differs from the table is the one to write into the
 file. If the IDs still carry the device's IEEE address, you did not rename the device in
@@ -267,6 +279,8 @@ nothing: fix the line and run it again. If the file is valid, it stores it as th
 regenerates the dashboard from it and tells Home Assistant to reload the heating. It ends with three
 lines that say what happened (applied copy, dashboard, Home Assistant). If it says that Home
 Assistant has to be restarted instead, run `./cave bootstrap` once: the script token is missing.
+If a room sensor's `Last seen` was still disabled, the Zigbee devices are unavailable for a moment
+half a minute later: `cave_heating` enabled it (see [the entity IDs](#4-find-the-entity-ids)).
 
 `apply` and `bootstrap` take the same lock as the nightly backup (02:30) and update (03:30). If one says
 that another command holds the lock, wait a few minutes and run it again. If one says "Not applied" or
