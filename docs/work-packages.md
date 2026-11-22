@@ -1,6 +1,8 @@
 # cave_system — work packages
 
-This splits the [concept](concept.md) into nine work packages. Each is implemented by a coding agent on its own branch, reviewed by a second agent, and merged only after that review.
+This splits the [concept](concept.md) into work packages. Each is implemented by a coding agent on its own branch, reviewed by a second agent, and merged only after that review.
+
+Work packages 1 to 9 build the system. Work packages 10 to 12 close what their reviews left open and are scheduled. Work packages 13 to 15 are defined so that they can be picked up, but each waits for something outside this repository; see [Later work packages](#later-work-packages).
 
 ## How a work package is delivered
 
@@ -55,8 +57,14 @@ flowchart LR
 | 7 | Device integration tests | 2, 3, 4 | Opus 5.5, high | Opus 5.5, high | The evidence for requirement R3; needs each device's behaviour understood |
 | 8 | Release, self-update and backup | 2 | Opus 5.5, high | Opus 5.5, high | Rollback must be right the first time |
 | 9 | Integration polish and documentation | 5, 6, 7, 8 | Sonnet 5.5, high | Opus 5.5, high | Wiring and prose, checked against the real commands |
+| 10 | Sensor freshness and controller follow-ups | 4, 7 | Opus 5.5, high | Opus 5.5, high | The control logic and the simulators' fidelity again, in a small area |
+| 11 | Operations follow-ups and alerts without Home Assistant | 8 | Opus 5.5, high | Opus 5.5, high | Update and restore code, where every review found another interruption that was not handled |
+| 12 | Notification and dashboard follow-ups | 5, 9 | Sonnet 5.5, high | Opus 5.5, high | Templates, the generator and their tests |
+| 13 | Room-sensor regulation for FRITZ! thermostats | 10 | Opus 5.5, extra-high | Fable 5.2, high | Touches the most delicate rule of the controller. Later |
+| 14 | Heating insights | 10, 12 | Sonnet 5.5, high | Opus 5.5, high | New entities, statistics and a dashboard view. Later |
+| 15 | Home Assistant upgrade | all others | Sonnet 5.5, high | Opus 5.5, high | Mechanical, proven by the whole pipeline. Later |
 
-Work packages 2, 3 and 4 run in parallel, as do 5, 6, 7 and 8 once their dependencies are merged.
+Work packages 2, 3 and 4 run in parallel, as do 5, 6, 7 and 8 once their dependencies are merged. Work packages 10, 11 and 12 run in parallel: their paths do not overlap.
 
 ### Shared files
 
@@ -320,3 +328,114 @@ The exhaustive tests of each device against each capability belong to WP7, not h
 - The reviewer follows `docs/install.md` and `docs/demo.md` step by step against the repository and finds no command or path that does not exist.
 
 **Paths:** `docs/`, `README.md`, `tests/e2e/` (dashboard check), `.github/workflows/e2e.yml`. Shared: `ci.yml`, `ops/cave_ops/commands/demo.py`.
+
+---
+
+## WP10 — Sensor freshness and controller follow-ups
+
+**Goal.** A room sensor that is alive is never treated as stale, and the open items from the controller's reviews are closed (issues #21 and #13).
+
+**Background.** Concept section 5.4 calls a room sensor stale when no entity of its device has reported for `sensor_stale`. Home Assistant's MQTT entities record no report when a message repeats a value, so a sensor whose temperature, humidity and battery level all stay exactly the same goes stale although it sends a message every hour. The room then falls back to the thermostat's own reading and the temperature feed stops, until a value changes. The device tests pin this as finding F4, a strict expected failure.
+
+**Deliverables**
+
+- Freshness that follows the messages a device sends, not the values that changed. Zigbee2MQTT can publish the time of every device's last message (`last_seen`). The expected design: the Zigbee2MQTT configuration turns it on; the Zigbee2MQTT stand-in publishes it, and its discovery, exactly as Zigbee2MQTT 2.14.3 does, with the source cited as `sim/README.md` does for everything else; and the controller counts it without the owner having to enable an entity by hand. Read the Zigbee2MQTT source at the pinned version before building; if it shows that this cannot work as described, choose the mechanism it does support and give the reason in the pull request.
+- A home that was set up with an earlier release gets the change through the normal update, without anyone editing a file and without touching the Zigbee network key, the paired devices or anything else in the Zigbee2MQTT state. Say how, and test it.
+- A sensor that stops sending still goes stale after `sensor_stale`, exactly as before. A thermostat's own entities, and FRITZ! devices, are not affected; say why.
+- The strict expected failure for F4 is removed from the device tests, the case passes, and the device matrix shows no finding.
+- From issue #13:
+  - a window contact that is open and whose entity is then removed holds the pause for `window_unavailable_grace`, as an open contact that goes silent already does;
+  - the three duplicate-command sequences listed there are either removed or shown, with the reason, to be unavoidable; each is covered by a test that asserts the exact commands sent;
+  - a test for each of the three rules the issue lists as untested, each failing when its rule is broken.
+- Concept section 5.4, `docs/devices.md`, `docs/pairing.md` and the matching point of `docs/hardware-acceptance.md` say what is now true.
+
+**Acceptance**
+
+- A simulated SNZB-02P that sends identical values every hour for twelve hours keeps its room on the sensor's reading, and the feed continues. Without the change the same test fails.
+- A simulated sensor that stops sending goes stale after `sensor_stale`.
+- Breaking each new or newly tested rule fails a test; the pull request lists the breakages tried.
+- The pipeline is green, including the device matrix without a finding and the end-to-end job.
+
+**Paths:** `custom_components/cave_heating/`, `sim/`, `zigbee2mqtt/`, `tests/cave_heating/`, `tests/sim/`, `tests/devices/`. Shared: `docs/concept.md` (section 5.4), `docs/devices.md`, `docs/pairing.md`, `docs/hardware-acceptance.md`, and in `ops/` only what carries the Zigbee2MQTT setting into an existing home.
+
+---
+
+## WP11 — Operations follow-ups and alerts without Home Assistant
+
+**Goal.** The open items from the reviews of the operations commands are closed, the server neither fills its disk nor stops updating over time, and the owner hears about a stack that is down even when Home Assistant cannot tell them (issues #24 and #25, and the `demo` item of #16).
+
+**Deliverables**
+
+- Every item of issue #25, each with a test that fails without the change. The two that matter most in daily use:
+  - container images of releases that are no longer needed are removed, so that the disk check does not start refusing updates after many releases. The images of the running release and of the release a rollback would return to are always kept, and nothing is removed while an update is interrupted or a restore is unfinished;
+  - when the newest release is remembered as failed, the newest release that is not is installed.
+- An alert that does not depend on Home Assistant. Today "nothing is running" and "unhealthy" reach only the system journal while Home Assistant is down. Deliver:
+  - a new variable in `.env` that names a URL. When it is set, a short text is sent to it with an HTTP POST, which works with a self-hosted ntfy or Gotify and with any other webhook. When it is unset, nothing leaves the server and the behaviour is as today. Standard library only;
+  - a periodic health watch started by a systemd timer, which alerts once when the stack has been unhealthy or stopped for longer than a set time, and once when it is healthy again; not on every run, and not while an update, backup or restore is at work;
+  - the same channel for an update, backup or restore that ends in a state that needs the owner, in addition to the notification of concept section 4.5;
+  - a send that fails or hangs never fails or delays the command; the text never contains a secret.
+- Every item of issue #24 that concerns `cave device-check`, each with a test, and `update` does not begin its switch while a thermostat is held by `device-check`; it says so and tries again on its next run.
+- From issue #16: the path constants `demo` imports from the `apply` command move to a core module.
+- `docs/operations.md`, `docs/devices.md`, `docs/install.md` (the new variable and the watch), `ops/README.md`.
+
+A new variable and the fallback channel change contracts: concept sections 4.2 and 4.5 are updated in the same pull request, and `.env.example` and `init` learn the variable.
+
+**Acceptance**
+
+- The reviewers' failing tests named in issues #24 and #25 are in the suite under proper names and pass.
+- Against a local HTTP endpoint in the tests: one alert per incident and one all-clear; none when the variable is unset; a hanging or refusing endpoint costs the command no more than its timeout and does not change its exit status.
+- After a series of simulated releases only the images of the running and the previous release remain, and nothing is removed while maintenance is unfinished.
+- The tests pass on Python 3.11 and 3.14, and the `provision-host dry run` job shows the new timer.
+
+**Paths:** `ops/`, `scripts/`, `tests/ops/`, `docs/operations.md`, `ops/README.md`. Shared: `docs/concept.md` (sections 4.2 and 4.5), `.env.example`, `docs/devices.md` (the `device-check` section), `docs/install.md`.
+
+---
+
+## WP12 — Notification and dashboard follow-ups
+
+**Goal.** Notifications and the dashboard have no known rough edges (issue #16, and the dashboard item of issue #24).
+
+**Deliverables**
+
+- A high-humidity notification no longer stands for ever once the room's reading is gone: it ends after a bounded time without a reading, and does not come back after a restart for a room that has no humidity sensor any more.
+- The package tests allow a logged error only in the tests that provoke it, and only with the expected text.
+- The test `test_a_notification_the_person_dismissed_does_not_come_back` failed once in the pipeline. Find what it races with and remove the cause, or show with at least two hundred repeated runs that it is stable and say what was examined.
+- `docs/dashboard-and-notifications.md` says that a first install pushes nothing to the phone for conditions that already exist.
+- On the generated dashboard a window contact's row carries the contact's own name. Today it shows the name Home Assistant derives from the device class, which reads "Wohnzimmer Fenster Door" for a window. Check every other generated row for the same kind of label.
+
+**Acceptance**
+
+- Each change has a test that fails without it.
+- The screenshots of the browser check show the contact rows with their own names and no error card.
+
+**Paths:** `homeassistant/packages/`, `tools/render_dashboard.py`, `tests/packages/`, `tests/tools/`, `docs/dashboard-and-notifications.md`.
+
+---
+
+## Later work packages
+
+These are defined so that they can be started without another round of planning. None is scheduled: each waits for something outside this repository.
+
+### WP13 — Room-sensor regulation for FRITZ! thermostats
+
+**Waits for:** the decision to buy FRITZ! thermostats. A FRITZ!Smart Thermo 302 has no input for an external temperature, so its room is regulated on the sensor next to the radiator.
+
+**Goal.** A room whose thermostats accept no external temperature still reaches its target on the room sensor (concept section 11, "Later additions").
+
+**Outline.** A slow, bounded correction of the setpoint sent to such a thermostat, derived from the difference between the room sensor and the room's target. The correction must be told apart from a change made by hand at the device, which is the most delicate rule of the controller (concept section 5.5); it is limited in size and rate, drops to zero when the room sensor is stale, and is visible in the room's reason. Proven against the fake FRITZ!Box with a room model whose radiator-side reading is offset from the room, and listed for the real device on the hardware acceptance checklist.
+
+### WP14 — Heating insights
+
+**Waits for:** real thermostats. What they report as valve position differs by model, and the numbers have to be checked against a radiator.
+
+**Goal.** The owner sees where the heat goes: per room and day, how long the room called for heat and how long its windows were open, and a weekly summary.
+
+**Outline.** New sensors of `cave_heating` per room (a contract change, concept section 5.2), long-term statistics, a third dashboard view generated by `apply`, and one weekly notification through the existing script. No energy in kWh is claimed: without heat meters these are durations, and the guide says so.
+
+### WP15 — Home Assistant upgrade
+
+**Waits for:** a release of the test library `pytest-homeassistant-custom-component` that pins a newer Home Assistant. On 22 November 2026 its newest release, 0.13.375, pins 2026.10.4, which is the version in use.
+
+**Goal.** The system runs on the current Home Assistant, and the upgrade is shown to work end to end, including the self-update with its rollback.
+
+**Outline.** The version moves in the three places `make versions` checks, in one pull request; `paho-mqtt` and `pyfritzhome` follow Home Assistant's own requirements; the whole pipeline, including the device tests, the end-to-end job and the browser check, decides. Whatever the upgrade breaks is fixed in the same pull request, and the frontend's element names used by the browser check are read again from the new frontend.
