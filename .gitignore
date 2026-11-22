@@ -26,3 +26,6 @@ compose.override.yaml
 
 # Agent worktrees
 .claude/worktrees/
+
+# Screenshots of the dashboard check (tests/e2e/dashboard_browser.py)
+screenshots/

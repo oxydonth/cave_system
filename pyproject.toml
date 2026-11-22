@@ -30,6 +30,8 @@ dev = [
     # Bump together with Home Assistant; Dependabot ignores them.
     "paho-mqtt==2.1.0",
     "pyfritzhome==0.6.21",
+    # The browser check of the heating dashboard in the end-to-end job (tests/e2e/test_dashboard_browser.py).
+    "playwright==1.64.1",
     { include-group = "sim" },
 ]
 # What the simulator image (sim/Dockerfile) installs, from uv.lock. All three are pinned by
