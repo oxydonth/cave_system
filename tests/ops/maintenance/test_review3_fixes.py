@@ -231,7 +231,13 @@ def test_a_repeated_restore_without_space_says_what_state_it_is_in(
     )
     marker = server.data / ".cave/ops/restore.json"
     marker.parent.mkdir(parents=True, exist_ok=True)
-    marker.write_text(json.dumps({"archive": str(archive)}))
+    series = {
+        "archive": str(archive),
+        "aside": "before-restore-20261122T000000Z",
+        "original_entries": ["homeassistant"],
+        "env_backup": None,
+    }
+    marker.write_text(json.dumps(series))
     monkeypatch.setattr(_server, "free_bytes", lambda path: 1024)
 
     result = run_cave("restore", str(archive), "--no-start")
@@ -240,6 +246,10 @@ def test_a_repeated_restore_without_space_says_what_state_it_is_in(
     assert "half restored from an earlier attempt" in result.err
     assert "or restore another archive" in result.err
     assert "Nothing was changed" not in result.err
+    # The one directory that must be kept is named; no other before-restore-* is offered.
+    keep = server.data / ".cave/ops/before-restore-20261122T000000Z"
+    assert f"Do not delete {keep}" in result.err
+    assert "before-restore-*" not in result.err
 
 
 # ------------------------------------------------------- guards of a way back found done (N3)

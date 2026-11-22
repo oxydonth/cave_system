@@ -38,13 +38,13 @@ def _owner_of(path: Path) -> tuple[int, int]:
 
 def _hand_over(path: Path, owner: tuple[int, int], fd: int | None = None) -> None:
     """As root, make ``path`` (or the open ``fd``) belong to ``owner`` if it does not already."""
-    info = os.fstat(fd) if fd is not None else path.stat()
+    info = os.fstat(fd) if fd is not None else path.lstat()
     if (info.st_uid, info.st_gid) == owner:
         return
     if fd is not None:
         os.fchown(fd, *owner)
     else:
-        os.chown(path, *owner)
+        os.lchown(path, *owner)  # never through a link
 
 
 def held_by(path: Path) -> str | None:
@@ -81,6 +81,11 @@ class Lock:
         root = _euid() == 0
         directory.mkdir(parents=True, exist_ok=True)
         if root:
+            if directory.is_symlink():
+                # Root would create the lock and hand files over wherever the link points.
+                raise CaveError(
+                    f"{directory} is a symbolic link; it must be a directory. Nothing was changed."
+                )
             _hand_over(directory, _owner_of(directory.parent))
         writable = True
         try:

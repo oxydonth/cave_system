@@ -27,6 +27,7 @@ import datetime
 import json
 import os
 import tarfile
+from dataclasses import asdict
 from pathlib import Path, PurePosixPath
 from typing import Any
 
@@ -37,7 +38,7 @@ from ..health import wait_healthy
 from ..notify import notify
 from ..paths import Paths, default_data_dir
 from . import _archives, _releases, _server
-from ._update_state import BEFORE_SWITCH, Switch, now
+from ._update_state import BEFORE_SWITCH, Switch, complete_undo, now
 from ._update_state import load as load_update_record
 from ._update_state import save as save_update_record
 
@@ -199,6 +200,10 @@ def run(ctx: Context, args: argparse.Namespace) -> int:
     # before that update with the archive's state, and forgets the update, so that its recovery
     # can never put its snapshot back over the restored state later. So the archive is checked
     # against that release. Checked before anything is created, and again under the lock.
+    complete_undo(ctx)  # an --undo cut off after it had put the state back
+    earlier = _read_marker(_server.ops_dir(ctx) / _server.RESTORE_MARKER)
+    if earlier is not None and not earlier["aside"]:
+        raise CaveError(_OLD_MARKER.format(marker=_server.ops_dir(ctx) / _server.RESTORE_MARKER))
     before = load_update_record(ctx).switch
     _check_release(ctx, archive.manifest, args.force, before.from_commit if before else "HEAD")
     if not data.exists():
@@ -276,16 +281,17 @@ def _restore(
     needed = archive.size + SPACE_MARGIN
     free = _server.free_bytes(existing)
     if free < needed:
-        repeat = _server.restore_in_progress(ctx) is not None
+        pending = _read_marker(ops / _server.RESTORE_MARKER)
         raise CaveError(
             f"unpacking needs about {needed // 2**20} MiB, but only {free // 2**20} MiB are free "
             f"on {existing}. "
             + (
-                "The stack is stopped and the state half restored from an earlier attempt: free "
-                "space (older .cave/ops/before-restore-* directories, old archives in "
-                "CAVE_BACKUP_DIR, `sudo docker image prune -a`) and run it again, or restore "
-                f"another archive. See {OPERATIONS}, 'A restore that cannot finish'."
-                if repeat
+                "The stack is stopped and the state half restored from an earlier attempt. Free "
+                "space (old archives in CAVE_BACKUP_DIR, `sudo docker image prune -a`) and run it "
+                "again, or restore another archive. "
+                + _keep(ops, pending)
+                + f" See {OPERATIONS}, 'A restore that cannot finish'."
+                if pending is not None
                 else "Nothing was changed."
             )
         )
@@ -342,9 +348,14 @@ def _restore(
                 "aside": aside_name,
                 "original_entries": _server.state_entries(data),
                 "env_backup": None,
+                # The update this restore supersedes: --undo puts it back in flight, so that the
+                # state from before never runs under the release the restore checked out.
+                "superseded_update": asdict(switch) if switch is not None else None,
             }
         else:
             series = {**earlier, "archive": str(archive.path)}
+            if switch is not None and not series.get("superseded_update"):
+                series["superseded_update"] = asdict(switch)
         _write_marker(marker, series)
         if switch is not None:
             # From here on the restore, not the update's snapshot, decides the state: a recovery
@@ -359,7 +370,7 @@ def _restore(
     except (OSError, tarfile.TarError, EOFError, CaveError) as error:
         _server.remove(staging)
         if earlier is not None:
-            return _repeat_failed(ctx, error)
+            return _repeat_failed(ctx, error, ops, earlier)
         marker.unlink(missing_ok=True)
         return _unpack_failed(ctx, args, error, was_running)
 
@@ -520,14 +531,34 @@ def _write_marker(marker: Path, series: dict[str, Any]) -> None:
     _server.write_atomic(marker, json.dumps(series, indent=2).encode(), 0o644)
 
 
-def _repeat_failed(ctx: Context, error: BaseException) -> int:
+_OLD_MARKER = (
+    "a restore stopped half-way here, recorded by an earlier version of cave in {marker}, which "
+    "does not say where the state from before is. Neither a repeat nor --undo can continue it. "
+    "Look at the newest .cave/ops/before-restore-* directory (the state from before that "
+    "restore), put back what you need by hand, then remove {marker} and restore again. Nothing "
+    "was changed."
+)
+
+
+def _keep(ops: Path, series: dict[str, Any] | None) -> str:
+    """The sentence that names the one directory that must not be deleted during a series."""
+    if not series or not series.get("aside"):
+        return ""
+    return (
+        f"Do not delete {ops / series['aside']}: it holds the only copy of the state from before, "
+        "which `--undo` needs."
+    )
+
+
+def _repeat_failed(ctx: Context, error: BaseException, ops: Path, series: dict[str, Any]) -> int:
     """A repeat of a restore that stopped half-way failed before it moved anything. The state is
     still half restored: keep the marker, do not start the stack, say so."""
     message = (
         f"The restore failed while unpacking: {error}. The state is still half restored from the "
         "earlier attempt, so the stack was NOT started and update and backup still wait. Free "
-        "space if that was the cause and run it again, restore another archive, or put the state "
-        f"from before back with `sudo ./cave restore --undo`. See {OPERATIONS}, 'A restore that "
+        "space if that was the cause (old archives in CAVE_BACKUP_DIR, `sudo docker image prune "
+        "-a`) and run it again, restore another archive, or put the state from before back with "
+        f"`sudo ./cave restore --undo`. {_keep(ops, series)} See {OPERATIONS}, 'A restore that "
         "cannot finish'."
     )
     ctx.warn(message)
@@ -561,7 +592,12 @@ def undo(ctx: Context, args: argparse.Namespace) -> int:
                 f"See {OPERATIONS}, 'A restore that cannot finish'. Nothing was changed."
             )
         if ctx.paths.env_file.is_file():
-            ctx.compose("down", timeout=300.0)
+            down = ctx.compose("down", timeout=300.0)
+            if not down.ok:
+                raise CaveError(
+                    f"the stack could not be stopped ({down.output.strip()[-300:]}); nothing was "
+                    "undone. Run `sudo ./cave restore --undo` again."
+                )
         aside = ops / series["aside"]
         originals = set(series["original_entries"])
         ctx.say(f"Putting back the state from before, from {aside} ...")
@@ -577,10 +613,32 @@ def undo(ctx: Context, args: argparse.Namespace) -> int:
         backup = series.get("env_backup")
         if backup and (env_file.parent / backup).is_file():
             os.replace(env_file.parent / backup, env_file)
-        marker.unlink()
+        series["undone"] = True
+        _write_marker(marker, series)
+        superseded = series.get("superseded_update")
+        complete_undo(ctx)  # the superseded update in flight again, then the marker removed
         _server.remove(aside)
         _server.remove(ops / "restore-staging")
-    message = f"The restore that stopped half-way was undone: {data} holds the state from before."
+        message = (
+            f"The restore that stopped half-way was undone: {data} holds the state from before."
+        )
+        if isinstance(superseded, dict):
+            # That state is the one the interrupted update left: finish the update's way back,
+            # which puts its snapshot and the release from before it back together.
+            from .update import _Update
+
+            recover = argparse.Namespace(
+                force=False, auto=False, recover=True, timeout=args.timeout
+            )
+            status = _Update(ctx, recover).finish_interrupted()
+            message += (
+                f" The restore had superseded the interrupted update to "
+                f"{superseded.get('to_release')}; that update was put back in flight and its way "
+                f"back finished (exit status {status}, see its own message)."
+            )
+            (ctx.say if status in (1, 2) else ctx.warn)(message)
+            notify(ctx, TITLE, message)
+            return status
     if args.no_start or not ctx.paths.env_file.is_file():
         ctx.say(f"{message} Not started: run `./cave up` when ready.")
         return 0

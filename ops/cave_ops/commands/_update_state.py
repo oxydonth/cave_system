@@ -107,6 +107,35 @@ def _switch(raw: dict[str, Any]) -> Switch:
     return Switch(**known)
 
 
+def complete_undo(ctx: Context) -> bool:
+    """Finish a ``cave restore --undo`` that was cut off after it had put the state from before
+    back (its marker says ``undone``): write back the interrupted update that the restore had
+    superseded, if any, and remove the marker. Returns whether there was such a marker.
+
+    The order (state back, marker ``undone``, update written back, marker removed) leaves no moment
+    in which the state from before is in place but neither the marker nor the update says so.
+    ``update`` calls this first, so the next run at boot finishes what ``--undo`` began.
+    """
+    marker = _server.ops_dir(ctx) / _server.RESTORE_MARKER
+    try:
+        series = json.loads(marker.read_text(encoding="utf-8"))
+    except (OSError, ValueError):
+        return False
+    if not isinstance(series, dict) or not series.get("undone"):
+        return False
+    superseded = series.get("superseded_update")
+    if isinstance(superseded, dict):
+        record = load(ctx)
+        if record.switch is None:
+            record.switch = _switch(superseded)
+            failure = record.failed.get(record.switch.to_release, {})
+            if "superseded by a restore" in str(failure.get("reason", "")):
+                del record.failed[record.switch.to_release]  # its way back records its own
+            save(ctx, record)
+    marker.unlink(missing_ok=True)
+    return True
+
+
 def maintenance_pending(ctx: Context) -> str | None:
     """What an owner command (``apply``, ``bootstrap``) must not run into, or ``None``: an update
     that was interrupted (its way back would put a snapshot back over whatever is changed now) or a

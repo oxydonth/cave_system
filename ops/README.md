@@ -27,7 +27,7 @@ each part (`tests/ops/conftest.py`).
 | `notify.py` | `notify(ctx, title, message)`: the notification contract of concept section 4.5 (`script.cave_notify` called with the fields `title` and `message`, else `persistent_notification.create`, always also the journal). Never raises. |
 | `container.py` | `run_in_homeassistant(ctx, command, entrypoint=, workdir=, capture=)`: a one-off command in the pinned Home Assistant image with the service's mounts (`/config`, `/cave/tools`); for everything that needs Home Assistant's own Python packages. |
 | `heating.py` | `validate_and_store(ctx, source=None) -> ApplyResult`: reads the file **once**, validates a staged copy of exactly those bytes in a one-off container, and only if it passes stores those same bytes as the applied copy. Also `validate()`, `validation_result()` (the validator's `Result` itself, to tell a rejection from a validator that could not run) and `store_applied(ctx, path_or_bytes)`. |
-| `lock.py` | `Lock(path, command)` and `ctx.lock(command)`: the one lock of concept section 4.5, `with ctx.lock("update"): ...`. Raises `LockBusy` naming the holder. `held_by(path)` says who holds it without taking it (for `status`). |
+| `lock.py` | `Lock(path, command)` and `ctx.lock(command)`: the one lock of concept section 4.5, `with ctx.lock("update"): ...`. Raises `LockBusy` naming the holder. Root and the service user take it in either order: it needs no write access to the file (a read-only holder only cannot write its name), and root gives `.cave` and the lock file to the owner of `CAVE_DATA` (a linked `.cave` is refused). `held_by(path)` says who holds it without taking it (for `status`). |
 | `mosquitto.py` | `password_line(user, password)`: a line of the broker's password file; `accepts(text, user, password)`: whether a password file lets that login in. |
 | `versioncheck.py` | The version check behind `make versions`. |
 | `errors.py` | `CaveError`: raise it for failures the user can act on. |
@@ -66,7 +66,10 @@ Rules for commands:
   talk to Home Assistant only through `ctx.ha()`, write output with `ctx.say()`/`ctx.warn()`, and
   wait with `ctx.sleep()`; then the fixtures replace all of them.
 * A command that uses Compose starts with `require_initialised(ctx)`.
-* `apply`, `update`, `backup` and `restore` hold `ctx.lock(...)`.
+* `apply`, `bootstrap`, `update`, `backup` and `restore` hold `ctx.lock(...)`; `apply`, `bootstrap`
+  and `backup` also refuse while `_update_state.maintenance_pending(ctx)` names an interrupted
+  update or a restore that stopped half-way. `demo` (its own state) and `device-check` (no state
+  of its own) take no lock.
 * Report every outcome of a script (`update`, `backup`) through `notify()`.
 * Whatever needs Home Assistant's own Python packages runs in a one-off container, as
   `heating.validate()` does, never by importing Home Assistant here.

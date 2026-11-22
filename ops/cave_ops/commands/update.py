@@ -224,6 +224,10 @@ class _Update:
         ctx, args, record = self.ctx, self.args, self.record
         if record.problem:
             ctx.warn(record.problem)
+        if state.complete_undo(ctx):
+            # A `restore --undo` was cut off after it had put the state from before back; the
+            # update it had superseded (if any) is in flight again and is finished below.
+            self.record = record = state.load(ctx)
         restoring = _server.restore_in_progress(ctx)
         if restoring is not None:
             return self.conclude(

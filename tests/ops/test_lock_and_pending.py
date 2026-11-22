@@ -42,7 +42,7 @@ def as_root(monkeypatch):
     changes = []
     monkeypatch.setattr(lock_module, "_euid", lambda: 0)
     monkeypatch.setattr(lock_module, "_owner_of", lambda path: (4321, 4321))
-    monkeypatch.setattr(lock_module.os, "chown", lambda p, u, g: changes.append(("chown", u, g)))
+    monkeypatch.setattr(lock_module.os, "lchown", lambda p, u, g: changes.append(("chown", u, g)))
     monkeypatch.setattr(lock_module.os, "fchown", lambda fd, u, g: changes.append(("fchown", u, g)))
     return changes
 
@@ -70,7 +70,7 @@ def test_the_service_user_first_then_root_changes_no_owner(tmp_path, monkeypatch
     monkeypatch.setattr(lock_module, "_euid", lambda: 0)
     monkeypatch.setattr(lock_module, "_owner_of", lambda p: me)
     monkeypatch.setattr(lock_module.os, "fchown", lambda fd, u, g: changes.append((u, g)))
-    monkeypatch.setattr(lock_module.os, "chown", lambda p, u, g: changes.append((u, g)))
+    monkeypatch.setattr(lock_module.os, "lchown", lambda p, u, g: changes.append((u, g)))
 
     with Lock(path, "update"):  # then root
         pass
@@ -180,3 +180,17 @@ def test_bootstrap_holds_the_shared_lock(initialised, run_cave, ctx, fake_runner
     assert result.code == 1
     assert "`cave update`" in result.err
     assert fake_runner.calls == []
+
+
+def test_root_refuses_a_linked_cave_directory(tmp_path, as_root):
+    elsewhere = tmp_path / "elsewhere"
+    elsewhere.mkdir()
+    data = tmp_path / "data"
+    data.mkdir()
+    (data / ".cave").symlink_to(elsewhere)
+
+    with pytest.raises(CaveError, match="is a symbolic link"):
+        Lock(data / ".cave" / "lock", "backup").acquire()
+
+    assert list(elsewhere.iterdir()) == []
+    assert as_root == []

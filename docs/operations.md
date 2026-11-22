@@ -28,7 +28,7 @@ Find the start of the message in the left column.
 | `Not updating to v…: cannot read the script token` / `… is not a single line of printable characters` | The script token file is unreadable or damaged. | Unchanged. | Remove `/var/lib/cave/homeassistant/.cave/token` and run `./cave bootstrap` again. |
 | `Not updating to v…: the running stack is not healthy` | The update found the running system unhealthy before it touched anything, and left it alone. | As before the update, still unhealthy. | See [The running stack is not healthy](#the-running-stack-is-not-healthy). |
 | `Not updating to v…: the checkout … has local changes` | Someone edited files in `/opt/cave`. | Unchanged. | See [Local changes](#local-changes). |
-| `Not updating to v…: the snapshot needs about … MiB` | Not enough disk space for the safety copy, measured after the new images were pulled. | Unchanged. | Free space on the disk that holds `/var/lib/cave`: old files in `/var/backups/cave`, `/var/lib/cave/.cave/ops/before-restore-*` left by a restore, unused images (`sudo docker image prune -a` while the stack runs). The next night tries again. |
+| `Not updating to v…: the snapshot needs about … MiB` | Not enough disk space for the safety copy, measured after the new images were pulled. | Unchanged. | Free space on the disk that holds `/var/lib/cave`: old files in `/var/backups/cave`, `/var/lib/cave/.cave/ops/before-restore-*` left by a restore that finished (never while `status` shows an unfinished restore: the directory named in `/var/lib/cave/.cave/ops/restore.json` is then the only copy of the state from before), unused images (`sudo docker image prune -a` while the stack runs). The next night tries again. |
 | `Not updating to v…: pulling its images failed`, `Could not fetch releases` or `Could not list the releases` | No internet, GitHub or the image registry unreachable, or Git could not read the checkout. | Unchanged. | Nothing; the next night tries again. If it repeats for days, check the internet connection and the deploy key (`sudo -u cave -H git -C /opt/cave fetch`). |
 | `Not updating to v…: exporting it failed` | The release could not be unpacked into `/var/lib/cave/.cave/ops/tmp` (disk full, or a damaged repository). | Unchanged. | Free space; if it repeats, `sudo -u cave git -C /opt/cave fsck`. |
 | `Not updating to v…: its Compose file does not accept this server's .env and compose.override.yaml` | The new release needs a variable that `.env` lacks, or the local `compose.override.yaml` does not fit it. | Unchanged. Not remembered as failed. | `sudo -u cave ./cave init` (it adds missing variables), check `compose.override.yaml`, then `sudo ./cave update`. |
@@ -318,7 +318,7 @@ neither empty nor a cave state directory (one with `.cave`, `homeassistant`, `mo
 `zigbee2mqtt`) is refused unless `--force` is given, so that a mistyped `--data` cannot move a
 foreign directory's contents aside. The state it replaces is kept in
 `/var/lib/cave/.cave/ops/before-restore-<time>` and the replaced `.env` as
-`/opt/cave/.env.before-restore-<time>`; delete them once everything works (each
+`/opt/cave/.env.before-restore-<time>`; once that restore has finished and everything works, delete them (each
 `before-restore-*` is a full copy of the state and counts against the update's disk check). If a
 restore is interrupted, run the same command again (or restore another archive; see
 [A restore that cannot finish](#a-restore-that-cannot-finish)). If it fails while unpacking (for
@@ -375,7 +375,9 @@ has been run again.
 A restore cut off while moving the state in leaves a marker (`/var/lib/cave/.cave/ops/restore.json`);
 `status` shows it, and `update` (also `--recover`), `backup`, `apply` and `bootstrap` refuse,
 because the state may be half restored. Every attempt of the same series moves the state from
-before into one and the same `before-restore-*` directory, named in the marker. The ways out:
+before into one and the same `before-restore-*` directory, named in the marker. **Do not delete
+that directory** while the restore is unfinished: it is the only copy of the state from before,
+and `--undo` needs it (the messages name it). The ways out:
 
 1. Run the same `sudo ./cave restore <archive>` again. It unpacks again and moves the state in
    from the start.
@@ -386,8 +388,13 @@ before into one and the same `before-restore-*` directory, named in the marker. 
    discards what the attempts moved in, puts back every entry from before (from the
    `before-restore-*` directory, or where no attempt touched it), puts back the `.env` from
    before if an attempt had replaced it, removes the marker and starts the stack (`--no-start`:
-   do not). A marker written by an earlier version does not record the state from before;
-   `--undo` then refuses rather than guess.
+   do not). If the restore had superseded an interrupted update, the state from before is the
+   one that update left (possibly migrated by its new release): `--undo` then puts that update
+   back in flight and finishes its way back, which puts its snapshot and the release from before
+   it back together, as `sudo ./cave update --recover` would. If `--undo` is cut off, run it
+   again; once it had put the state back, the next `cave update` (at boot) also finishes it.
+   A marker written by an earlier version does not record the state from before; `--undo`
+   and a repeat then refuse, before stopping anything, and say what to do by hand.
 
 If an attempt fails while unpacking (a full disk, an unreadable archive) it changes nothing, but
 the state is still half restored from the attempt before: the stack is not started, the marker
