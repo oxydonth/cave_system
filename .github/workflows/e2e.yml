@@ -70,7 +70,23 @@ jobs:
       # --- part 2: the demo and the scenarios
       - name: Start the demo
         run: |
+          # The demo's secrets are made here and masked before `./cave demo` runs, which keeps
+          # every value its demo.env already has and adds the rest.
+          mkdir -p "${DEMO_DATA}"
+          (
+            umask 077
+            for name in CAVE_MQTT_PASSWORD CAVE_HA_OWNER_PASSWORD CAVE_Z2M_FRONTEND_TOKEN \
+              CAVE_FRITZ_PASSWORD; do
+              echo "${name}=$(openssl rand -hex 16)"
+            done > "${DEMO_DATA}/demo.env"
+          )
+          tests/e2e/mask-secrets.sh "${DEMO_DATA}/demo.env"
+          cp "${DEMO_DATA}/demo.env" "${RUNNER_TEMP}/demo-secrets"
           ./cave demo --timeout 420
+          # Kept, not replaced: the masked secrets are the ones the demo uses.
+          while read -r line; do
+            grep -qxF "${line}" "${DEMO_DATA}/demo.env"
+          done < "${RUNNER_TEMP}/demo-secrets"
           tests/e2e/mask-secrets.sh "${DEMO_DATA}/demo.env" "${DEMO_DATA}/homeassistant/.cave/token"
 
       - name: The scenarios on the demo

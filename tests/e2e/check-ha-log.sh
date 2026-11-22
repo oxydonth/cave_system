@@ -30,8 +30,10 @@ allowed=(
   '^$'
 )
 
-# Errors and criticals of Home Assistant's logging, and any traceback, also one printed to
-# standard error outside logging (one that belongs to a logged error is reported with it).
+# Errors and criticals of Home Assistant's logging, and every traceback: one printed to standard
+# error outside logging, and also one that Home Assistant attaches to a line of any level,
+# a WARNING logged with its exception included. That is stricter than ERROR alone, on purpose;
+# allow-list a traceback below, with its reason, if one is ever harmless.
 grep -E '^[0-9-]+ [0-9:.]+ (ERROR|CRITICAL) |^Traceback \(most recent call last\)' \
   "${work}/ha.log" > "${work}/errors.log" || true
 for pattern in "${allowed[@]}"; do
