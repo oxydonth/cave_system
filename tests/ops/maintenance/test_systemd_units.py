@@ -19,6 +19,8 @@ UNITS = (
     "cave-backup.service",
     "cave-backup.timer",
     "cave-recover.service",
+    "cave-watch.service",
+    "cave-watch.timer",
 )
 CHECKOUT = "/opt/cave"
 
@@ -88,6 +90,20 @@ def test_backup_runs_before_the_update(repo_root):
     assert update["Persistent"] == "false"  # no update in the daytime after a night switched off
 
 
+def test_the_watch_runs_every_five_minutes_as_the_service_user(repo_root):
+    service = unit(repo_root, "cave-watch.service")
+    timer = unit(repo_root, "cave-watch.timer")
+
+    assert cave_arguments(service["Service"]["ExecStart"]).command == "watch"
+    assert service["Service"]["Type"] == "oneshot"
+    # The service user, who may ask Docker; root is not needed and the lock is never taken.
+    assert service["Service"]["User"] == "cave"
+    assert service["Service"]["WorkingDirectory"] == CHECKOUT
+    assert service["Unit"]["ConditionPathExists"] == f"{CHECKOUT}/.env"
+    assert timer["Timer"]["OnCalendar"] == "*:0/5"
+    assert timer["Install"]["WantedBy"] == "timers.target"
+
+
 # ------------------------------------------------------------------------------ provisioning
 @pytest.fixture
 def stubs(tmp_path):
@@ -127,6 +143,31 @@ def test_provisioning_installs_and_enables_the_units(repo_root, stubs):
     assert "would run: systemctl enable --now cave-update.timer" in done.stdout
     assert "would run: systemctl enable --now cave-backup.timer" in done.stdout
     assert "would run: systemctl enable cave-recover.service" in done.stdout
+    assert "would run: systemctl enable --now cave-watch.timer" in done.stdout
+    assert not record.exists(), record.read_text()
+
+
+def test_the_watch_runs_as_the_service_user_given_with_user(repo_root, stubs):
+    bin_dir, record = stubs
+
+    done = subprocess.run(
+        ["bash", str(repo_root / "scripts/provision-host.sh"), "--dry-run", "--user", "heating"],
+        capture_output=True,
+        text=True,
+        env={**os.environ, "PATH": f"{bin_dir}:{os.environ['PATH']}"},
+        check=False,
+    )
+
+    assert done.returncode == 0, done.stderr
+    assert (
+        f"would run: install -m 0644 {repo_root}/scripts/systemd/cave-watch.service "
+        "(with User=heating) /etc/systemd/system/cave-watch.service" in done.stdout
+    )
+    # The root units are installed as they are.
+    assert (
+        f"would run: install -m 0644 {repo_root}/scripts/systemd/cave-update.service "
+        "/etc/systemd/system/cave-update.service" in done.stdout
+    )
     assert not record.exists(), record.read_text()
 
 

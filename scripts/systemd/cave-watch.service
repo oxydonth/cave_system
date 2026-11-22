@@ -1,0 +1,18 @@
+# Installed by scripts/provision-host.sh; started by cave-watch.timer. See docs/operations.md.
+[Unit]
+Description=cave_system: alert through CAVE_ALERT_URL when the stack is down (cave watch)
+Documentation=https://github.com/oxydonth/cave_system/blob/main/docs/operations.md
+After=docker.service network-online.target
+Wants=network-online.target
+# Nothing to do before `./cave init` has run; without CAVE_ALERT_URL it returns at once.
+ConditionPathExists=/opt/cave/.env
+
+[Service]
+Type=oneshot
+# The service user, who may ask Docker; provision-host.sh writes the name given with --user.
+# It never takes the lock, it only reads who holds it.
+User=cave
+WorkingDirectory=/opt/cave
+# A hung Docker makes each of its questions time out after a minute; then it is over.
+TimeoutStartSec=4min
+ExecStart=/opt/cave/cave watch

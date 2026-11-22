@@ -339,7 +339,7 @@ def _restore(
         # `backup` until the restore is run again or undone.
         if switch is not None:
             ctx.say(f"Checking out {switch.from_label}, the release before the interrupted update")
-            failed, kept = _server.check_out_exactly(
+            failed, kept, removed = _server.check_out_exactly(
                 ctx,
                 switch.from_commit,
                 switch.to_commit,
@@ -349,6 +349,11 @@ def _restore(
                 raise CaveError(f"{switch.from_label} could not be checked out: {failed}")
             if kept:
                 ctx.warn("Left in place, not the update's files: " + ", ".join(kept))
+            if removed:
+                ctx.warn(
+                    f"Removed, because they are {switch.to_release}'s own files, byte for byte "
+                    f"(Git gives them back with {switch.to_release}): " + ", ".join(removed)
+                )
         if earlier is None:
             aside_name = f"before-restore-{stamp}"
             counter = 1

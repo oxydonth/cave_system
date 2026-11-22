@@ -78,6 +78,9 @@ class UpdateRecord:
     ``status``."""
     last_check: dict[str, Any] | None = None
     """The last run at all: ``time`` and ``message``."""
+    previous: dict[str, str] | None = None
+    """The release the last installed update came from: ``release`` and ``commit``. Its images
+    are kept with the running release's (``_images``)."""
     problem: str | None = None
     """Set when the file could not be read; the record then starts empty."""
 
@@ -100,6 +103,7 @@ def load(ctx: Context) -> UpdateRecord:
         failed=dict(raw.get("failed") or {}),
         last_result=raw.get("last_result"),
         last_check=raw.get("last_check"),
+        previous=raw.get("previous") if isinstance(raw.get("previous"), dict) else None,
     )
 
 
@@ -175,6 +179,7 @@ def save(ctx: Context, record: UpdateRecord) -> None:
         "failed": record.failed,
         "last_result": record.last_result,
         "last_check": record.last_check,
+        "previous": record.previous,
     }
     ops = _server.ops_dir(ctx)
     ops.mkdir(parents=True, exist_ok=True)

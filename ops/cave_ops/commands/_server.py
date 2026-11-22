@@ -116,26 +116,28 @@ def remove_stale_git_locks(ctx: Context) -> None:
 
 def check_out_exactly(
     ctx: Context, commit: str, other: str, *, remove_added: bool
-) -> tuple[str | None, list[str]]:
+) -> tuple[str | None, list[str], list[str]]:
     """Make the checkout exactly ``commit``, whatever an interrupted checkout of ``other`` left:
     Git's lock files, HEAD where it was, files of both in the working tree.
 
     With ``remove_added`` (only when a checkout of ``other`` may have run), a file that ``other``
     adds is removed if, and only if, its content is ``other``'s own: the owner's untracked files
     are never touched, even where ``other`` has a file of the same name. Returns what failed (or
-    ``None``) and the paths that were left in place.
+    ``None``), the paths that were left in place and the paths that were removed (a file of the
+    owner's that is byte for byte ``other``'s is among them: checking out ``other`` gives it back).
     """
     remove_stale_git_locks(ctx)
     done = git(ctx, "checkout", "--force", "--detach", commit)
     if not done.ok:
         done = git(ctx, "reset", "--hard", commit)
     if not done.ok:
-        return done.output.strip()[-300:] or f"exit status {done.returncode}", []
+        return done.output.strip()[-300:] or f"exit status {done.returncode}", [], []
     if not remove_added:
-        return None, []
+        return None, [], []
     added = git(ctx, "diff", "--name-only", "--diff-filter=A", "-z", commit, other)
     if not added.ok:
-        return f"the files {other} added could not be listed: {added.output.strip()[-300:]}", []
+        listed = f"the files {other} added could not be listed: {added.output.strip()[-300:]}"
+        return listed, [], []
     present = [
         name
         for name in filter(None, added.stdout.split("\0"))
@@ -143,11 +145,12 @@ def check_out_exactly(
     ]
     regular = [name for name in present if (ctx.paths.root / name).is_file()]
     kept = [name for name in present if name not in regular]
+    removed: list[str] = []
     if regular:
         here = git(ctx, "hash-object", "--", *regular)
         theirs = git(ctx, "rev-parse", *(f"{other}:{name}" for name in regular))
         if not here.ok or not theirs.ok:
-            return None, present
+            return None, present, []
         for name, mine, released in zip(
             regular, here.stdout.split(), theirs.stdout.split(), strict=False
         ):
@@ -156,11 +159,12 @@ def check_out_exactly(
                 continue
             path = ctx.paths.root / name
             path.unlink()
+            removed.append(name)
             parent = path.parent
             while parent != ctx.paths.root and not any(parent.iterdir()):
                 parent.rmdir()
                 parent = parent.parent
-    return None, sorted(kept)
+    return None, sorted(kept), sorted(removed)
 
 
 def entries_elsewhere(ctx: Context) -> list[str]:

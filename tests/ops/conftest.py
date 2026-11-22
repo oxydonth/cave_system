@@ -214,6 +214,9 @@ class FakeHomeAssistant:
                 for domain, names in self.services.items()
             ]
             return 200, json.dumps(listing).encode()
+        if method == "GET" and path == "/api/states":
+            listing = [{"entity_id": entity, **state} for entity, state in self.states.items()]
+            return 200, json.dumps(listing).encode()
         if method == "GET" and path.startswith("/api/states/"):
             state = self.states.get(path.removeprefix("/api/states/"))
             if state is None:

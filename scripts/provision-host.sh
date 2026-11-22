@@ -4,8 +4,9 @@
 #   * Docker Engine and the Compose plugin, from Docker's own package repository
 #   * Git, an SSH client and Python 3 (the `cave` command needs Python 3.11 or newer)
 #   * the service user (home /var/lib/cave-home), /opt/cave (the checkout) and /var/lib/cave (the state)
-#   * the systemd units of scripts/systemd: the nightly update and backup, which run as root, and
-#     the recovery of an interrupted update at boot (docs/operations.md)
+#   * the systemd units of scripts/systemd: the nightly update and backup, which run as root, the
+#     recovery of an interrupted update at boot, and the watch that alerts through CAVE_ALERT_URL
+#     every five minutes, which runs as the service user (docs/operations.md)
 #
 # Idempotent: every step first looks whether it is already done. Run it as root:
 #
@@ -29,8 +30,8 @@ DOCKER_KEY_FINGERPRINT=9DC858229FC7DD38854AE2D88D81803C0EBFCD88
 DOCKER_SOURCES=/etc/apt/sources.list.d/docker.sources
 # The units next to this script; absent when the script was copied to the server on its own.
 UNITS_DIR=$(cd "$(dirname "$0")" && pwd)/systemd
-UNIT_FILES="cave-update.service cave-update.timer cave-backup.service cave-backup.timer cave-recover.service"
-ENABLED_UNITS="cave-update.timer cave-backup.timer cave-recover.service"
+UNIT_FILES="cave-update.service cave-update.timer cave-backup.service cave-backup.timer cave-recover.service cave-watch.service cave-watch.timer"
+ENABLED_UNITS="cave-update.timer cave-backup.timer cave-recover.service cave-watch.timer"
 DOCKER_PACKAGES="docker-ce docker-ce-cli containerd.io docker-buildx-plugin docker-compose-plugin"
 DRY_RUN=0
 
@@ -222,7 +223,13 @@ for entry in "$APP_DIR:0755" "$DATA_DIR:0750" "$BACKUP_DIR:0750"; do
   fi
 done
 
-say "[6/6] systemd units for the nightly update and backup"
+# A unit as it is installed: one that runs as the service user (cave-watch.service names `cave`)
+# names the one given with --user.
+unit_text() {
+  sed "s/^User=cave\$/User=$SERVICE_USER/" "$UNITS_DIR/$1"
+}
+
+say "[6/6] systemd units for the nightly update and backup, and the watch"
 UNITS_INSTALLED=0
 if [ ! -d "$UNITS_DIR" ]; then
   say "  skipped: $UNITS_DIR does not exist (the script was copied on its own)."
@@ -232,10 +239,19 @@ elif ! command -v systemctl >/dev/null 2>&1; then
 else
   changed=0
   for unit in $UNIT_FILES; do
-    if cmp -s "$UNITS_DIR/$unit" "/etc/systemd/system/$unit"; then
+    if [ "$(unit_text "$unit")" = "$(cat "/etc/systemd/system/$unit" 2>/dev/null)" ]; then
       say "  $unit: up to date"
-    else
+    elif [ "$(unit_text "$unit")" = "$(cat "$UNITS_DIR/$unit")" ]; then
       run install -m 0644 "$UNITS_DIR/$unit" "/etc/systemd/system/$unit"
+      changed=1
+    elif [ "$DRY_RUN" -eq 1 ]; then
+      say "  would run: install -m 0644 $UNITS_DIR/$unit (with User=$SERVICE_USER) /etc/systemd/system/$unit"
+      changed=1
+    else
+      unit_tmp=$(mktemp)
+      unit_text "$unit" >"$unit_tmp"
+      install -m 0644 "$unit_tmp" "/etc/systemd/system/$unit"
+      rm -f "$unit_tmp"
       changed=1
     fi
   done
