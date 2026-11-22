@@ -166,8 +166,9 @@ def broken_links(path: Path, text: str, root: Path = ROOT) -> list[str]:
 def cave_invocations(code: str) -> Iterator[tuple[str, list[str]]]:
     """The ``cave`` commands written in one line of code, each with the words that follow it.
 
-    A word counts as the tool when it is ``cave`` or a path ending in ``/cave`` (``./cave``,
-    ``/opt/cave/cave``) and is not the user name after ``-u`` or ``--user``. The command is the
+    A word counts as the tool when it is ``./cave``, ``/opt/cave/cave``, or ``cave`` at the start
+    or after ``sudo`` or a shell separator (not the user name in ``-u cave``, not the directory in
+    ``git -C /opt/cave``, not the word in a sentence). The command is the
     word after it, when that is a plain lower-case word; the words that follow, up to the end of
     the line or the next ``|``, ``&&`` or ``;``, are its arguments.
     """
@@ -176,9 +177,13 @@ def cave_invocations(code: str) -> Iterator[tuple[str, list[str]]]:
     except ValueError:
         words = code.split()
     for index, word in enumerate(words):
-        if word != "cave" and not word.endswith("/cave"):
-            continue
-        if index and words[index - 1] in {"-u", "--user", "-g", "--group", "chown"}:
+        before = words[index - 1] if index else ""
+        if word == "cave":
+            # The tool as a bare word follows nothing, `sudo` or a shell separator; after anything
+            # else it is a user name (`-u cave`), or the word "cave" in a sentence.
+            if before and before not in {"sudo", "$", *SEPARATORS}:
+                continue
+        elif word != "./cave" and not word.endswith("/cave/cave"):
             continue
         following = words[index + 1 :]
         if not following or not re.fullmatch(r"[a-z][a-z-]*", following[0]):
@@ -296,8 +301,9 @@ cave init | tee log
 cat scripts/provision-host.sh docs/gone.md
 ```
 
-Run `cave bootstrap`, then `/opt/cave/cave status`, but `cave` alone is the tool and
-`sudo -u cave editor /opt/cave/.env` is a user name.
+Run `cave bootstrap`, then `/opt/cave/cave status`, but `cave` alone is the tool,
+`sudo -u cave editor /opt/cave/.env` has a user name, `git -C /opt/cave fsck` a directory,
+and `a state that cave does not know` a sentence.
 """
 
 

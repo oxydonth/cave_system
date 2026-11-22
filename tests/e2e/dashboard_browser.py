@@ -78,6 +78,8 @@ CARD_ELEMENTS = {
 #: How long to wait for the page to render. The demo is idle when this runs, so a dashboard
 #: that takes longer than this is a problem, not a slow runner.
 RENDER_TIMEOUT = 60.0
+#: How long to wait for the sensors on the dashboard to have a value.
+SENSOR_TIMEOUT = 120.0
 #: How long the screenshots may be, in bytes, for the copy printed into the job log.
 LOG_COPY_LIMIT = 100_000
 
@@ -158,6 +160,11 @@ JS_CARDS = (
 JS_DASHBOARD_CONFIG = """async (path) => {
   const hass = document.querySelector('home-assistant').hass;
   return await hass.callWS({type: 'lovelace/config', url_path: path});
+}"""
+
+JS_STATES = """(entities) => {
+  const states = document.querySelector('home-assistant').hass.states;
+  return Object.fromEntries(entities.map((e) => [e, states[e] ? states[e].state : null]));
 }"""
 
 # The tallest scrolling area of the dashboard: what the window must hold to show every card.
@@ -270,6 +277,23 @@ def _expected_counts(cards: list[dict[str, Any]]) -> dict[str, int]:
     return counts
 
 
+def _sensor_entities(cards: list[dict[str, Any]]) -> list[str]:
+    """The sensors and contacts that the history graphs and entities cards of a view show."""
+    found: list[str] = []
+    for card in cards:
+        if card["type"] not in ("history-graph", "entities"):
+            continue
+        for item in card.get("entities") or []:
+            entity = item.get("entity") if isinstance(item, dict) else item
+            if (
+                isinstance(entity, str)
+                and entity.startswith(("sensor.", "binary_sensor."))
+                and entity not in found
+            ):
+                found.append(entity)
+    return found
+
+
 def _rendered(page: Page) -> list[dict[str, Any]]:
     result: list[dict[str, Any]] = page.evaluate(JS_CARDS, list(CARD_ELEMENTS.values()))
     return result
@@ -308,6 +332,19 @@ def wait_until_rendered(page: Page, cards: list[dict[str, Any]], view: str) -> N
             return True
 
         _wait(thermostats_live, f"the thermostat cards of {thermostats} to show live values")
+
+    readings = _sensor_entities(cards)
+    if readings:
+
+        def sensors_have_values() -> bool:
+            states: dict[str, Any] = page.evaluate(JS_STATES, readings)
+            return all(
+                states.get(entity) not in (None, "unknown", "unavailable") for entity in readings
+            )
+
+        # The room sensors of the demo report a little after the stack is up; the screenshot
+        # should show what they say, not "Unknown".
+        _wait(sensors_have_values, f"{readings} to have a value", timeout=SENSOR_TIMEOUT)
 
     if markdown:
 
