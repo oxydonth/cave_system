@@ -135,6 +135,24 @@ async def test_a_delayed_box_reports_the_new_target_only_after_the_delay(fritz: 
     assert await fritz.run(client.get_target_temperature, AIN) == 23.0
 
 
+async def test_the_box_counts_the_set_commands_each_thermostat_receives(fritz: Box) -> None:
+    """Every sethkrtsoll counts, delayed, repeated and refused ones alike; reads do not."""
+    fritz.box.report_delay = 60
+    client = fritz.client()
+    await fritz.run(client.login)
+    assert fritz.thermostat.set_commands == 0
+
+    await fritz.run(client.set_target_temperature, AIN, 23.0)
+    await fritz.run(client.get_target_temperature, AIN)
+    await fritz.run(client.update_devices)
+    assert fritz.thermostat.set_commands == 1
+    await fritz.run(client.set_target_temperature, AIN, 23.0)  # the same value again
+    fritz.thermostat.lock = True
+    with pytest.raises(HTTPError):
+        await fritz.run(client.set_target_temperature, AIN, 22.0)
+    assert fritz.thermostat.set_commands == 3
+
+
 async def test_off_and_on_are_the_special_values(fritz: Box) -> None:
     client = fritz.client()
     await fritz.run(client.login)

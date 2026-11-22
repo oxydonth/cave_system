@@ -1,0 +1,143 @@
+name: End-to-end
+
+# The complete system from a clean checkout (concept section 8, end-to-end level), in two parts:
+#
+# 1. First-run setup on the home's stack: `./cave init`, `./cave up`, then tests/e2e/
+#    test_first_run.py runs `./cave bootstrap`, checks the result through Home Assistant's API
+#    with the stored script token, runs it again and proves that nothing changed, also after a
+#    deleted token file, a revoked token, a changed owner password and a restart.
+# 2. The demo: `./cave demo` (the stack with simulated devices, a Compose project and state of its
+#    own), then tests/e2e/test_scenarios.py: schedule, window pause, away, boost, room-sensor feed,
+#    a slow FRITZ! thermostat, a dial, offline devices, across both device families.
+#
+# Called from ci.yml; its job counts towards `ci-ok` through the one calling job.
+
+on:
+  workflow_call:
+
+permissions:
+  contents: read
+
+jobs:
+  e2e:
+    name: e2e
+    runs-on: ubuntu-24.04
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      # pytest and aiohttp for tests/e2e. The version equals UV_VERSION in ci.yml; a reusable
+      # workflow does not see that file's env.
+      - uses: astral-sh/setup-uv@68559e99cc807c1eb7e9238fd43a15bba460eec2 # v10.3.3
+        with:
+          version: "0.13.8"
+          enable-cache: true
+          cache-dependency-glob: uv.lock
+          cache-python: true
+
+      - run: make setup
+
+      - name: Where the demo keeps its state (`./cave demo`'s default)
+        run: echo "DEMO_DATA=${XDG_STATE_HOME:-${HOME}/.local/state}/cave/demo" >> "${GITHUB_ENV}"
+
+      # --- part 1: first-run setup on the home's stack
+      - name: Initialise
+        run: |
+          ./cave init
+          # From here on the runner masks every generated secret in the job log.
+          tests/e2e/mask-secrets.sh .env
+
+      - name: Pull the images
+        run: docker compose pull --quiet
+
+      - name: Start the stack and wait until it is healthy
+        run: ./cave up --timeout 420
+
+      - name: First-run setup, checked through Home Assistant's API, and run again
+        env:
+          CAVE_E2E: home
+        # -s: the output of every ./cave run is part of the job log.
+        run: uv run --locked pytest tests/e2e/test_first_run.py -v -s -p no:cacheprovider
+
+      - name: Home Assistant logged no unexpected errors (home)
+        run: tests/e2e/check-ha-log.sh
+
+      - name: Stop the home's stack, which uses the same ports as the demo
+        run: ./cave down
+
+      # --- part 2: the demo and the scenarios
+      - name: Start the demo
+        run: |
+          # The demo's secrets are made here and masked before `./cave demo` runs, which keeps
+          # every value its demo.env already has and adds the rest.
+          mkdir -p "${DEMO_DATA}"
+          (
+            umask 077
+            for name in CAVE_MQTT_PASSWORD CAVE_HA_OWNER_PASSWORD CAVE_Z2M_FRONTEND_TOKEN \
+              CAVE_FRITZ_PASSWORD; do
+              echo "${name}=$(openssl rand -hex 16)"
+            done > "${DEMO_DATA}/demo.env"
+          )
+          tests/e2e/mask-secrets.sh "${DEMO_DATA}/demo.env"
+          cp "${DEMO_DATA}/demo.env" "${RUNNER_TEMP}/demo-secrets"
+          ./cave demo --timeout 420
+          # Kept, not replaced: the masked secrets are the ones the demo uses.
+          while read -r line; do
+            grep -qxF "${line}" "${DEMO_DATA}/demo.env"
+          done < "${RUNNER_TEMP}/demo-secrets"
+          tests/e2e/mask-secrets.sh "${DEMO_DATA}/demo.env" "${DEMO_DATA}/homeassistant/.cave/token"
+
+      - name: The scenarios on the demo
+        env:
+          CAVE_E2E: demo
+        run: uv run --locked pytest tests/e2e/test_scenarios.py -v -s -p no:cacheprovider
+
+      - name: Home Assistant logged no unexpected errors (demo)
+        run: |
+          tests/e2e/check-ha-log.sh -p cave-demo -f compose.yaml -f compose.sim.yaml \
+            --env-file "${DEMO_DATA}/demo.env"
+
+      # --- when something failed
+      - name: Logs, when something failed
+        if: failure()
+        run: |
+          mkdir -p "${RUNNER_TEMP}/logs"
+          ./cave logs --tail all > "${RUNNER_TEMP}/logs/home.log" 2>&1 || true
+          if [ -f "${DEMO_DATA}/demo.env" ]; then
+            docker compose -p cave-demo -f compose.yaml -f compose.sim.yaml \
+              --env-file "${DEMO_DATA}/demo.env" logs --no-color --tail all \
+              > "${RUNNER_TEMP}/logs/demo.log" 2>&1 || true
+          fi
+          # The runner masks what it prints; the files kept as the artifact are masked here.
+          for file in .env "${DEMO_DATA}/demo.env"; do
+            [ -f "${file}" ] || continue
+            grep -E '^CAVE_(MQTT_PASSWORD|HA_OWNER_PASSWORD|Z2M_FRONTEND_TOKEN|FRITZ_PASSWORD)=' "${file}" |
+              cut -d= -f2- | while read -r secret; do
+                [ -n "${secret}" ] && sed -i "s/${secret}/********/g" "${RUNNER_TEMP}"/logs/*.log
+              done
+          done
+          # The artifact store of the account may be full, so the essentials go into the job
+          # log as well.
+          for file in "${RUNNER_TEMP}"/logs/*.log; do
+            echo "::group::$(basename "${file}"): warnings and errors"
+            grep -E 'WARNING|ERROR|CRITICAL|Traceback' "${file}" | tail -300 || true
+            echo "::endgroup::"
+          done
+
+      - name: Upload the logs, when something failed
+        if: failure()
+        # The account's artifact storage can be full; that must not hide the real failure.
+        continue-on-error: true
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: e2e-logs
+          path: ${{ runner.temp }}/logs
+          retention-days: 7
+
+      - name: Stop everything
+        if: always()
+        run: |
+          ./cave demo down || true
+          ./cave down || true

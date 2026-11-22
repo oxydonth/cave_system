@@ -1,0 +1,132 @@
+# The demo
+
+The whole system with simulated devices: Home Assistant with `cave_heating`, the broker, and the
+simulators of `sim/` standing in for the Zigbee thermostats, room sensors and window contacts and
+for a FRITZ!Box with a FRITZ!Smart Thermo 302. Nothing has to be bought or paired, and timings are
+in seconds, so what takes minutes or hours at home happens while you watch.
+
+## Start and stop
+
+On a machine with Docker and the Compose plugin, from a checkout of this repository:
+
+```sh
+./cave demo           # build, start, set up; takes a few minutes the first time
+./cave demo down      # stop; the demo's state is kept for the next start
+```
+
+`./cave demo` needs no `./cave init`, and it never touches the home's `.env` or state. It runs as
+a stack of its own:
+
+| | The demo | The home |
+|---|---|---|
+| Compose project | `cave-demo` | `cave` |
+| Compose files | `compose.yaml` and `compose.sim.yaml` | `compose.yaml` |
+| State directory | `~/.local/state/cave/demo` (`$XDG_STATE_HOME/cave/demo`); `--data DIR` chooses another | `CAVE_DATA` |
+| Settings and secrets | `demo.env` in its state directory, generated, mode 0600 | `.env` |
+
+The demo's state directory may not be the home's state directory, lie inside it or contain it, and
+a directory that is not empty must be a demo's (one with its `demo.env`); `./cave demo` refuses
+anything else before it writes a byte.
+
+Home Assistant runs on the host network in both, so the demo and the home's stack cannot run at the
+same time: `./cave demo` refuses while the home's stack runs; stop that with `./cave down` first.
+The other way round, **a demo left running keeps the ports busy**, also after a reboot, because
+its containers restart by themselves: `./cave up` for the home then fails on port 1883 or 8123.
+Stop the demo with `./cave demo down` when you are done.
+
+What `./cave demo` does, in this order:
+
+1. checks the state directory, then creates it and `demo.env` (generated passwords, and the
+   FRITZ!Box login the simulated box accepts) if they are missing;
+2. builds the simulator image;
+3. validates [`sim/demo/heating.yaml`](../sim/demo/heating.yaml) and stores it as the demo's
+   applied copy, with the same validation the home's description gets: an invalid file stops here,
+   before Home Assistant starts. Then it generates the heating dashboard for the demo home from it;
+4. starts the stack and runs the first-run setup of `./cave bootstrap` against the simulators: the
+   owner account, MQTT, FRITZ!SmartHome connected to the simulated FRITZ!Box at
+   `http://127.0.0.1:8480`, a schedule for each room, the switch that stands in for presence
+   (below), and the script token;
+5. waits until the stack is healthy and says where to log in.
+
+Run again, it starts the demo afresh (the containers are recreated) with the state it has.
+`--timeout SECONDS` (default 300) bounds each wait. If `demo.env` is lost while the state is
+kept, the demo refuses to start, because new secrets would no longer match the broker's and Home
+Assistant's: remove the state directory (below) and start again. `./cave demo down` stops the
+demo's containers even then.
+
+## Looking around
+
+Open `http://<this machine>:8123` and log in as `owner` (the demo's `CAVE_HA_OWNER_USER`); the
+password is `CAVE_HA_OWNER_PASSWORD` in the demo's `demo.env`.
+
+The demo home has three rooms (`sim/README.md` lists every device and entity):
+
+| Room | Thermostats | Sensors |
+|---|---|---|
+| Wohnzimmer (`living_room`) | Sonoff TRV-ZBT and TRVZB, fed with the room temperature | room sensor, window contact |
+| Schlafzimmer (`bedroom`) | Bosch BTH-RA, fed with the room temperature | room sensor, window contact |
+| Bad (`bathroom`) | FRITZ!Smart Thermo 302, through the FRITZ!Box | room sensor |
+
+Each room is a `climate.cave_<room>` thermostat in Home Assistant, with its reason
+(`sensor.cave_<room>_reason`), its problem sensor and its schedule under Settings → Devices &
+services → Helpers (`schedule.living_room_heating`, `schedule.bedroom_heating`,
+`schedule.bathroom_heating`). The heating dashboard, **Heizung** in the sidebar
+(`/cave-heating`), shows the three rooms with their targets, reasons and history, and a
+maintenance view with batteries and problems; it is generated for the demo home when the demo
+starts. The demo's commands are `./cave demo` and `./cave demo down` only: the home's commands,
+such as `./cave apply`, work on the home's state and never on the demo's.
+
+**Presence.** At home, presence comes from the phones' device trackers of FRITZ!Box Tools. The
+simulated FRITZ!Box has no TR-064 interface, which FRITZ!Box Tools needs, so the demo leaves
+FRITZ!Box Tools out and uses a switch instead: `input_boolean.demo_someone_home` ("Demo: someone is
+home"). Turn it off and the home is away after five seconds; turn it on and everyone is back.
+FRITZ!Box Tools, and with it presence from the FRITZ!Box, is unproven until it runs against a real
+FRITZ!Box.
+
+**Things to try.** The simulators' control API on `http://127.0.0.1:8481` acts like the devices and
+the rooms (every endpoint is in [sim/README.md](../sim/README.md#control-api-port-8481)):
+
+```sh
+# open the living room's window: after 3 s the room pauses, its thermostats go off
+curl -X POST localhost:8481/api/devices/wohnzimmer_fenster/window -d '{"open": true}'
+# turn the dial of a thermostat: after 5 s it is the room's override, the other one follows
+curl -X POST localhost:8481/api/devices/wohnzimmer_heizung_fenster/dial -d '{"target": 23.5}'
+# make the FRITZ!Box report a new setpoint only after 40 s, like a slow thermostat
+curl -X POST localhost:8481/api/fritzbox -d '{"report_delay": 40}'
+# take a thermostat offline, and back
+curl -X POST localhost:8481/api/devices/wohnzimmer_heizung_tuer/availability -d '{"online": false}'
+# see what every device has, including how many set commands the FRITZ! thermostat received
+curl localhost:8481/api/state
+```
+
+Within `confirm_timeout` (20 s in the demo) after a start, a dial turn is put back rather than
+taken over, as at home within five minutes (custom_components/cave_heating/README.md).
+
+## The demo's timings
+
+`sim/demo/heating.yaml` sets the timings of concept section 5 to seconds: window delays 3 s, away
+delay 5 s, boost 30 s, `confirm_timeout` 20 s, `confirm_timeout_slow` 90 s (longer than one FRITZ!Box
+poll of 30 s plus a slow box's delay), `manual_settle` 5 s, the temperature feed every 10 to 60 s.
+The defaults, in hours and minutes, suit real devices; never copy the demo's timings home.
+
+## The end-to-end tests
+
+The pipeline's `e2e` job starts the demo the same way and runs `tests/e2e/test_scenarios.py`
+against it: schedule, window pause, away, boost, the room-sensor feed, a slow FRITZ! thermostat, a
+dial, and a thermostat of each family going offline. Each scenario acts through Home Assistant's
+API or the control API, waits for the outcome with a time limit, never for a fixed time, and checks
+what the simulated device received. To run them yourself against a running demo:
+
+```sh
+CAVE_E2E=demo uv run pytest tests/e2e/test_scenarios.py -v
+# for a demo started with --data DIR:
+CAVE_E2E=demo CAVE_E2E_DEMO_DATA=DIR uv run pytest tests/e2e/test_scenarios.py -v
+```
+
+They change the demo as they go: the rooms' schedules are left switched on all week, and the
+FRITZ!Box's reporting delay is set back to none.
+
+## Removing the demo
+
+`./cave demo down`, then remove the state directory. Home Assistant and the broker write files
+there as root, so: `sudo rm -rf ~/.local/state/cave/demo` (or the directory given with `--data`).

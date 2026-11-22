@@ -45,8 +45,12 @@ def parse_compose_ps(text: str) -> list[dict[str, Any]]:
     return [json.loads(line) for line in text.splitlines() if line.strip().startswith("{")]
 
 
-def check_health(ctx: Context) -> Health:
-    """Ask Docker, and Home Assistant if a script token exists, whether the stack is healthy."""
+def check_health(ctx: Context, *, api: bool = True) -> Health:
+    """Ask Docker, and Home Assistant if a script token exists, whether the stack is healthy.
+
+    ``api=False`` asks Docker only. ``cave bootstrap`` waits that way, because it must be able to
+    repair a script token that Home Assistant no longer accepts.
+    """
     problems: list[str] = []
 
     expected = ctx.compose("config", "--services", timeout=DOCKER_TIMEOUT)
@@ -74,7 +78,7 @@ def check_health(ctx: Context) -> Health:
         elif health not in ("", "healthy"):
             problems.append(f"{service}: health check {health}")
 
-    if not problems:
+    if not problems and api:
         problems.extend(_check_api(ctx))
     return Health(not problems, tuple(problems))
 
@@ -99,11 +103,13 @@ def _check_api(ctx: Context) -> list[str]:
     return problems
 
 
-def wait_healthy(ctx: Context, *, timeout: float = 300.0, interval: float = 5.0) -> Health:
+def wait_healthy(
+    ctx: Context, *, timeout: float = 300.0, interval: float = 5.0, api: bool = True
+) -> Health:
     """Poll ``check_health`` until it passes or ``timeout`` seconds pass; return the verdict."""
     deadline = ctx.monotonic() + timeout
     while True:
-        health = check_health(ctx)
+        health = check_health(ctx, api=api)
         if health.healthy or ctx.monotonic() >= deadline:
             return health
         ctx.sleep(interval)

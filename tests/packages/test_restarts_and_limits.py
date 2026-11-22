@@ -520,7 +520,7 @@ async def test_text_that_is_not_a_number_is_refused_by_the_helper_and_the_defaul
     shown = await load_package(hass, freezer)
 
     with pytest.raises(ValueError, match="does not match expected pattern"):
-        await set_helper(hass, "cave_notify_battery_below", "garbage")
+        await set_helper(hass, "cave_notify_battery_below", "abc")
     hass.states.async_set("sensor.a_battery", "25", {**BATTERY, "friendly_name": "A"})
     await advance(hass, freezer, 2)
 
@@ -594,3 +594,39 @@ async def test_the_group_limit_travels_with_the_entries(
     state: Any = hass.states.get("sensor.cave_attention_battery")
     assert state is not None
     assert state.attributes["group_limit"] == 3
+
+
+THRESHOLDS = (
+    "cave_notify_battery_below",
+    "cave_notify_battery_clear_above",
+    "cave_notify_unavailable_minutes",
+    "cave_notify_window_open_minutes",
+    "cave_notify_humidity_above",
+    "cave_notify_humidity_clear_below",
+    "cave_notify_problem_minutes",
+)
+
+
+@pytest.mark.parametrize("helper", THRESHOLDS)
+async def test_a_threshold_left_empty_survives_a_restart(hass: HomeAssistant, helper: str) -> None:
+    """Untouched, a threshold's state is `unknown`, and Home Assistant saves that for restore.
+
+    Restoring the word as the helper's value would fail its number pattern, and Home Assistant
+    would refuse to add the entity ("Error adding entity", which the autouse check catches). Found
+    by the end-to-end job, which restarts Home Assistant.
+    """
+    mock_restore_cache_with_extra_data(hass, [(State(f"input_text.{helper}", "unknown"), {})])
+
+    await load_package(hass)
+
+    assert hass.states.get(f"input_text.{helper}") is not None
+
+
+async def test_a_threshold_typed_in_is_kept_across_a_restart(hass: HomeAssistant) -> None:
+    mock_restore_cache_with_extra_data(
+        hass, [(State("input_text.cave_notify_battery_below", "25"), {})]
+    )
+
+    await load_package(hass)
+
+    assert hass.states.get("input_text.cave_notify_battery_below").state == "25"
