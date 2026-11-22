@@ -47,8 +47,12 @@ Find the start of the message in the left column.
 | `The backup failed: …` | No archive was written; the older ones are kept. | Fine, but without a fresh backup. | Read the reason (often a full disk). Run `sudo ./cave backup` once fixed. |
 | `Backup … written …; … symbolic link(s) pointing outside their directory were left out` | The state contained links that are absolute or contain `..`. A restore refuses such links, so the backup leaves them out to stay restorable; the manifest lists them. | Backup fine. | None of the services makes such links; look at the named ones. |
 | `Backup … written …; WARNING: … could not be read as a SQLite database` | The backup was made, but one database file is damaged (Home Assistant renames a damaged database to `home-assistant_v2.db.corrupt.<time>`). It is archived as it is. | Backup fine. | If the named file is a `….corrupt.*` file, Home Assistant has replaced it already: delete it to save space. Otherwise look at `journalctl -t cave`. |
+| `Not updating to v…: the validator could not run (the validator could not read the file it was given …)` | The validator ran but could not open the staged copy of `heating.yaml` (it judged nothing). | Unchanged. Not remembered as failed. | Nothing; the next night tries again. If it repeats, look at `journalctl -u cave-update.service`. |
+| `cave restore`: `… is neither empty nor a cave state directory` | The chosen target holds something else. | Nothing was changed. | Check `--data` (or `CAVE_DATA` in `.env`); `--force` only if you mean it. |
+| `cave restore`: `refusing archive member …` | The archive breaks a rule (see [What an archive may contain](#restoring-a-backup)). | Nothing was stopped or changed. | Use another archive; a backup written by `cave backup` never breaks these rules. |
+| `cave restore`: `… Variables in the archive's .env that cave does not know were left out: …` / `From the archive's .env, check: …` | The restore wrote only the known variables and names the settings that decide where root writes. | Restored. | Check the named settings in `/opt/cave/.env`. |
 | `The restore failed while unpacking: …` | A restore could not unpack the archive; nothing was restored. | The stack runs again unchanged (or the message says it could not be started). If an update was interrupted, its way back was finished instead (`… was finished instead`), so the release and the state belong together; its own notification says how that went. | Read the reason (often a full disk). |
-| `Not updating: a restore of … was interrupted` / `No backup was made: a restore of … was interrupted` | A restore was cut off while moving the state into place. Update and backup wait for it. | The stack is stopped; the state may be half restored. | Run the same `sudo ./cave restore …` again. |
+| `Not updating: a restore of … was interrupted` / `No backup was made: a restore of … was interrupted` | A restore was cut off while moving the state into place. Update and backup wait for it. | The stack is stopped; the state may be half restored. | Run the same `sudo ./cave restore …` again; if it stops at the same place again, restore another archive. See [A restore that cannot finish](#a-restore-that-cannot-finish). |
 | `Update to v… failed earlier and was rolled back … That could not be recorded then` | An earlier way back had finished, but the disk was full when it wanted to record that. | The previous release runs, healthy; nothing was stopped. | Free space on the disk. |
 | `… Note: left in place, because they are not the new release's files: …` | After a rollback, files in `/opt/cave` that the new release would have added, but whose content is not the release's, were kept: they are yours. | As the rest of the message says. | Look at the named files; move them out of `/opt/cave` if they are in the way of the next release. |
 | `Not updating to v…: … is on another file system than the rest of the state` | Something is mounted at an entry of `/var/lib/cave` (for example a separate disk at `homeassistant`). Snapshots are put back by renaming, which cannot cross file systems. | Unchanged. | Keep all of `/var/lib/cave` on one file system: mount the disk at `/var/lib/cave` itself instead. |
@@ -292,22 +296,47 @@ archive from time to time.
 ## Restoring a backup
 
 `sudo ./cave restore ARCHIVE` checks the whole archive first, then stops the stack, puts back
-the state and `.env`, and starts the stack. The state it replaces is kept in
+the state and `.env`, and starts the stack.
+
+**Where it restores to** is never taken from the archive: `--data DIR` if given, else `CAVE_DATA`
+of the existing `/opt/cave/.env`, else the default state directory (`/var/lib/cave` on a
+provisioned server). The restore says which it chose and why, and, if the archive was taken
+from another directory, that the restored `.env` names the chosen one. A directory that is
+neither empty nor a cave state directory (one with `.cave`, `homeassistant`, `mosquitto` or
+`zigbee2mqtt`) is refused unless `--force` is given, so that a mistyped `--data` cannot move a
+foreign directory's contents aside. The state it replaces is kept in
 `/var/lib/cave/.cave/ops/before-restore-<time>` and the replaced `.env` as
 `/opt/cave/.env.before-restore-<time>`; delete them once everything works (each
 `before-restore-*` is a full copy of the state and counts against the update's disk check). If a
-restore is interrupted, run the same command again. If it fails while unpacking (for example a
-full disk; it checks the space first), nothing is restored and the stack is started again.
+restore is interrupted, run the same command again (or restore another archive; see
+[A restore that cannot finish](#a-restore-that-cannot-finish)). If it fails while unpacking (for
+example a full disk; it checks the space first), nothing is restored and the stack is started
+again.
 
 **What an archive may contain.** Directories, regular files and symbolic links, each once, below
 `data/`, none below a link, with no absolute path and no `..` in a name. A link must be relative
 and contain no `..` at all, so it can only point at or below its own directory; and once the
 whole archive is unpacked, every link in it is resolved and must stay inside. An archive that
-breaks a rule is refused before anything is stopped or touched. So nothing in an archive can
-make the restore write outside the state directory and `.env`, nor leave a link there that
-points outside (which a container's bind mount would otherwise follow). `cave backup` leaves out
-links that break the rule and names them, so every archive it writes can be restored. Files of
-the old server's service user get this server's service user as owner, whatever its user number.
+breaks a rule is refused before anything is stopped or touched. `data/.cave` must be a plain
+directory, and nothing may lie at or below `data/.cave/ops` or `data/.cave/lock` (the commands'
+own records and lock, which a backup never contains); no link may point there either. Modes keep
+only the permission bits, so an archive cannot plant a setuid or setgid file. So, with the
+target chosen as above, nothing in an archive can make the restore write outside the state
+directory and `.env`, nor leave a link there that points outside (which a container's bind
+mount would otherwise follow). `cave backup` leaves out links that break the rule and names
+them, so every archive it writes can be restored.
+
+**What the archive still decides**, and what it does not: it decides the state's content, file
+owners and permission bits, and the values of the `.env` variables of concept section 4.2. The
+restored `.env` holds only those variables (any other, such as `COMPOSE_FILE`, is left out and
+named), with `CAVE_DATA` set to the directory actually used. The restore names the restored
+settings that decide where root writes later (`CAVE_BACKUP_DIR`, `CAVE_BACKUP_COPY_TO`) or what
+reaches a container (`CAVE_Z2M_SERIAL_PORT`, `COMPOSE_PROFILES`): check them. Files of the old
+server's service user get this server's service user as owner, whatever its user number; root's
+files stay root's, whatever the archive's manifest says. The archive does not decide the
+release that is checked out (only the update record does, for an interrupted update), nor any
+command that is run. Its record of the release it was taken with can only make the restore
+refuse, never make it do more.
 
 If an update was interrupted (`cave status` shows it), the restore supersedes it. Only once the
 archive is unpacked does it check out the release from before that update, mark that update's
@@ -325,13 +354,32 @@ has been run again.
 * An archive taken with a newer release than the one checked out is refused, because an older
   Home Assistant may not read a newer database. Check out that release first
   (`sudo -u cave git -C /opt/cave checkout --detach <release>`), or pass `--force`.
+  `--force` also allows a target directory that is neither empty nor a state directory.
+
+### A restore that cannot finish
+
+A restore cut off while moving the state in leaves a marker; `status` shows it, and `update`
+(also `--recover`) and `backup` refuse, because the state may be half restored. The way out:
+
+1. Run the same `sudo ./cave restore <archive>` again. It unpacks again and moves the state in
+   from the start; what the first attempt moved aside stays in its `before-restore-*` directory.
+2. If it stops at the same place again, or the message says there is not enough space, restore
+   another archive (`sudo ./cave restore <older archive>`), after freeing space if needed (an
+   older `/var/lib/cave/.cave/ops/before-restore-*`, old archives, `sudo docker image prune -a`).
+   Any completed restore removes the marker.
+3. To go back to the state from before the first attempt instead: the oldest
+   `/var/lib/cave/.cave/ops/before-restore-*` holds it. Move its entries back into
+   `/var/lib/cave` (`sudo mv`, same file system), remove `/var/lib/cave/.cave/ops/restore.json`,
+   restore `/opt/cave/.env.before-restore-*` as `.env`, and `sudo -u cave ./cave up`.
 
 ### Onto a new server
 
 1. Provision the new server and clone the repository as in [install.md](install.md), steps 1 and 2,
    but do **not** run `./cave init`.
 2. Copy the archive onto the server, for example to `/var/backups/cave/`.
-3. `cd /opt/cave && sudo ./cave restore /var/backups/cave/cave-backup-….tar.gz`.
+3. `cd /opt/cave && sudo ./cave restore /var/backups/cave/cave-backup-….tar.gz`. With no `.env`
+   yet, it restores into the default state directory, `/var/lib/cave` (it says so), whatever
+   directory the archive was taken from; give `--data DIR` for another.
 4. `sudo -u cave ./cave init`: it creates what this release needs and the archive lacks (a
    variable a newer release added to `.env`, the `tools/` directory) and changes nothing else.
    Without it, a release that needs a new variable would be refused at the Compose check every

@@ -365,11 +365,10 @@ def _restore(
     env_file = ctx.paths.env_file
     if env_file.exists():
         os.replace(env_file, env_file.with_name(f".env.before-restore-{stamp}"))
-    # Only the variables of concept section 4.2, so that the archive cannot set anything else
-    # that Compose reads from .env (COMPOSE_FILE, COMPOSE_PROJECT_NAME, ...); CAVE_DATA is the
-    # directory actually used.
-    values = {name: value for name, value in archived_env.items() if name in NAMES}
-    values["CAVE_DATA"] = str(data)
+    # Only the variables of concept section 4.2 (`render` writes exactly the table), so that the
+    # archive cannot set anything else that Compose reads from .env (COMPOSE_FILE,
+    # COMPOSE_PROJECT_NAME, ...); CAVE_DATA is the directory actually used.
+    values = {**archived_env, "CAVE_DATA": str(data)}
     ignored = sorted(name for name in archived_env if name not in NAMES)
     _server.write_atomic(env_file, (HEADER + "\n" + render(values)).encode(), 0o600)
     if _server.is_root():
