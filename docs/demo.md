@@ -126,6 +126,41 @@ CAVE_E2E=demo CAVE_E2E_DEMO_DATA=DIR uv run pytest tests/e2e/test_scenarios.py -
 They change the demo as they go: the rooms' schedules are left switched on all week, and the
 FRITZ!Box's reporting delay is set back to none.
 
+## The browser check
+
+Before the scenarios, the `e2e` job opens the demo's heating dashboard in a real browser
+(`tests/e2e/test_dashboard_browser.py`, with the code in `tests/e2e/dashboard_browser.py`): it logs
+in through the login form as the demo's owner, opens `/cave-heating/rooms` and
+`/cave-heating/maintenance`, at a desktop width (1440 pixels) and at a phone width (390), and
+fails if any card shows an error. It first waits until the page has rendered: every card of the
+dashboard configuration is on the page, each room's thermostat card shows the live state of its
+room thermostat with a temperature, and the maintenance cards show their results. Then it looks
+for what the frontend (version 20260930.5, the one Home Assistant 2026.10.4 requires) shows for a
+failed card: `hui-error-card` (an unknown card type or a rejected configuration), `hui-warning` (an
+entity that does not exist), the error badges and sections, and an error alert of the markdown
+card (a template that failed).
+
+To run it yourself against a running demo, after `uv run playwright install chromium` once:
+
+```sh
+uv run python tests/e2e/dashboard_browser.py --user owner --password "<CAVE_HA_OWNER_PASSWORD from demo.env>" \
+  --thermostat climate.cave_living_room --thermostat climate.cave_bedroom --thermostat climate.cave_bathroom \
+  --out screenshots
+```
+
+It prints each screenshot it took and every problem it found, and exits non-zero if there was one.
+
+**The screenshots** are the artifact `dashboard-screenshots` of the run (kept for three days), four
+PNG files: `desktop-rooms`, `desktop-maintenance`, `phone-rooms`, `phone-maintenance`. The
+artifact storage of the account may be full; then the upload step fails without failing the job,
+and the next step prints a smaller copy of each screenshot into the job log between
+`-----BEGIN SCREENSHOT name-----` and `-----END SCREENSHOT name-----` lines. Get them back with the
+job's id from the run's page:
+
+```sh
+gh run view <run id> --job <job id> --log | python3 tests/e2e/extract_screenshots.py out
+```
+
 ## Removing the demo
 
 `./cave demo down`, then remove the state directory. Home Assistant and the broker write files
