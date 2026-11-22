@@ -228,6 +228,11 @@ class _Update:
             # A `restore --undo` was cut off after it had put the state from before back; the
             # update it had superseded (if any) is in flight again and is finished below.
             self.record = record = state.load(ctx)
+        owed = _server.restore_start_owed(ctx)
+        if owed is not None:
+            return self.finish_owed_start(owed)
+        if _server.not_started(ctx) is not None and check_health(ctx).healthy:
+            _server.clear_not_started(ctx)  # the stack was started since the --no-start
         restoring = _server.restore_in_progress(ctx)
         if restoring is not None:
             return self.conclude(
@@ -711,6 +716,40 @@ class _Update:
             f"Update to {switch.to_release} failed earlier and was rolled back: the previous "
             f"release {switch.from_label} with the state from before the update runs healthy. "
             "That could not be recorded then (a full disk?); it is now. Nothing was stopped.",
+        )
+
+    def finish_owed_start(self, what: str) -> int:
+        """A restore or ``--undo`` put the state in place but was cut off before it started the
+        stack: start it now, and only then remove the marker."""
+        ctx = self.ctx
+        ctx.warn(f"{what[0].upper()}{what[1:]} was cut off before it started the stack.")
+        with _shielded():
+            started, health = self.start()
+        if started:
+            (_server.ops_dir(ctx) / _server.RESTORE_MARKER).unlink(missing_ok=True)
+        head = (
+            f"{what[0].upper()}{what[1:]} had put the state in place but was cut off before it "
+            "started the stack."
+        )
+        if started and health.healthy:
+            return self.conclude(
+                None, "start-finished", OK, f"{head} The stack was started and is healthy."
+            )
+        if started:
+            return self.conclude(
+                None,
+                "start-finished",
+                BROKEN,
+                f"{head} The stack was started but is {health.describe()}. See {OPERATIONS}, "
+                "'The rollback is not healthy'.",
+            )
+        return self.conclude(
+            None,
+            "start-owed",
+            BROKEN,
+            f"{head} NOTHING IS RUNNING: the stack could not be started "
+            f"({'; '.join(health.problems)}). The next run tries again; see {OPERATIONS}, "
+            "'Nothing is running'.",
         )
 
     def check_out_previous(self) -> list[str]:

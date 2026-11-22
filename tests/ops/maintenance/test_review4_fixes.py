@@ -181,6 +181,9 @@ def test_a_failed_repeat_says_the_state_is_still_half_restored(
     assert "still half restored" in result.err
     assert "the stack was NOT started" in result.err
     assert "sudo ./cave restore --undo" in result.err
+    [aside] = (server.data / ".cave/ops").glob("before-restore-*")
+    assert f"Do not delete {aside}" in result.err
+    assert "docker image prune -a" not in result.err
     assert "started again unchanged" not in message
     assert "up" not in server.stack.names()
 

@@ -24,6 +24,7 @@ import stat
 import tarfile
 from collections.abc import Callable, Iterator
 from pathlib import Path, PurePosixPath
+from typing import Any
 
 from ..context import Context
 from ..errors import CaveError
@@ -182,15 +183,62 @@ RESTORE_WAY_OUT = (
 )
 
 
-def restore_in_progress(ctx: Context) -> str | None:
-    """The archive of a restore that was interrupted while moving the state in, or ``None``."""
+def _restore_marker(ctx: Context) -> dict[str, Any] | None:
+    """The restore marker's content; ``{}`` for one that cannot be read; ``None`` for none."""
     marker = ops_dir(ctx) / RESTORE_MARKER
     try:
-        return str(json.loads(marker.read_text(encoding="utf-8")).get("archive", "an archive"))
+        series = json.loads(marker.read_text(encoding="utf-8"))
     except FileNotFoundError:
         return None
     except (OSError, ValueError):
-        return "an archive"
+        return {}
+    return series if isinstance(series, dict) else {}
+
+
+def restore_in_progress(ctx: Context) -> str | None:
+    """The archive of a restore (or ``--undo``) whose state is not in place yet, or ``None``.
+
+    A marker in the last phase, ``start_owed`` (the state is in place, only the start of the
+    stack is owed), is not "in progress" for the guards: see ``restore_start_owed``.
+    """
+    series = _restore_marker(ctx)
+    if series is None or series.get("start_owed"):
+        return None
+    return str(series.get("archive", "an archive"))
+
+
+def restore_start_owed(ctx: Context) -> str | None:
+    """What a restore or ``--undo`` that put the state in place but was cut off before it started
+    the stack did ("the restore of …" / "the undo of …"), or ``None``. The same command run
+    again and ``cave update`` (at boot) start the stack for it."""
+    series = _restore_marker(ctx)
+    if not series or not series.get("start_owed"):
+        return None
+    what = "the undo of the restore of" if series.get("undone") else "the restore of"
+    return f"{what} {series.get('archive', 'an archive')}"
+
+
+NOT_STARTED = "not-started.json"
+"""A note that a restore or ``--undo`` finished with ``--no-start``: ``status`` says so while the
+stack is not running; nothing refuses because of it; ``update`` removes it once the stack runs."""
+
+
+def note_not_started(ctx: Context, what: str) -> None:
+    write_atomic(ops_dir(ctx) / NOT_STARTED, json.dumps({"what": what}).encode(), 0o644)
+
+
+def not_started(ctx: Context) -> str | None:
+    try:
+        raw = json.loads((ops_dir(ctx) / NOT_STARTED).read_text(encoding="utf-8"))
+    except FileNotFoundError:
+        return None
+    except (OSError, ValueError):
+        return "a restore"
+    return str(raw.get("what", "a restore")) if isinstance(raw, dict) else "a restore"
+
+
+def clear_not_started(ctx: Context) -> None:
+    (ops_dir(ctx) / NOT_STARTED).unlink(missing_ok=True)
 
 
 def give_to_checkout_owner(ctx: Context, path: Path) -> None:

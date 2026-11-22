@@ -46,6 +46,13 @@ HELP = "Restore the state and .env from a backup archive (also onto a new server
 
 TITLE = "cave restore"
 OPERATIONS = "docs/operations.md"
+FREE_SPACE = (
+    "old archives in CAVE_BACKUP_DIR, but not the one being restored nor the one you would "
+    "fall back to; unused images with `sudo docker image prune`, without -a, which with the "
+    "stack stopped would also remove its own images, which `up` would then have to download "
+    "again"
+)
+"""What a restore may suggest deleting while the stack is stopped, and what not."""
 SPACE_MARGIN = 256 * 1024 * 1024
 
 
@@ -272,6 +279,7 @@ def _restore(
     data = ctx.paths.data
     stamp = datetime.datetime.now(datetime.UTC).strftime("%Y%m%dT%H%M%SZ")
     ops = _server.ops_dir(ctx)
+    _server.clear_not_started(ctx)
     staging = ops / "restore-staging"
     _server.remove(staging)  # left by an interrupted restore
 
@@ -287,8 +295,7 @@ def _restore(
             f"on {existing}. "
             + (
                 "The stack is stopped and the state half restored from an earlier attempt. Free "
-                "space (old archives in CAVE_BACKUP_DIR, `sudo docker image prune -a`) and run it "
-                "again, or restore another archive. "
+                f"space ({FREE_SPACE}) and run it again, or restore another archive. "
                 + _keep(ops, pending)
                 + f" See {OPERATIONS}, 'A restore that cannot finish'."
                 if pending is not None
@@ -437,7 +444,15 @@ def _restore(
         info = ctx.paths.root.stat()
         os.chown(env_file, info.st_uid, info.st_gid)
     ctx.env.update(load_env(env_file))
-    marker.unlink(missing_ok=True)
+    # The state is in place. The restore is finished only once the stack is started (or the
+    # owner chose --no-start): until then the marker says so (`start_owed`), and the same command
+    # or the boot's `cave update --recover` starts the stack.
+    if args.no_start:
+        _server.note_not_started(ctx, f"the restore of {archive.path.name}")
+        marker.unlink(missing_ok=True)
+    else:
+        series["start_owed"] = True
+        _write_marker(marker, series)
     # As `init` does: Docker would create a missing mount source as root inside the checkout.
     tools = ctx.paths.root / "tools"
     if not tools.exists():
@@ -462,15 +477,26 @@ def _restore(
     if current:
         done += f" The state before the restore is kept in {aside}; remove it when all is well."
     if args.no_start:
-        ctx.say(f"{done} Not started (--no-start): run `./cave up` when ready.")
+        ctx.say(f"{done} Not started (--no-start): run `sudo -u cave ./cave up` when ready.")
         return 0
+    return _start(ctx, args, marker, done)
+
+
+def _start(ctx: Context, args: argparse.Namespace, marker: Path, done: str) -> int:
+    """Start the stack for a restore or an undo whose state is in place; remove the marker only
+    once the start was issued, so that an interruption before it leaves `start_owed` for the
+    same command or the boot's `cave update --recover` to finish."""
     ctx.say("Starting the stack ...")
     started = ctx.compose("up", "--detach", "--force-recreate", timeout=900.0)
     if not started.ok:
-        message = f"{done} But the stack could not be started: {started.output.strip()[-300:]}"
+        message = (
+            f"{done} But the stack could not be started: {started.output.strip()[-300:]}. The "
+            "next `cave update` (at boot, or `sudo ./cave update --recover`) tries again."
+        )
         ctx.warn(message)
         notify(ctx, TITLE, message)
         return 1
+    marker.unlink(missing_ok=True)
     health = wait_healthy(ctx, timeout=args.timeout)
     message = f"{done} The stack is {health.describe()}."
     (ctx.say if health.healthy else ctx.warn)(message)
@@ -556,8 +582,8 @@ def _repeat_failed(ctx: Context, error: BaseException, ops: Path, series: dict[s
     message = (
         f"The restore failed while unpacking: {error}. The state is still half restored from the "
         "earlier attempt, so the stack was NOT started and update and backup still wait. Free "
-        "space if that was the cause (old archives in CAVE_BACKUP_DIR, `sudo docker image prune "
-        "-a`) and run it again, restore another archive, or put the state from before back with "
+        f"space if that was the cause ({FREE_SPACE}) and run it again, restore another archive, "
+        "or put the state from before back with "
         f"`sudo ./cave restore --undo`. {_keep(ops, series)} See {OPERATIONS}, 'A restore that "
         "cannot finish'."
     )
@@ -579,6 +605,7 @@ def undo(ctx: Context, args: argparse.Namespace) -> int:
     ops = _server.ops_dir(ctx)
     marker = ops / _server.RESTORE_MARKER
     with ctx.lock("restore"):
+        _server.clear_not_started(ctx)
         series = _read_marker(marker)
         if series is None:
             raise CaveError(
@@ -614,9 +641,12 @@ def undo(ctx: Context, args: argparse.Namespace) -> int:
         if backup and (env_file.parent / backup).is_file():
             os.replace(env_file.parent / backup, env_file)
         series["undone"] = True
+        series["no_start"] = bool(args.no_start) or not env_file.is_file()
         _write_marker(marker, series)
         superseded = series.get("superseded_update")
-        complete_undo(ctx)  # the superseded update in flight again, then the marker removed
+        # The superseded update in flight again (its way back starts the stack), or the marker
+        # on to `start_owed`, or, with --no-start, the not-started note.
+        complete_undo(ctx)
         _server.remove(aside)
         _server.remove(ops / "restore-staging")
         message = (
@@ -639,17 +669,7 @@ def undo(ctx: Context, args: argparse.Namespace) -> int:
             (ctx.say if status in (1, 2) else ctx.warn)(message)
             notify(ctx, TITLE, message)
             return status
-    if args.no_start or not ctx.paths.env_file.is_file():
-        ctx.say(f"{message} Not started: run `./cave up` when ready.")
+    if series["no_start"]:
+        ctx.say(f"{message} Not started: run `sudo -u cave ./cave up` when ready.")
         return 0
-    started = ctx.compose("up", "--detach", "--force-recreate", timeout=900.0)
-    if not started.ok:
-        message += f" But the stack could not be started: {started.output.strip()[-300:]}"
-        ctx.warn(message)
-        notify(ctx, TITLE, message)
-        return 1
-    health = wait_healthy(ctx, timeout=args.timeout)
-    message += f" The stack is {health.describe()}."
-    (ctx.say if health.healthy else ctx.warn)(message)
-    notify(ctx, TITLE, message)
-    return 0 if health.healthy else 1
+    return _start(ctx, args, marker, message)

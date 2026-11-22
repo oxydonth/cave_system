@@ -48,6 +48,7 @@ Find the start of the message in the left column.
 | `Backup … written …; … symbolic link(s) pointing outside their directory were left out` | The state contained links that are absolute or contain `..`. A restore refuses such links, so the backup leaves them out to stay restorable; the manifest lists them. | Backup fine. | None of the services makes such links; look at the named ones. |
 | `Backup … written …; WARNING: … could not be read as a SQLite database` | The backup was made, but one database file is damaged (Home Assistant renames a damaged database to `home-assistant_v2.db.corrupt.<time>`). It is archived as it is. | Backup fine. | If the named file is a `….corrupt.*` file, Home Assistant has replaced it already: delete it to save space. Otherwise look at `journalctl -t cave`. |
 | `Not updating to v…: the validator could not run (the validator could not read the file it was given …)` | The validator ran but could not open the staged copy of `heating.yaml` (it judged nothing). | Unchanged. Not remembered as failed. | Nothing; the next night tries again. If it repeats, look at `journalctl -u cave-update.service`. |
+| `… had put the state in place but was cut off before it started the stack. The stack was started …` | A restore or an `--undo` was cut off (or its `up` failed) after the state was in place; this run (often the boot's) started the stack. | Running, as the message says. | Nothing, or see the stack's health in the message. |
 | `cave restore`: `… is neither empty nor a cave state directory` | The chosen target holds something else. | Nothing was changed. | Check `--data` (or `CAVE_DATA` in `.env`); `--force` only if you mean it. |
 | `cave restore`: `refusing archive member …` | The archive breaks a rule (see [What an archive may contain](#restoring-a-backup)). | Nothing was stopped or changed. | Use another archive; a backup written by `cave backup` never breaks these rules. |
 | `cave restore`: `… Variables in the archive's .env that cave does not know were left out: …` / `From the archive's .env, check: …` | The restore wrote only the known variables and names the settings that decide where root writes. | Restored. | Check the named settings in `/opt/cave/.env`. |
@@ -384,8 +385,11 @@ and `--undo` needs it (the messages name it). The ways out:
 1. Run the same `sudo ./cave restore <archive>` again. It unpacks again and moves the state in
    from the start.
 2. If it stops at the same place again, or there is not enough space, restore another archive
-   (`sudo ./cave restore <older archive>`), after freeing space if needed (old archives,
-   `sudo docker image prune -a`). Any completed restore removes the marker.
+   (`sudo ./cave restore <older archive>`), after freeing space if needed: old archives, but
+   keep the one you restore and the one you would fall back to; unused images with
+   `sudo docker image prune`, **without** `-a`: with the stack stopped, `-a` also removes the
+   stack's own images, and `up` then has to download them again, which fails without internet.
+   Any completed restore removes the marker.
 3. Or go back to the state from before the first attempt: `sudo ./cave restore --undo`. It
    discards what the attempts moved in, puts back every entry from before (from the
    `before-restore-*` directory, or where no attempt touched it), puts back the `.env` from
@@ -394,13 +398,25 @@ and `--undo` needs it (the messages name it). The ways out:
    one that update left (possibly migrated by its new release): `--undo` then puts that update
    back in flight and finishes its way back, which puts its snapshot and the release from before
    it back together, as `sudo ./cave update --recover` would. If `--undo` is cut off, run it
-   again; once it had put the state back, the next `cave update` (at boot) also finishes it.
+   again; once it had put the state back, the next `cave update` (at boot) also finishes it,
+   starting the stack.
    A marker written by an earlier version does not record the state from before; `--undo`
    and a repeat then refuse, before stopping anything, and say what to do by hand.
 
 If an attempt fails while unpacking (a full disk, an unreadable archive) it changes nothing, but
 the state is still half restored from the attempt before: the stack is not started, the marker
 stays, and the message says so.
+
+**A restore or `--undo` is finished only once the stack is started.** When the state is in
+place, the marker stays (as "start owed") until `up` was issued; if the command is cut off in
+between, or `up` fails, `status` shows `NOT STARTED: … put the state in place but was cut off
+before it started the stack`, and `sudo ./cave update --recover` (which the boot runs) starts the
+stack and says so. With `--no-start` the marker goes at once, since the state is complete, and
+`status` shows `NOT STARTED: … finished with --no-start` while the stack is not running; nothing
+refuses because of it, the boot does not start what you kept stopped, and
+`sudo -u cave ./cave up` starts it. The only case in which the boot leaves the stack stopped
+without you having asked for it is a state that is still half restored: starting that would
+start Home Assistant unconfigured, so `status` names the ways out above instead.
 
 ### Onto a new server
 

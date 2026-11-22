@@ -108,13 +108,15 @@ def _switch(raw: dict[str, Any]) -> Switch:
 
 
 def complete_undo(ctx: Context) -> bool:
-    """Finish a ``cave restore --undo`` that was cut off after it had put the state from before
-    back (its marker says ``undone``): write back the interrupted update that the restore had
-    superseded, if any, and remove the marker. Returns whether there was such a marker.
+    """Carry a ``cave restore --undo`` that had put the state from before back (its marker says
+    ``undone``) to its last phase. Returns whether there was such a marker.
 
-    The order (state back, marker ``undone``, update written back, marker removed) leaves no moment
-    in which the state from before is in place but neither the marker nor the update says so.
-    ``update`` calls this first, so the next run at boot finishes what ``--undo`` began.
+    If the restore had superseded an interrupted update, that update is written back and the
+    marker removed: the update's way back then owns the state and starts the stack. Otherwise the
+    marker moves to ``start_owed``, or, if the undo was run with ``--no-start``, it is replaced by
+    the not-started note. No step leaves the state from before in place without a record that
+    says what is still to do. ``update`` calls this first, so the next run at boot finishes what
+    ``--undo`` began; ``restore --undo`` itself calls it too.
     """
     marker = _server.ops_dir(ctx) / _server.RESTORE_MARKER
     try:
@@ -124,6 +126,14 @@ def complete_undo(ctx: Context) -> bool:
     if not isinstance(series, dict) or not series.get("undone"):
         return False
     superseded = series.get("superseded_update")
+    if not isinstance(superseded, dict):
+        if series.get("no_start"):
+            _server.note_not_started(ctx, f"the undo of the restore of {series.get('archive')}")
+            marker.unlink(missing_ok=True)
+        elif not series.get("start_owed"):
+            series["start_owed"] = True
+            _server.write_atomic(marker, (json.dumps(series, indent=2) + "\n").encode(), 0o644)
+        return True
     if isinstance(superseded, dict):
         record = load(ctx)
         if record.switch is None:

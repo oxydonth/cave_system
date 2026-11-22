@@ -69,6 +69,23 @@ def run(ctx: Context, args: argparse.Namespace) -> int:
             "same `sudo ./cave restore` again, restore another archive, or `sudo ./cave restore "
             "--undo`.",
         )
+    owed = _server.restore_start_owed(ctx)
+    if owed is not None and not (holder and "restore" in holder):
+        healthy = False
+        _line(
+            ctx,
+            "NOT STARTED",
+            f"{owed} put the state in place but was cut off before it started the stack. "
+            "`sudo ./cave update --recover` starts it (the boot does too).",
+        )
+    deliberately = _server.not_started(ctx)
+    if deliberately is not None and not health.healthy:
+        _line(
+            ctx,
+            "NOT STARTED",
+            f"{deliberately} finished with --no-start, so the stack was not started. "
+            "`sudo -u cave ./cave up` starts it.",
+        )
     if record.last_result:
         last = record.last_result
         _line(ctx, "Last update", f"{last.get('time')}: {last.get('message')}")

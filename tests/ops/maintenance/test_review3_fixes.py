@@ -249,6 +249,10 @@ def test_a_repeated_restore_without_space_says_what_state_it_is_in(
     # The one directory that must be kept is named; no other before-restore-* is offered.
     keep = server.data / ".cave/ops/before-restore-20261122T000000Z"
     assert f"Do not delete {keep}" in result.err
+    # With the stack stopped, `prune -a` would remove the stack's own images.
+    assert "docker image prune -a" not in result.err
+    assert "`sudo docker image prune`, without -a" in result.err
+    assert "not the one being restored nor the one you would fall back to" in result.err
     assert "before-restore-*" not in result.err
 
 
