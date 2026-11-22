@@ -898,6 +898,7 @@ class _Update:
         """Start the checkout (one retry) and wait until healthy."""
         ctx = self.ctx
         ctx.say("Starting the stack ...")
+        clear_stopped(ctx.paths)
         result = ctx.compose("up", "--detach", "--force-recreate", timeout=UP_TIMEOUT)
         if not result.ok:
             ctx.sleep(10)

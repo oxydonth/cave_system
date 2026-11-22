@@ -20,6 +20,7 @@ import tarfile
 from pathlib import Path
 from typing import Any
 
+from .. import alert
 from ..context import Context
 from ..errors import CaveError
 from ..lock import LockBusy
@@ -66,6 +67,7 @@ def run(ctx: Context, args: argparse.Namespace) -> int:
                 )
                 ctx.warn(message)
                 notify(ctx, TITLE, message)
+                _alert(ctx, "no backup: an update is interrupted")
                 return 1
             restoring = _server.restore_in_progress(ctx)
             if restoring is not None:
@@ -75,13 +77,38 @@ def run(ctx: Context, args: argparse.Namespace) -> int:
                 )
                 ctx.warn(message)
                 notify(ctx, TITLE, message)
+                _alert(ctx, "no backup: a restore is unfinished")
                 return 1
             return _backup(ctx, directory, keep, copy_to)
     except LockBusy as busy:
         message = f"No backup was made: {busy}."
         ctx.warn(message)
         notify(ctx, TITLE, message)
+        _alert(ctx, "no backup: another command was running")
         return 1
+
+
+WARNINGS = {
+    "no backup: an update is interrupted": (
+        "No backup was made: an update was interrupted, and the state may be incomplete."
+    ),
+    "no backup: a restore is unfinished": (
+        "No backup was made: a restore stopped half-way, and the state may be half restored."
+    ),
+    "no backup: another command was running": (
+        "No backup was made: another cave command held the lock. The next night tries again."
+    ),
+    "backup failed": "The backup failed: no new archive was written; the older ones are kept.",
+    "backup copy failed": (
+        "The backup was written, but the copy to the second location (CAVE_BACKUP_COPY_TO) failed."
+    ),
+}
+"""What the alert says (``alert.warn_owner``) for each outcome of ``backup`` that is a warning:
+fixed words, never the message itself."""
+
+
+def _alert(ctx: Context, headline: str) -> None:
+    alert.warn_owner(ctx, "backup", headline, WARNINGS[headline])
 
 
 def _release(ctx: Context) -> tuple[str, str | None]:
@@ -157,6 +184,7 @@ def _backup(ctx: Context, directory: Path, keep: int, copy_to: Path | None) -> i
         message = f"The backup failed: {error}. No new archive was written; older ones are kept."
         ctx.warn(message)
         notify(ctx, TITLE, message)
+        _alert(ctx, "backup failed")
         return 1
 
     size = archive.stat().st_size
@@ -195,4 +223,6 @@ def _backup(ctx: Context, directory: Path, keep: int, copy_to: Path | None) -> i
     message += "."
     (ctx.say if status == 0 else ctx.warn)(message)
     notify(ctx, TITLE, message)
+    if status != 0:
+        _alert(ctx, "backup copy failed")
     return status

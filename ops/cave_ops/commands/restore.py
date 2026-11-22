@@ -31,6 +31,7 @@ from dataclasses import asdict
 from pathlib import Path, PurePosixPath
 from typing import Any
 
+from .. import alert
 from ..context import Context
 from ..envfile import HEADER, NAMES, load_env, parse_env, quote_value, render
 from ..errors import CaveError
@@ -390,11 +391,13 @@ def _restore(
             return _repeat_failed(ctx, error, ops, earlier)
         if owed is None:
             marker.unlink(missing_ok=True)
-            return _unpack_failed(ctx, args, error, was_running)
+            return _unpack_failed(ctx, args, error, was_running, archive=archive.path.name)
         # Nothing of the state was touched, so the restore before this one is still complete
         # and its start still owed: that stays on record until the stack has been started.
         _write_marker(marker, owed)
-        return _unpack_failed(ctx, args, error, was_running, owed_start=marker)
+        return _unpack_failed(
+            ctx, args, error, was_running, owed_start=marker, archive=archive.path.name
+        )
 
     # The whole state from before the first attempt goes into one directory, `aside`, over all
     # repeats: an original entry is moved there; whatever an earlier attempt moved in (an entry
@@ -417,6 +420,13 @@ def _restore(
             (data / entry).parent.mkdir(parents=True, exist_ok=True)
             os.rename(staging / entry, data / entry)
     except OSError as error:
+        alert.warn_owner(
+            ctx,
+            "restore",
+            "restore stopped half-way",
+            "A restore stopped half-way while it moved the state into place: the state is half "
+            "restored, and the stack is stopped.",
+        )
         raise CaveError(
             f"the restore stopped half-way while moving the state into place: {error}. The stack "
             "is stopped, and update and backup wait for the restore. Run the same restore again; "
@@ -437,7 +447,13 @@ def _restore(
     if env_file.exists() and series.get("env_backup") is None:
         # A copy, and .env itself is then replaced in one step: there is always a .env, which
         # names the state directory for a repeat or --undo after a kill.
+        # Named like the `before-restore-*` directories: two restores within one second must
+        # not overwrite the first one's copy of the owner's .env.
         backup = env_file.with_name(f".env.before-restore-{stamp}")
+        counter = 1
+        while os.path.lexists(backup):
+            counter += 1
+            backup = env_file.with_name(f".env.before-restore-{stamp}-{counter}")
         _server.write_atomic(backup, env_file.read_bytes(), 0o600)
         series["env_backup"] = backup.name
         _write_marker(marker, series)
@@ -458,7 +474,13 @@ def _restore(
     if _server.is_root():
         info = ctx.paths.root.stat()
         os.chown(env_file, info.st_uid, info.st_gid)
+    alert_url = ctx.env.get(alert.VARIABLE, "")
     ctx.env.update(load_env(env_file))
+    # This restore's own alerts still go where alerts went when it started (if anywhere); the
+    # restored .env decides for every later command. The URL may carry a token: never print it.
+    url_changed = ctx.env.get(alert.VARIABLE, "") != alert_url
+    if alert_url:
+        ctx.env[alert.VARIABLE] = alert_url
     # The state is in place. The restore is finished only once the stack is started (or the
     # owner chose --no-start): until then the marker says so (`start_owed`), and the same command
     # or the boot's `cave update --recover` starts the stack.
@@ -489,6 +511,12 @@ def _restore(
     steering = [f"{name}={values[name]}" for name in STEERING if values.get(name)]
     if steering:
         done += " From the archive's .env, check: " + ", ".join(steering) + "."
+    if url_changed:
+        done += (
+            f" {alert.VARIABLE} is now the archive's ("
+            + ("set" if values.get(alert.VARIABLE) else "empty: no alerts")
+            + "); check it in .env."
+        )
     if current:
         done += f" The state before the restore is kept in {aside}; remove it when all is well."
     if args.no_start:
@@ -502,6 +530,7 @@ def _start(ctx: Context, args: argparse.Namespace, marker: Path, done: str) -> i
     once the start was issued, so that an interruption before it leaves `start_owed` for the
     same command or the boot's `cave update --recover` to finish."""
     ctx.say("Starting the stack ...")
+    clear_stopped(ctx.paths)
     started = ctx.compose("up", "--detach", "--force-recreate", timeout=900.0)
     if not started.ok:
         message = (
@@ -510,12 +539,27 @@ def _start(ctx: Context, args: argparse.Namespace, marker: Path, done: str) -> i
         )
         ctx.warn(message)
         notify(ctx, TITLE, message)
+        alert.warn_owner(
+            ctx,
+            "restore",
+            "restored stack not started",
+            "The state was restored, but the stack could not be started. The next start of the "
+            "server tries again.",
+        )
         return 1
     marker.unlink(missing_ok=True)
     health = wait_healthy(ctx, timeout=args.timeout)
     message = f"{done} The stack is {health.describe()}."
     (ctx.say if health.healthy else ctx.warn)(message)
     notify(ctx, TITLE, message)
+    if not health.healthy:
+        alert.warn_owner(
+            ctx,
+            "restore",
+            "restored stack not healthy",
+            "The state was restored and the stack started, but it is not healthy.",
+            health,
+        )
     return 0 if health.healthy else 1
 
 
@@ -525,15 +569,27 @@ def _unpack_failed(
     error: BaseException,
     was_running: bool,
     owed_start: Path | None = None,
+    archive: str = "an archive",
 ) -> int:
     """Nothing of the state was touched. Start what was running; if an update was interrupted,
     finish that update's way back instead, because its release and state belong together.
 
     ``owed_start`` is the marker of a restore before this one whose state is in place and whose
-    start is still owed: it is removed only once the start was issued, as in ``_start``."""
+    start is still owed: it is removed only once the start was issued, as in ``_start``.
+
+    With ``--no-start`` nothing is started: the stack stays stopped, on purpose
+    (``records.py``). The state in place is complete (this restore changed nothing), so an owed
+    start of the restore before is given up for it; an interrupted update stays in flight, and
+    the next ``cave update`` (the boot's) finishes its way back."""
     pending = load_update_record(ctx).switch
     head = f"The restore failed while unpacking: {error}. Nothing was restored."
-    if pending is not None:
+    if pending is not None and args.no_start:
+        message = (
+            f"{head} The update to {pending.to_release} is still interrupted; with --no-start its "
+            "way back, which starts the stack, was not run. `sudo ./cave update --recover` "
+            "finishes it; the next start of the server does too."
+        )
+    elif pending is not None:
         from .update import _Update
 
         recover = argparse.Namespace(force=False, auto=False, recover=True, timeout=args.timeout)
@@ -542,7 +598,24 @@ def _unpack_failed(
             f"{head} The interrupted update to {pending.to_release} was finished instead (exit "
             f"status {status}, see its own message)."
         )
+    elif (was_running or owed_start is not None) and args.no_start:
+        note_stopped(
+            ctx.paths, f"the restore of {archive} failed while unpacking, run with --no-start"
+        )
+        if owed_start is not None:
+            owed_start.unlink(missing_ok=True)
+        waiting = (
+            " It holds the complete state of the restore before this one, which had not been "
+            "started yet."
+            if owed_start is not None
+            else ""
+        )
+        message = (
+            f"{head} The stack was not started again (--no-start).{waiting} `sudo -u cave ./cave "
+            "up` starts it."
+        )
     elif was_running:
+        clear_stopped(ctx.paths)
         started = ctx.compose("up", "--detach", "--force-recreate", timeout=900.0)
         message = (
             f"{head} The stack was started again unchanged."
@@ -563,6 +636,7 @@ def _unpack_failed(
         message = head
     ctx.warn(message)
     notify(ctx, TITLE, message)
+    alert.warn_owner(ctx, "restore", "restore failed", "A restore failed while unpacking.")
     return 1
 
 
@@ -632,6 +706,13 @@ def _repeat_failed(ctx: Context, error: BaseException, ops: Path, series: dict[s
     )
     ctx.warn(message)
     notify(ctx, TITLE, message)
+    alert.warn_owner(
+        ctx,
+        "restore",
+        "restore failed again",
+        "A repeated restore failed while unpacking: the state is still half restored from the "
+        "attempt before, and the stack is stopped.",
+    )
     return 1
 
 

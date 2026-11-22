@@ -26,6 +26,9 @@ this file, because ``--import-mode=importlib`` does not allow it. Later work pac
 ``snapshot``
     ``snapshot(path)`` lists every file and directory below ``path`` with its mode, size and
     modification time, to prove that a command changed nothing.
+``alert_endpoint``
+    A local HTTP receiver for ``CAVE_ALERT_URL`` (``AlertEndpoint``): ``url``, ``mode`` (``ok``,
+    ``error``, ``hang``, ``redirect``), ``refusing_url``, and ``received``.
 """
 
 from __future__ import annotations
@@ -35,7 +38,7 @@ import json
 import os
 import re
 import shutil
-from collections.abc import Callable, Mapping, Sequence
+from collections.abc import Callable, Iterator, Mapping, Sequence
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any
@@ -332,6 +335,100 @@ def write_token(ctx: Context, fake_ha: FakeHomeAssistant) -> Callable[..., None]
         path.chmod(0o600)
 
     return write
+
+
+# ----------------------------------------------------------------------- the alert receiver
+@dataclass
+class Received:
+    """One alert the receiver got."""
+
+    path: str
+    headers: dict[str, str]
+    body: str
+
+
+class AlertEndpoint:
+    """A local HTTP receiver of alerts, as an ntfy server on the home network would be.
+
+    ``url`` is a topic on it. ``mode`` decides what it answers: ``ok`` (200), ``error`` (500),
+    ``hang`` (never answers, until the test ends), ``redirect`` (302 to ``/elsewhere`` on the same
+    server). ``refusing_url`` is a port where nothing listens. ``received`` lists every request.
+    """
+
+    def __init__(self) -> None:
+        import http.server
+        import threading
+
+        self.received: list[Received] = []
+        self.mode = "ok"
+        self.release = threading.Event()
+        endpoint = self
+
+        class Handler(http.server.BaseHTTPRequestHandler):
+            def do_POST(self) -> None:
+                length = int(self.headers.get("Content-Length") or 0)
+                body = self.rfile.read(length).decode("utf-8")
+                endpoint.received.append(Received(self.path, dict(self.headers.items()), body))
+                if endpoint.mode == "hang":
+                    endpoint.release.wait(60)
+                    return
+                if endpoint.mode == "redirect" and self.path != "/elsewhere":
+                    self.send_response(302)
+                    self.send_header("Location", "/elsewhere")
+                    self.send_header("Content-Length", "0")
+                    self.end_headers()
+                    return
+                status = 500 if endpoint.mode == "error" else 200
+                answer = b'{"id": "abc"}'
+                self.send_response(status)
+                self.send_header("Content-Length", str(len(answer)))
+                self.end_headers()
+                self.wfile.write(answer)
+
+            do_GET = do_POST
+
+            def log_message(self, format: str, *args: Any) -> None:
+                pass
+
+        self.server = http.server.ThreadingHTTPServer(("127.0.0.1", 0), Handler)
+        self.server.daemon_threads = True
+        self.thread = threading.Thread(target=self.server.serve_forever, daemon=True)
+        self.thread.start()
+        port = self.server.server_address[1]
+        self.base = f"http://127.0.0.1:{port}"
+        self.url = f"{self.base}/cave-alerts"
+
+    @property
+    def refusing_url(self) -> str:
+        import socket
+
+        with socket.socket() as probe:
+            probe.bind(("127.0.0.1", 0))
+            port = probe.getsockname()[1]
+        return f"http://127.0.0.1:{port}/cave-alerts"
+
+    def titles(self) -> list[str]:
+        return [item.headers.get("Title", "") for item in self.received]
+
+    def close(self) -> None:
+        self.release.set()
+        self.server.shutdown()
+        self.server.server_close()
+
+
+@pytest.fixture
+def alert_endpoint(request: pytest.FixtureRequest) -> Iterator[AlertEndpoint]:
+    """``AlertEndpoint``: a local HTTP receiver for ``CAVE_ALERT_URL``.
+
+    Home Assistant's test plugin, loaded with the whole suite on Python 3.14, blocks sockets in
+    every test through pytest-socket; its ``socket_enabled`` lifts that. On Python 3.11
+    (``make test-py311``) neither plugin is installed and sockets are open anyway.
+    """
+    if request.config.pluginmanager.hasplugin("socket"):
+        request.getfixturevalue("socket_enabled")
+    endpoint = AlertEndpoint()
+    yield endpoint
+    endpoint.close()
 
 
 def _snapshot(path: Path) -> dict[str, tuple[int, int, int]]:
