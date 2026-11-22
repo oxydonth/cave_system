@@ -103,14 +103,19 @@ cd /opt/cave
 
 Now the second run of the script, this time from the checkout. It finds the units in
 `scripts/systemd/` and installs and starts the timers: the backup at 02:30 and the update at 03:30
-(each with a few minutes of random delay), and the recovery of an interrupted update at every
-boot. The units do nothing until `.env` exists, which [creating the configuration](#5-create-the-configuration) does. [operations.md](operations.md) explains
+(each with a few minutes of random delay), the recovery of an interrupted update at every
+boot, and the watch every five minutes, which alerts you when the stack is down once you set
+`CAVE_ALERT_URL` (step 6) and does nothing until then. The watch runs as the service user (the one
+given with `--user`), the others as root. The units do nothing until `.env` exists, which [creating the configuration](#5-create-the-configuration) does. [operations.md](operations.md) explains
 what they do and what to do when one reports a failure.
 
 ```sh
 sudo /opt/cave/scripts/provision-host.sh
-systemctl list-timers 'cave-*'       # cave-backup.timer and cave-update.timer
+systemctl list-timers 'cave-*'       # cave-backup.timer, cave-update.timer and cave-watch.timer
 ```
+
+A server installed before the watch existed gets it the same way: run the script again from the
+checkout after an update; it installs only what is missing.
 
 The nightly update starts to install releases only after [the first-run setup](#8-first-run-setup): it needs the script token that
 the first-run setup creates, and says so in the journal until then.
@@ -150,6 +155,7 @@ leave alone.
 | `COMPOSE_PROFILES` | `zigbee` once the coordinator is connected and its address is in; empty before. |
 | `CAVE_AUTO_UPDATE` | `1`: the nightly timer installs new releases. `0`: manual only. |
 | `CAVE_BACKUP_DIR`, `CAVE_BACKUP_KEEP`, `CAVE_BACKUP_COPY_TO` | Where backups go, how many are kept (14), and an optional second place. Set the last one: a backup on the same disk does not survive the disk. [operations.md](operations.md#backups) says how. |
+| `CAVE_ALERT_URL` | Optional, empty by default: then nothing leaves the server. Set it to a topic of an [ntfy](https://ntfy.sh) server, `http://<ntfy server>/<topic>`, and the server posts a short alert there when the stack has been down for 15 minutes (and when it is back), or an update, backup or restore needs you, also while Home Assistant is down. An ntfy server on the home network keeps everything local; a public one (ntfy.sh) receives the server's name and the stack's state, and anyone who knows the topic can read them. A token goes into the URL (`?auth=…`); write the value in single quotes if it contains `#` or `$`. [operations.md](operations.md#alerts-without-home-assistant) says what is sent and when. |
 
 `.env.example` lists every variable with its documentation.
 

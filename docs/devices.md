@@ -161,7 +161,10 @@ override. The command refuses `climate.cave_*` and anything else that belongs to
 (by its room IDs and by Home Assistant's entity registry). A radiator thermostat whose entity ID
 happens to start with `climate.cave_` has to be renamed in Home Assistant first.
 
-It needs the script token (`./cave bootstrap` creates it) and a running Home Assistant. It asks
+It needs the script token (`./cave bootstrap` creates it) and a running Home Assistant. It takes
+no lock. The nightly update asks, right before it would stop the stack, whether a thermostat is
+held, and if one is, it leaves the stack alone and tries again on its next run; a check started
+while an update is already under way can still be spoiled by it, so run checks by day. It asks
 the real device what the tests ask the simulators:
 
 1. It reads the thermostat's entry from the applied `heating.yaml`, with the integration's own
@@ -170,7 +173,11 @@ the real device what the tests ask the simulators:
 2. It holds the thermostat with `cave_heating.hold`, so the controller neither reacts to the
    check nor passes it on to the room. The hold is longer than the check can take (three times
    `--timeout`, plus 6 minutes: 66 minutes by default), and ends by itself if the command is
-   killed outright.
+   killed outright. If Home Assistant restarts during the check, the hold ends with the restart
+   and the clean-up takes a new one (two times `--timeout`, plus 5 minutes), after up to 15
+   minutes of waiting for `cave_heating`: the thermostat can then be out of the controller's reach
+   for longer in all than the 66 minutes, though no single hold lasts more than four hours and the
+   last one is released (or its end is named).
 3. It checks that the entity exists, is available and reports a temperature; that it accepts a
    target half a degree higher and reports it back, and how long that took (see below); where
    the file names them, that the external input accepts the room sensor's current reading, and
@@ -180,10 +187,19 @@ the real device what the tests ask the simulators:
    the half degree was never reported, it watches for a late report for another `--timeout` and
    undoes it), and then, in a step of its own that runs even if the restore failed, releases the
    hold. The clean-up does not depend on the terminal: once a dropped session has taken it away,
-   the command goes on without printing. If Home Assistant restarts meanwhile, it holds the
-   thermostat again for the whole restore and keeps trying for 15 minutes, also while
+   the command goes on without printing. If Home Assistant restarts meanwhile (the check notices
+   that by the hold being gone, or by Home Assistant not answering, at whatever step), it holds
+   the thermostat again for the whole restore and keeps trying for 15 minutes, also while
    `cave_heating` has not loaded yet and its services are not found; a reading that fails is
-   retried the same way.
+   retried the same way, and so is the release. If `cave_heating` has still not loaded after the
+   15 minutes, the controller is not running, so the original target is sent without a hold
+   rather than left at the check's (once the controller starts, it takes no report as a change at
+   the dial for a while, and corrects a thermostat that differs).
+
+During the check itself, before the clean-up, a reading that fails (an error answer or a timeout
+from Home Assistant, of the thermostat, the problem sensor, the room sensor, the external input
+or a setting) is tried again for up to a minute before the check gives up as "could not
+complete".
 
 **What it changes while it runs.** The thermostat's target, by half a degree, until it is put
 back. The external input, with the room sensor's current reading, which is what the controller
@@ -202,7 +218,7 @@ If the hold could not be released (Home Assistant unreachable), the output says 
 itself. An interrupt during the check starts the clean-up and says so. Interrupting again skips
 putting the thermostat back: the hold is still released, and the controller then brings the
 thermostat to its room's target. Without a hold (`--not-in-heating-yaml`) the thermostat then
-stays at the check's target, which the message names. The table then shows the original target
+may stay at the check's target, which the message names. The table then shows the original target
 as not confirmed, with whether it was sent, and the check as not completed.
 
 | Option | Default | Meaning |
