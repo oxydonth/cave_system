@@ -11,6 +11,7 @@ The tests run in the order written; each leaves the home as it found it.
 
 from __future__ import annotations
 
+import json
 import time
 from collections.abc import Callable
 from pathlib import Path
@@ -171,6 +172,12 @@ def test_the_demo_starts_with_both_families_under_control(home: Home) -> None:
     domains = {entry["domain"]: entry["state"] for entry in entries}
     assert domains["fritzbox"] == "loaded"
     assert "fritz" not in domains
+    # The heating dashboard is the one generated for the demo home, not the placeholder.
+    (dashboard,) = home.stack.ws(("lovelace/config", {"url_path": "cave-heating"}))
+    text = json.dumps(dashboard)
+    for room in ROOMS:
+        assert f"climate.cave_{room}" in text
+    assert "No rooms yet" not in text
 
 
 def test_schedule_moves_rooms_between_comfort_and_eco(home: Home) -> None:

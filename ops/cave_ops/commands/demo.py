@@ -14,7 +14,8 @@ home's stack use the same ports and cannot run at the same time.
 1. checks the state directory, then prepares it and ``demo.env``;
 2. builds the simulator image;
 3. validates ``sim/demo/heating.yaml`` and stores it as the demo's applied copy through the shared
-   ``validate_and_store``, before Home Assistant starts;
+   ``validate_and_store``, before Home Assistant starts, and generates the heating dashboard from
+   it with ``tools/render_dashboard.py``;
 4. starts the stack and runs the first-run setup against the simulators, as ``cave bootstrap``
    does: FRITZ!SmartHome at the fake FRITZ!Box (FRITZ!Box Tools needs TR-064, which it does not
    have), and the switch that stands in for presence.
@@ -31,6 +32,7 @@ import os
 from pathlib import Path
 from typing import Any
 
+from ..container import run_in_homeassistant
 from ..context import Context
 from ..envfile import NAMES, fresh_values, generate_secret, load_env, render, write_private
 from ..errors import CaveError
@@ -38,6 +40,7 @@ from ..heating import validate_and_store
 from ..mosquitto import password_line
 from ..paths import Paths
 from ..state import HA_FILES, MOUNT_DIRS, PLACEHOLDER_DASHBOARD, home_assistant_directories
+from .apply import APPLIED_IN_CONTAINER, DASHBOARD_IN_CONTAINER, GENERATOR
 from .bootstrap import set_up_home_assistant, settings_from_env
 
 HELP = "Start (or `down`: stop) a demo with simulated devices in a stack of its own"
@@ -214,6 +217,21 @@ def up(ctx: Context, args: argparse.Namespace) -> int:
         (demo.say if applied.ok else demo.warn)(line)
     if not applied.ok:
         return 1
+
+    # The heating dashboard for the demo home, generated from the applied copy as `apply` does
+    # for the home; `apply` itself works on the home's state only.
+    demo.say("Generating the heating dashboard for the demo home ...")
+    dashboard = run_in_homeassistant(
+        demo, [GENERATOR, APPLIED_IN_CONTAINER, DASHBOARD_IN_CONTAINER]
+    )
+    if not dashboard.ok:
+        for line in dashboard.output.splitlines():
+            if line.strip():
+                demo.warn(line.rstrip())
+        raise CaveError(
+            f"generating the demo's dashboard failed (exit status {dashboard.returncode}); "
+            "its messages are above"
+        )
 
     started = demo.compose("up", "--detach", "--force-recreate", capture=False)
     if not started.ok:

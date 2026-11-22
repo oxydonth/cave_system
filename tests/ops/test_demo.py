@@ -16,7 +16,14 @@ from cave_ops.envfile import load_env
 FILES = ("-f", "compose.yaml", "-f", "compose.sim.yaml")
 COMPOSE = ("docker", "compose", *FILES)
 VALIDATE = (*COMPOSE, "run", "--rm", "--no-deps", "-T", "--workdir")
-TOOL = (*COMPOSE, "run", "--rm", "--no-deps", "-T", "--entrypoint")
+ONE_OFF = (*COMPOSE, "run", "--rm", "--no-deps", "-T", "--entrypoint", "python3", "homeassistant")
+TOOL = (*ONE_OFF, "/cave/tools/bootstrap.py")
+GENERATE = (
+    *ONE_OFF,
+    "/cave/tools/render_dashboard.py",
+    "/config/cave/.applied/heating.yaml",
+    "/config/dashboards/heating.yaml",
+)
 SERVICES = "homeassistant\nmosquitto\nsim\n"
 HEALTHY = "\n".join(
     json.dumps({"Service": name, "State": "running", "Health": "healthy"})
@@ -45,6 +52,7 @@ def docker_works(fake_runner, fake_ha, demo_data):
     fake_runner.on(["docker", "ps"], out="")
     fake_runner.on([*COMPOSE, "build"])
     fake_runner.on(list(VALIDATE), out="cave/.validating.yaml is valid: 3 rooms\n")
+    fake_runner.on(list(GENERATE))
     fake_runner.on([*COMPOSE, "up"])
     fake_runner.on([*COMPOSE, "config", "--services"], out=SERVICES)
     fake_runner.on([*COMPOSE, "ps"], out=HEALTHY)
@@ -75,6 +83,27 @@ def test_the_demo_runs_as_a_project_of_its_own_with_its_own_state(
     assert not (checkout_with_demo / "data").exists()
     assert (demo_data / "demo.env").is_file()
     assert "The demo is running" in result.out
+
+
+def test_secrets_written_into_demo_env_beforehand_are_kept_and_the_rest_added(
+    run_cave, docker_works, demo_data
+):
+    # As the e2e job does, so that it can mask them before the demo starts.
+    demo_data.mkdir(parents=True)
+    given = {
+        "CAVE_MQTT_PASSWORD": "given-mqtt-secret-for-tests",
+        "CAVE_HA_OWNER_PASSWORD": "given-owner-secret-for-tests",
+        "CAVE_FRITZ_PASSWORD": "given-fritz-secret-for-tests",
+    }
+    (demo_data / "demo.env").write_text("".join(f"{k}={v}\n" for k, v in given.items()))
+
+    assert run_cave("demo").code == 0
+
+    env = load_env(demo_data / "demo.env")
+    assert {name: env[name] for name in given} == given
+    assert env["CAVE_DATA"] == str(demo_data)
+    assert env["CAVE_FRITZ_HOST"] == "http://127.0.0.1:8480"
+    assert stat.S_IMODE((demo_data / "demo.env").stat().st_mode) == 0o600
 
 
 def test_the_demo_keeps_its_secrets_in_its_own_file(run_cave, docker_works, demo_data):
@@ -108,6 +137,34 @@ def test_the_demo_home_is_validated_and_stored_before_the_stack_starts(
     assert order.index("run") < order.index("up")  # validated before Home Assistant starts
     (validation,) = fake_runner.matching(*VALIDATE)
     assert "custom_components.cave_heating.validate" in validation.args
+
+
+def test_the_dashboard_is_generated_for_the_demo_home_in_the_demos_context(
+    run_cave, fake_runner, docker_works, demo_data
+):
+    result = run_cave("demo")
+
+    assert result.code == 0, result.err
+    (generate,) = fake_runner.matching(*GENERATE)
+    assert generate.env["COMPOSE_PROJECT_NAME"] == "cave-demo"
+    assert generate.env["CAVE_DATA"] == str(demo_data)  # the demo's /config, not the home's
+    order = [call.args for call in fake_runner.calls]
+    validate = next(i for i, args in enumerate(order) if args[: len(VALIDATE)] == VALIDATE)
+    up = order.index(next(a for a in order if a[:7] == (*COMPOSE, "up")))
+    assert validate < order.index(GENERATE) < up  # from the stored copy, before the start
+    # Nothing tells the visitor to run ./cave apply, which works on the home only.
+    assert "cave apply" not in result.out + result.err
+
+
+def test_a_dashboard_that_cannot_be_generated_stops_the_demo(run_cave, fake_runner, docker_works):
+    fake_runner.on(list(GENERATE), rc=1, err="render_dashboard.py: cannot write the file\n")
+
+    result = run_cave("demo")
+
+    assert result.code == 1
+    assert "cannot write the file" in result.err
+    assert "generating the demo's dashboard failed" in result.err
+    assert not fake_runner.ran(*COMPOSE, "up")
 
 
 def test_an_invalid_demo_home_stops_before_anything_starts(
