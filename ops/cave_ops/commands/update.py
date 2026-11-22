@@ -30,6 +30,7 @@ from __future__ import annotations
 import argparse
 import dataclasses
 import os
+import re
 import signal
 import tarfile
 from collections.abc import Callable, Iterator
@@ -101,6 +102,10 @@ def add_arguments(parser: argparse.ArgumentParser) -> None:
     )
 
 
+# The validator's own words for a file it could not open (cave_heating/schema.py, read_file).
+_FILE_NOT_THERE = re.compile(r"^the file .+ (does not exist$|cannot be read: )", re.MULTILINE)
+
+
 def could_not_run(result: Result, what: str) -> str | None:
     """Why a check in the new image did not run at all, or ``None`` when it ran and rejected.
 
@@ -111,6 +116,10 @@ def could_not_run(result: Result, what: str) -> str | None:
     output = result.output
     if "No module named" in output:
         return f"the {what} is not in this release"
+    if result.returncode == 1 and _FILE_NOT_THERE.search(output):
+        # The validator exits 1 also when it cannot find or read the file it was given: then it
+        # judged nothing, and the owner must not be told to edit the file.
+        return f"the {what} could not read the file it was given"
     if result.returncode == 1 and "Traceback" not in output:
         return None
     return COULD_NOT_RUN.get(result.returncode, f"exit status {result.returncode}")

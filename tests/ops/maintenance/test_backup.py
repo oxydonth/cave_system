@@ -15,6 +15,7 @@ from pathlib import Path
 import pytest
 
 from cave_ops.commands import _archives, _server, restore
+from cave_ops.envfile import load_env, parse_env
 from cave_ops.lock import Lock
 from cave_ops.paths import Paths
 
@@ -274,9 +275,10 @@ def test_round_trip_onto_a_new_server_with_a_database_being_written(
         old_state.pop(name, None)
         new_state.pop(name, None)
     assert new_state == old_state
-    env = (root / ".env").read_text()
-    assert f"CAVE_DATA={data}" in env
-    assert env.replace(f"CAVE_DATA={data}", f"CAVE_DATA={server.data}") == old_env
+    # The restored .env holds the archive's values, with CAVE_DATA the directory actually used.
+    restored_env = load_env(root / ".env")
+    expected = {**parse_env(old_env), "CAVE_DATA": str(data)}
+    assert {k: restored_env[k] for k in expected} == expected
     assert stat.S_IMODE((root / ".env").stat().st_mode) == 0o600
     token = data / "homeassistant/.cave/token"
     assert stat.S_IMODE(token.stat().st_mode) == 0o600

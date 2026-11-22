@@ -380,10 +380,14 @@ def extract(
     members: list[tarfile.TarInfo],
     target: Path,
     owners: Owners | None = None,
+    reserved: tuple[str, ...] = (),
 ) -> None:
     """Extract ``members`` (whose names are relative to ``target``, an empty directory) with
     their modes, times and, as root, owners (``owners(member)`` maps them, for example from the
     old server's service user to this one's).
+
+    Modes keep only the permission bits: an archive cannot plant a setuid or setgid file. No
+    link may point at or below a path in ``reserved``.
 
     Nothing can be written outside ``target``: the archive is checked as a whole first; files
     are created new and never through a link; every parent directory is checked to resolve
@@ -418,7 +422,7 @@ def extract(
             shutil.copyfileobj(source, handle)
         if is_root():
             os.lchown(path, *owner_of(member))
-        os.chmod(path, member.mode & 0o7777)
+        os.chmod(path, member.mode & 0o777)
         os.utime(path, (member.mtime, member.mtime))
     for path, member in links:
         path.parent.mkdir(parents=True, exist_ok=True)
@@ -432,15 +436,24 @@ def extract(
     for current, dirs, files in os.walk(target):
         for name in (*dirs, *files):
             path = Path(current) / name
-            if path.is_symlink() and not _inside(path, target):
+            if not path.is_symlink():
+                continue
+            if not _inside(path, target):
                 raise UnsafeArchive(
                     str(path.relative_to(target)),
                     f"it resolves outside, to {os.path.realpath(path)}",
                 )
+            real = Path(os.path.realpath(path)).relative_to(os.path.realpath(target))
+            lands = PurePosixPath(real.as_posix())
+            for place in reserved:
+                if lands == PurePosixPath(place) or PurePosixPath(place) in lands.parents:
+                    raise UnsafeArchive(
+                        str(path.relative_to(target)), f"it points into {place}, which is reserved"
+                    )
     for path, member in reversed(directories):
         if is_root():
             os.chown(path, *owner_of(member))
-        os.chmod(path, member.mode & 0o7777)
+        os.chmod(path, member.mode & 0o777)
         os.utime(path, (member.mtime, member.mtime))
 
 

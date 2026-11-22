@@ -31,11 +31,11 @@ from pathlib import Path, PurePosixPath
 from typing import Any
 
 from ..context import Context
-from ..envfile import apply_updates, load_env, parse_env
+from ..envfile import HEADER, NAMES, load_env, parse_env, render
 from ..errors import CaveError
 from ..health import wait_healthy
 from ..notify import notify
-from ..paths import Paths
+from ..paths import Paths, default_data_dir
 from . import _archives, _releases, _server
 from ._update_state import BEFORE_SWITCH, Switch, now
 from ._update_state import load as load_update_record
@@ -44,6 +44,7 @@ from ._update_state import save as save_update_record
 HELP = "Restore the state and .env from a backup archive (also onto a new server)"
 
 TITLE = "cave restore"
+OPERATIONS = "docs/operations.md"
 SPACE_MARGIN = 256 * 1024 * 1024
 
 
@@ -52,13 +53,16 @@ def add_arguments(parser: argparse.ArgumentParser) -> None:
     parser.add_argument(
         "--data",
         metavar="DIR",
-        help="state directory to restore into (default: CAVE_DATA of .env, else of the archive)",
+        help="state directory to restore into (default: CAVE_DATA of the existing .env, else "
+        "the default state directory, /var/lib/cave on a provisioned server); never taken from "
+        "the archive",
     )
     parser.add_argument("--no-start", action="store_true", help="do not start the stack afterwards")
     parser.add_argument(
         "--force",
         action="store_true",
-        help="restore an archive taken with a newer release than the one checked out",
+        help="restore an archive taken with a newer release than the one checked out, or into "
+        "a directory that is neither empty nor a cave state directory",
     )
     parser.add_argument(
         "--timeout",
@@ -94,6 +98,14 @@ class _Archive:
             if relative == PurePosixPath("."):
                 continue
             self.data.append(_renamed(member, relative.as_posix()))
+        for member in self.data:
+            parts = PurePosixPath(member.name).parts
+            if parts == (".cave",) and not member.isdir():
+                raise _server.UnsafeArchive(f"data/{member.name}", ".cave must be a directory")
+            if parts[:2] in ((".cave", _server.OPS_DIR), (".cave", "lock")):
+                raise _server.UnsafeArchive(
+                    f"data/{member.name}", "the commands' own records and lock are never backed up"
+                )
         # The whole archive: no path twice, nothing below a link it creates. extract() checks
         # again where each member really lands.
         _server.check_members(self.data)
@@ -108,7 +120,7 @@ class _Archive:
             for member in archive:
                 if member.name in wanted:
                     members.append(_renamed(member, member.name[len("data/") :]))
-            _server.extract(archive, members, target, owners)
+            _server.extract(archive, members, target, owners, reserved=RESERVED)
 
     def owners(self, local_uid: int, local_gid: int) -> _server.Owners:
         """Files of the old server's service user become this server's service user's: its uid
@@ -145,11 +157,17 @@ def run(ctx: Context, args: argparse.Namespace) -> int:
     archive = _Archive(source)
 
     archived_env = parse_env(archive.env_text)
-    current_env = load_env(ctx.paths.env_file)
-    chosen = args.data or current_env.get("CAVE_DATA") or archived_env.get("CAVE_DATA")
-    if not chosen:
-        raise CaveError("the archive's .env names no CAVE_DATA; give one with --data DIR")
-    data = Path(chosen).expanduser().resolve()
+    data, why = _target(ctx, args)
+    ctx.say(f"Restoring into {data} ({why}).")
+    taken_from = archived_env.get("CAVE_DATA")
+    if taken_from and Path(taken_from).expanduser() != data:
+        ctx.say(f"The archive was taken from {taken_from}; the restored .env will name {data}.")
+    if not _is_state_dir(data) and not args.force:
+        raise CaveError(
+            f"{data} is neither empty nor a cave state directory (it has none of .cave, "
+            f"{', '.join(SERVICE_ENTRIES)}). Choose the state directory with --data DIR, or pass "
+            "--force to restore into it anyway. Nothing was changed."
+        )
     ctx.paths = Paths(root=ctx.paths.root, data=data)
 
     _server.require_state_access(ctx, "restore")
@@ -174,6 +192,33 @@ def run(ctx: Context, args: argparse.Namespace) -> int:
             commit = switch.from_commit if switch else "HEAD"
             _check_release(ctx, archive.manifest, args.force, commit)
         return _restore(ctx, args, archive, archived_env, switch)
+
+
+SERVICE_ENTRIES = ("homeassistant", "mosquitto", "zigbee2mqtt")
+RESERVED = (f".cave/{_server.OPS_DIR}", ".cave/lock")
+"""No restored link may point at or below these: the commands' own records, snapshots and lock."""
+
+
+def _target(ctx: Context, args: argparse.Namespace) -> tuple[Path, str]:
+    """Where to restore, and why there. Never from the archive: its ``.env`` could name any
+    directory, and root would then move that directory's contents aside and write into it."""
+    if args.data:
+        return Path(args.data).expanduser().resolve(), "given with --data"
+    named = load_env(ctx.paths.env_file).get("CAVE_DATA")
+    if named:
+        return Path(named).expanduser().resolve(), f"CAVE_DATA in {ctx.paths.env_file}"
+    default = default_data_dir(ctx.paths.root, os.environ)
+    return default, "no .env yet: the default state directory"
+
+
+def _is_state_dir(path: Path) -> bool:
+    """Missing, empty, or what ``init``, ``restore`` or the services made: safe to restore into."""
+    if not path.exists():
+        return True
+    if not path.is_dir() or path.is_symlink():
+        return False
+    names = set(os.listdir(path))
+    return not names or bool(names & {".cave", *SERVICE_ENTRIES})
 
 
 def _check_release(ctx: Context, manifest: dict[str, Any], force: bool, commit: str) -> None:
@@ -208,9 +253,18 @@ def _restore(
     needed = archive.size + SPACE_MARGIN
     free = _server.free_bytes(existing)
     if free < needed:
+        repeat = _server.restore_in_progress(ctx) is not None
         raise CaveError(
             f"unpacking needs about {needed // 2**20} MiB, but only {free // 2**20} MiB are free "
-            f"on {existing}. Nothing was changed."
+            f"on {existing}. "
+            + (
+                "The stack is stopped and the state half restored from an earlier attempt: free "
+                "space (older .cave/ops/before-restore-* directories, old archives in "
+                "CAVE_BACKUP_DIR, `sudo docker image prune -a`) and run it again, or restore "
+                f"another archive. See {OPERATIONS}, 'A restore that cannot finish'."
+                if repeat
+                else "Nothing was changed."
+            )
         )
 
     elsewhere = _server.entries_elsewhere(ctx) if data.is_dir() else []
@@ -289,7 +343,9 @@ def _restore(
     except OSError as error:
         raise CaveError(
             f"the restore stopped half-way while moving the state into place: {error}. The stack "
-            f"is stopped. Run the same restore again; the previous state is in {aside}."
+            "is stopped, and update and backup wait for the restore. Run the same restore again; "
+            "if it stops at the same place again, restore another archive (an older one). The "
+            f"state from before is in {aside}. See {OPERATIONS}, 'A restore that cannot finish'."
         ) from error
     _server.remove(staging)
     _server.sync()
@@ -303,10 +359,13 @@ def _restore(
     env_file = ctx.paths.env_file
     if env_file.exists():
         os.replace(env_file, env_file.with_name(f".env.before-restore-{stamp}"))
-    text = archive.env_text
-    if archived_env.get("CAVE_DATA") != str(data):
-        text = apply_updates(text, {"CAVE_DATA": str(data)})
-    _server.write_atomic(env_file, text.encode(), 0o600)
+    # Only the variables of concept section 4.2, so that the archive cannot set anything else
+    # that Compose reads from .env (COMPOSE_FILE, COMPOSE_PROJECT_NAME, ...); CAVE_DATA is the
+    # directory actually used.
+    values = {name: value for name, value in archived_env.items() if name in NAMES}
+    values["CAVE_DATA"] = str(data)
+    ignored = sorted(name for name in archived_env if name not in NAMES)
+    _server.write_atomic(env_file, (HEADER + "\n" + render(values)).encode(), 0o600)
     if _server.is_root():
         info = ctx.paths.root.stat()
         os.chown(env_file, info.st_uid, info.st_gid)
@@ -323,6 +382,12 @@ def _restore(
         f"{archive.manifest.get('release')}) into {data}."
     )
     done += abandoned
+    if ignored:
+        done += (
+            " Variables in the archive's .env that cave does not know were left out: "
+            + ", ".join(ignored)
+            + "."
+        )
     if current:
         done += f" The state before the restore is kept in {aside}; remove it when all is well."
     if args.no_start:
