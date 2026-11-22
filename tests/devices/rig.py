@@ -414,6 +414,20 @@ class Rig:
         future = [delay for delay in delays if delay > 0]
         return timedelta(seconds=min(future)) if future else None
 
+    async def mqtt_reconnected(self) -> None:
+        """After Home Assistant has reloaded its MQTT integration: subscribe and announce it.
+
+        A real client receives the retained discovery once it has subscribed, and publishes its
+        birth message (``homeassistant/status`` ``online``), to which Zigbee2MQTT answers with
+        every device's state 30 s later. Home Assistant's own birth task waits for a discovery
+        cooldown on the real monotonic clock, which does not pass under the frozen test clock
+        (``cave_sim.testing`` republishes at the start for the same reason), so the birth
+        message is published here on its behalf.
+        """
+        await self.sim.async_flush_subscriptions()
+        self.sim.broker.publish(HOME_ASSISTANT_CLIENT, "homeassistant/status", b"online")
+        await self.hass.async_block_till_done()
+
     async def past_start_window(self) -> None:
         """No report is a hand change for confirm_timeout (5 min) after a start: let it pass."""
         await self.advance(5 * MIN + 5 * SEC)

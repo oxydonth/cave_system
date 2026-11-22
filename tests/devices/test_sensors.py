@@ -5,7 +5,9 @@ from __future__ import annotations
 
 import pytest
 from homeassistant.helpers import entity_registry as er
+from homeassistant.util import dt as dt_util
 
+from cave_sim.testing import HOME_ASSISTANT_CLIENT
 from cave_sim.zigbee.discovery import project_device_options
 from tests.devices.capabilities import devices
 from tests.devices.rig import (
@@ -176,16 +178,50 @@ async def test_sensor_last_seen_enabled_after_an_upgrade(rig: Rig, device: str) 
     assert rig.commands(TRVZB) == OFF
     rig.mark()
     log_start = len(rig.sim.broker.log)
-    last = None
-    for second in range(120):
+    watched = (CONTACT, TRVZB.climate, TEMPERATURE)
+    seen: dict[str, list[str]] = {entity_id: [] for entity_id in (*watched, WINDOW_OPEN)}
+
+    async def second() -> None:
         await rig.advance(1 * SEC)
-        if second == 32:
-            await rig.sim.async_flush_subscriptions()
-        now = tuple(getattr(rig.hass.states.get(e), "state", None) for e in (CONTACT, TRVZB.climate, WINDOW_OPEN, LAST_SEEN, TEMPERATURE))
-        if now != last:
-            print(second, now, rig.commands(TRVZB))
-            last = now
-    print([ (m.topic, m.payload) for m in rig.sim.broker.log[log_start:] if m.sender == "homeassistant"])
+        for entity_id, states in seen.items():
+            state = rig.hass.states.get(entity_id)
+            if state is not None and (not states or states[-1] != state.state):
+                states.append(state.state)
+
+    for _ in range(40):
+        await second()
+        if rig.state(CONTACT).state == "unavailable":
+            break
+    assert all(seen[entity_id][-1] == "unavailable" for entity_id in watched), "the reload"
+    await rig.mqtt_reconnected()
+    for _ in range(40):
+        await second()
+    assert seen[CONTACT] == ["on", "unavailable", "unknown", "on"]
+    assert seen[TRVZB.climate] == ["off", "unavailable", "unknown", "off"]
+    assert seen[WINDOW_OPEN] == ["on"], "the pause held through the reload"
+    assert rig.commands(TRVZB) == [], "no mode or target command"
+    to_zigbee2mqtt = [
+        (message.topic, message.payload.decode())
+        for message in rig.sim.broker.log[log_start:]
+        if message.sender == HOME_ASSISTANT_CLIENT and message.topic.startswith("zigbee2mqtt/")
+    ]
+    # The thermostat came back while its settings entities were still unknown (concept 5.5,
+    # device settings): those are written once more, with the configured values. Nothing else.
+    settings = {
+        f"zigbee2mqtt/{TRVZB.name}/set/temperature_sensor_select": "remote_temperature",
+        f"zigbee2mqtt/{TRVZB.name}/set/open_window": "OFF",
+    }
+    assert all(settings.get(topic) == payload for topic, payload in to_zigbee2mqtt), to_zigbee2mqtt
+    assert dt_util.parse_datetime(rig.state(LAST_SEEN).state) is not None
+    assert not rig.problem()
+
+    rig.sim.home.set_window(CONTACT_ID, False)
+    await rig.advance(3 * MIN)
+    rig.mark()
+    for half_hour in range(1, 25):
+        await rig.advance(30 * MIN)
+        assert rig.room_runtime().sensor_fresh, f"fresh after {half_hour / 2} h"
+    assert len(rig.writes(TRVZB.name, EXTERNAL)) >= 25, "the feed went on for twelve hours"
 
 
 @pytest.mark.parametrize("device", devices("contact_starts_and_ends_window_pause"))

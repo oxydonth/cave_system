@@ -112,7 +112,7 @@ def project_device_options() -> dict[str, Any]:
     with every message the device sends, so that ``cave_heating`` can tell a live room sensor in
     a steady room from a dead one (concept section 5.4).
     """
-    return {}
+    return {"homeassistant": {"last_seen": {"enabled_by_default": True}}}
 
 
 @dataclass(frozen=True)
