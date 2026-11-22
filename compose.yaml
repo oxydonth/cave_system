@@ -55,7 +55,7 @@ services:
     logging: *logging
 
   mosquitto:
-    image: eclipse-mosquitto:2.0.22
+    image: eclipse-mosquitto:2.0.23
     restart: unless-stopped
     environment:
       TZ: ${TZ:-Europe/Berlin}
