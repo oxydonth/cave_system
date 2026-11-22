@@ -22,8 +22,9 @@ from tests.packages.helpers import START
 def clock(freezer: FrozenDateTimeFactory) -> FrozenDateTimeFactory:
     """Freeze the clock at ``START`` for every test, before Home Assistant is set up.
 
-    The package's sensors run on a time pattern: second 0 of every minute plus an offset of 50 to
-    500 ms that Home Assistant draws at random for each tracker. ``advance`` moves whole minutes,
+    The package's sensors are evaluated by a time pattern (a trigger of the automation "Cave: notify
+    about what needs attention"): second 0 of every minute plus an offset of 50 to 500 ms that
+    Home Assistant draws at random for each tracker. ``advance`` moves whole minutes,
     so the clock keeps its second within the minute for the whole test, and that second used to
     be wherever the real clock was when the test started. Two of them made tests fail now and
     then (see ``check_clock`` in helpers.py); second 30, half a minute from both, makes every
@@ -45,10 +46,10 @@ def auto_enable_custom_integrations(
 
 @pytest.fixture
 def expected_lingering_timers() -> bool:
-    """Allow the one-minute timer of the notification sensors to outlive the test.
+    """Allow the one-minute timer of the package's automation to outlive the test.
 
-    The template integration keeps the timer of a trigger-based entity until the process ends; it
-    does not cancel it when Home Assistant stops, and the test library otherwise fails the test.
+    Stopping Home Assistant does not detach an automation's triggers, so the timer of its time
+    pattern is still scheduled when the test ends, and the test library otherwise fails the test.
     """
     return True
 

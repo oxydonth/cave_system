@@ -25,8 +25,9 @@ START = datetime(2026, 1, 14, 12, 0, 30, tzinfo=UTC)
 def check_clock() -> None:
     """Fail unless the frozen clock is clear of the boundary of a minute.
 
-    The sensors' time pattern fires at second 0 of a minute plus a random offset of up to
-    0.5 s, and ``advance`` keeps the clock's second within the minute. Two seconds break it:
+    The time pattern that evaluates the sensors fires at second 0 of a minute plus a random
+    offset of up to 0.5 s, and ``advance`` keeps the clock's second within the minute. Two
+    seconds break it:
 
     - In the first second of a minute, past the offset, the first time the tracker computes
       while the package is set up is already over, so the sensors are evaluated during the set-up,

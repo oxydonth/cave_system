@@ -1,11 +1,12 @@
 """The clock these tests run on: every minute that ``advance`` moves is one the sensors see.
 
-The sensors are evaluated by a time pattern at second 0 of every minute plus an offset that Home
-Assistant draws at random between 50 and 500 ms. While the clock was frozen wherever the real
-clock happened to be when a test started, a test that started in the last half second of a minute
-saw an evaluation in every other minute only, and one that started in the first second of a
-minute, past the offset, had its first evaluation while the package was being set up, before
-anything listened (``check_clock`` in helpers.py). Both are checked here at both ends of the offset.
+The sensors are evaluated by a time pattern (of the automation that pushes) at second 0 of every
+minute plus an offset that Home Assistant draws at random between 50 and 500 ms. While the clock
+was frozen wherever the real clock happened to be when a test started, a test that started in the
+last half second of a minute saw an evaluation in every other minute only, and one that started in
+the first second of a minute, past the offset, had its first evaluation while the package was being
+set up, before anything listened (``check_clock`` in helpers.py). Both are checked here at both
+ends of the offset.
 """
 
 from collections.abc import Iterator
@@ -38,13 +39,17 @@ async def test_home_assistant_runs_on_the_frozen_clock_from_its_start(hass: Home
     The frozen clock is read live, so the first two lines would hold even if ``hass`` had been
     set up before ``clock`` froze it. The timer Home Assistant schedules while it is set up (a
     daily one) shows when that was: set before the freeze, it would be on the real monotonic
-    clock, far below ``START``, or gone, run when the clock jumped; either way this fails.
+    clock, far below ``START``, or gone, run when the clock jumped; either way this fails. Set up
+    after ``freezer`` but before ``clock`` moved it, Home Assistant would have started on the
+    frozen real date, long after ``START``, and its daily timer would be due long after the day
+    after ``START``: the upper bound catches that.
     """
     assert dt_util.utcnow() == START
     assert hass.loop.time() == START.timestamp()
     timers = [h.when() for h in get_scheduled_timer_handles(hass.loop) if not h.cancelled()]
     assert timers, "no timer from the set-up of Home Assistant is left"
     assert min(timers) >= START.timestamp()
+    assert max(timers) <= START.timestamp() + 2 * 86400
 
 
 async def test_every_minute_is_one_evaluation_and_the_first_comes_after_the_set_up(
