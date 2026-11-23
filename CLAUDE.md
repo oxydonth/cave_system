@@ -43,7 +43,7 @@ tests that need Docker and the job `e2e` (the stack, the simulator image, the en
   regenerate `uv.lock` instead of merging it by hand.
 - The pipeline is `.github/workflows/ci.yml`; its jobs are listed at the top of that file and in "Shared files" of
   `docs/work-packages.md`. GitHub bills every job rounded up to the minute, so a new check is a step in the job that
-  already has what it needs (`lint` for static checks, `test` for tests and hassfest, `e2e` for checks with
+  already has what it needs (`lint` for static checks and hassfest, `test` for tests, `e2e` for checks with
   containers: `.github/actions/stack/`, `.github/actions/sim/` or `e2e.yml` itself), with
   `if: ${{ !cancelled() }}` when it is not the first check of its job. A new job is the last resort and goes into
   `needs` of `ci-ok`. `ci-ok` is the one check to look at: it fails when a job failed, was cancelled, or was skipped
