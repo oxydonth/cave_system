@@ -11,7 +11,7 @@ ConditionPathExists=/opt/cave/.env
 Type=oneshot
 # The service user, who may ask Docker; provision-host.sh writes the name given with --user.
 # It never takes the lock, it only reads who holds it.
-User=root
+User=cave
 WorkingDirectory=/opt/cave
 # A hung Docker makes each of its questions time out after a minute; then it is over.
 TimeoutStartSec=4min
