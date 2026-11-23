@@ -19,6 +19,11 @@ which then takes precedence over the old note.
 
 A command that fails or refuses before it has changed anything leaves the record as it was
 (``read_stopped`` and ``restore_stopped``).
+
+The record states an intent, and it can be stale (a start without ``cave``, an ``up`` or ``down``
+cut off between its steps). So no decision to leave a stack stopped, or to stay silent about it,
+rests on the record alone: ``status``, ``cave watch`` and a restore that cannot unpack also look at
+whether anything of the stack runs.
 """
 
 from __future__ import annotations

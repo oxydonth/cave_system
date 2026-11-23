@@ -583,8 +583,19 @@ def test_a_memory_that_says_alerted_is_not_trusted_while_it_cannot_be_written(
     monkeypatch.setattr(alert, "write_atomic", full)
     for minute in range(20, 31, 5):
         watch(minute, code=1)
-
     assert headlines(receiver) == ["the stack is stopped"] * 4
+
+    # The stack recovers while the disk stays full: no all-clear, run after run, though the
+    # memory still says that an incident was alerted.
+    server.stack.start(OLD)
+    for minute in range(35, 61, 5):
+        watch(minute, code=1)
+    assert headlines(receiver) == ["the stack is stopped"] * 4
+
+    # Once the memory can be written again, the incident it had remembered gets its all-clear.
+    monkeypatch.undo()
+    watch(65)
+    assert headlines(receiver) == ["the stack is stopped"] * 4 + ["healthy again"]
 
 
 def test_a_memory_that_cannot_be_read_counts_as_empty(server, receiver, watch):

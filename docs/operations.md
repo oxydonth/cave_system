@@ -136,10 +136,22 @@ next run. A send takes at most 10 seconds, whatever the receiver does, and never
 command's exit status.
 
 **When the watch cannot write its memory** (a full disk, or `/var/lib/cave/.cave` not writable by
-the service user), it cannot count fifteen minutes either. So it alerts an incident at once, and
-again at every run, each alert saying "this may repeat every five minutes"; an all-clear it sends
-may repeat too. An unwritable memory can cause more alerts, never fewer. A full disk is a likely
-reason for Home Assistant to fail, and exactly when you need to hear.
+the service user), it trusts nothing it has remembered, because it could not remember what it does
+next either. Each run tries the write first. While it fails:
+
+* every run with an incident sends that incident's alert, at once, without waiting fifteen
+  minutes, and whatever the memory says was sent before; each says "this repeats every five
+  minutes while the incident lasts, and no all-clear follows";
+* no all-clear is sent: without a memory it would go out again every five minutes for as long as
+  the stack is healthy and the disk full. When the stack is healthy again, the repeated alerts
+  simply stop;
+* once the memory can be written again, the watch works as usual: an incident it had alerted
+  and remembered before the disk filled gets its all-clear then.
+
+So an unwritable memory brings more alerts, never fewer, and never silence during an incident. A
+full disk is a likely reason for Home Assistant to fail, and exactly when you need to hear. A
+memory that cannot be read (a damaged file) counts as empty: the next incident is alerted after its
+fifteen minutes as usual, and the file is written anew.
 
 The title is `<server>: <what happened>`:
 
@@ -170,7 +182,8 @@ What `cave watch` prints (its journal is `journalctl -u cave-watch.service`), an
 | `… (since HH:MM UTC): alerted once it has lasted 15 minutes.` | An incident, not yet 15 minutes old. | The time it was first seen. |
 | `Alert sent: …` / `…: alerted already.` | The incident's alert went out now / earlier. | The incident open, until healthy. |
 | `The alert (…) could not be sent: …. The next run tries again.` | The receiver did not take it. | The incident not alerted; the next run tries again. |
-| `cave watch cannot remember what it has alerted (…): it alerts an incident at once and at every run …` (exit status 1) | `/var/lib/cave/.cave/watch.json` could not be written (a full disk, `.cave` not the service user's). | An incident is alerted at once, without waiting 15 minutes, and again every five minutes until the memory can be written; each such alert says so. Free space on the disk that holds `/var/lib/cave`, or give `.cave` back to the service user. |
+| `cave watch cannot remember what it has alerted (…): until the memory can be written it alerts an incident at once and at every run, and sends no all-clear.` (exit status 1) | `/var/lib/cave/.cave/watch.json` could not be written (a full disk, `.cave` not the service user's). | An incident is alerted at once and again every five minutes while it lasts, each alert saying so; no all-clear. Free space on the disk that holds `/var/lib/cave`, or give `.cave` back to the service user. |
+| `The stack is healthy (no all-clear while the memory cannot be written).` (exit status 1) | The stack is healthy, and the memory cannot be written. | No all-clear; the repeated incident alerts have stopped. |
 
 ## Stopped on purpose
 
@@ -182,12 +195,31 @@ start of the stack by `cave` removes it: `./cave up` once Compose has started th
 restore or `--undo` once it changes the state, and the recovery. A command that refuses or fails
 before it has changed anything leaves it as it was: a restore that says "Nothing was changed", an
 `up` whose Compose fails, a `down` whose Docker fails (it records the stop first and takes it back
-then). A restore that cannot unpack its archive does not start a stack that was stopped on purpose
-either. The record does not cover a stack that runs but is unhealthy, Docker not answering, an
-interrupted update or a restore that stopped half-way: those are reported in any case. A record
-that containers still outlive five minutes after it was written (a `down` killed before Docker
-stopped anything, or a stack started with `docker compose` directly) is removed by `cave watch`,
-so that a later stop is reported.
+then).
+
+**The record says what was meant; what runs decides.** It can be stale: you started the stack
+with `docker compose` directly after `./cave down`, or an `up` or `down` was cut off between its
+steps. So no command leaves a running stack stopped, or stays silent about it, because of the
+record alone:
+
+* `status` shows `NOT STARTED` only while nothing of the stack runs; over running containers the
+  `Stack` line says what is wrong;
+* `cave watch` counts only a stack of which nothing runs as stopped on purpose; a stack that runs
+  but is unhealthy is reported whatever the record says, and a record that containers outlive by
+  five minutes is removed, so that a later stop is reported;
+* a restore that cannot unpack its archive leaves the stack stopped only if nothing of it ran
+  when the restore began (and the record says it was stopped on purpose); a stack that ran is
+  started again;
+* the recovery at boot, `update`, `restore --undo` and the way back of an interrupted update
+  start the stack without asking the record.
+
+The record does not cover Docker not answering, an interrupted update or a restore that stopped
+half-way: those are reported in any case.
+
+An `up` that fails entirely after `./cave down` (Compose refuses, nothing starts) keeps the record:
+`cave watch` then stays silent about the stopped stack, although you asked for a start. You saw the
+failure in the terminal; run `./cave up` again once its cause is fixed, and the record goes when
+Compose has started the containers.
 
 After an update from v2026.11.22.1, the note of a `--no-start` restore of that version may still
 be in `/var/lib/cave/.cave/ops/not-started.json`, which the service user cannot remove. A start
