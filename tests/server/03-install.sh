@@ -42,10 +42,13 @@ exit 1
 EOF
 }
 
-# docs/install.md, step 6: the owner edits .env as the service user. Here: the alert URL.
+# docs/install.md, step 6: the owner edits .env as the service user. Here: the alert URL. It
+# reaches the service user's sed on standard input, so that sudo's log of the command line, which
+# goes to the journal, does not hold the token: a later check looks for it there.
 set_the_alert_url() {
-  vm "sudo -u cave sed -i 's|^CAVE_ALERT_URL=.*|CAVE_ALERT_URL=http://:$(recall alert-token)@127.0.0.1:8090/cave|' /opt/cave/.env &&
-      sudo -u cave grep -c '^CAVE_ALERT_URL=http://:' /opt/cave/.env"
+  vm 'sudo -u cave sh -c '\''url=$(cat); sed -i "s|^CAVE_ALERT_URL=.*|CAVE_ALERT_URL=${url}|" /opt/cave/.env'\'' &&
+      sudo -u cave grep -c "^CAVE_ALERT_URL=http://:" /opt/cave/.env' \
+    <<< "http://:$(recall alert-token)@127.0.0.1:8090/cave"
 }
 
 apply_a_room() {
@@ -57,17 +60,13 @@ memory_and_containers() {
   vm 'free -m; sudo docker stats --no-stream; sudo docker image ls; df -h /'
 }
 
-cave() {
-  vm "cd /opt/cave && sudo -u cave ./cave $*"
-}
-
 step "start the alert receiver in the machine" start_the_alert_receiver
 step "cave init" cave init
 check ".env is the service user's, mode 600" equals "cave 600" vm "stat -c '%U %a' /opt/cave/.env"
 check "init created the state directory's entries as the service user's" \
   equals "" vm 'sudo find /var/lib/cave ! -user cave'
 check "init recorded that the stack was not started yet (stopped on purpose)" \
-  vm 'test -f /var/lib/cave/.cave/stopped.json'
+  vm 'sudo test -f /var/lib/cave/.cave/stopped.json'
 check "a second init changes nothing" contains '^Nothing to do: already initialised\.$' cave init
 step "fill in .env: CAVE_ALERT_URL" set_the_alert_url
 step "pull the images (docker compose pull, as the service user)" \

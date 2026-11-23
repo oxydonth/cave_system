@@ -57,7 +57,7 @@ jobs:
     timeout-minutes: 120
     env:
       REHEARSAL_DIR: /mnt/rehearsal
-      REHEARSAL_PARTS: ${{ inputs.parts || 'install' }}
+      REHEARSAL_PARTS: ${{ inputs.parts || 'down-up' }}
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
@@ -82,6 +82,38 @@ jobs:
       - name: "Part install: init, check, up, bootstrap, apply"
         if: ${{ !cancelled() }}
         run: tests/server/03-install.sh
+
+      - name: "Part backup: the nightly backup by its unit"
+        if: ${{ !cancelled() }}
+        run: tests/server/04-backup.sh
+
+      - name: "Part update: the nightly update installs a newer release"
+        if: ${{ !cancelled() }}
+        run: tests/server/05-update.sh
+
+      - name: "Part update-broken: a release that does not become healthy is rolled back"
+        if: ${{ !cancelled() }}
+        run: tests/server/06-update-broken.sh
+
+      - name: "Part restore: same directory, half-way and --undo, a new directory"
+        if: ${{ !cancelled() }}
+        run: tests/server/07-restore.sh
+
+      - name: "Part reboot: the stack comes back, the recovery runs"
+        if: ${{ !cancelled() }}
+        run: tests/server/08-reboot.sh
+
+      - name: "Part power-cut: switched off hard during an update's switch, twice"
+        if: ${{ !cancelled() }}
+        run: tests/server/09-power-cut.sh
+
+      - name: "Part down-up: stopped on purpose, started again; the lock's holder"
+        if: ${{ !cancelled() }}
+        run: tests/server/10-down-up.sh
+
+      - name: "Part watch: an incident in real time, the alert, the all-clear"
+        if: ${{ !cancelled() }}
+        run: tests/server/11-watch.sh
 
       - name: Summary
         if: ${{ always() }}

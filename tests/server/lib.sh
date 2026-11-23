@@ -213,6 +213,61 @@ exits() {
   [ "${status}" -eq "${expected}" ]
 }
 
+# ------------------------------------------------------------------------------ the machine
+# cave ARGS: `cd /opt/cave && sudo -u cave ./cave ARGS`, the owner's everyday form.
+cave() {
+  vm "cd /opt/cave && sudo -u cave ./cave $*"
+}
+
+# sudo_cave ARGS: `cd /opt/cave && sudo ./cave ARGS`, for update, backup and restore.
+sudo_cave() {
+  vm "cd /opt/cave && sudo ./cave $*"
+}
+
+# unit_outcome UNIT: "<result> <exit status>" of the unit's last run, as systemd recorded them.
+unit_outcome() {
+  vm "echo \$(systemctl show -p Result --value $1) \$(systemctl show -p ExecMainStatus --value $1)"
+}
+
+# state_dir: the state directory in use, /var/lib/cave until the restore part moves it.
+state_dir() {
+  cat "${FACTS}/data" 2> /dev/null || echo /var/lib/cave
+}
+
+# broker_tag_of RELEASE: the broker image that the release's compose.yaml names.
+broker_tag_of() {
+  vm "sudo -u cave git -C /opt/cave show $1:compose.yaml" |
+    sed -nE 's|^ *image: (eclipse-mosquitto:[0-9.]+)$|\1|p'
+}
+
+# alerts: every request the alert receiver got, one JSON object per line, oldest first.
+alerts() {
+  vm 'sudo cat /var/lib/alert-receiver/alerts.jsonl 2> /dev/null || true'
+}
+
+alert_count() {
+  alerts | wc -l | tr -d ' '
+}
+
+alert_count_is() {
+  [ "$(alert_count)" -ge "$1" ]
+}
+
+# alert_titles_after N: the titles of the alerts after the first N, one per line, each with
+# whether it carried the URL's token.
+alert_titles_after() {
+  alerts | tail -n "+$(($1 + 1))" | jq -r '"\(.title) (token: \(.authorised))"'
+}
+
+last_alert_body() {
+  alerts | tail -n 1 | jq -r .body
+}
+
+# token_in_the_journal: how many lines of the machine's whole journal hold the alert URL's token.
+token_in_the_journal() {
+  vm "sudo journalctl --no-pager | grep -c -F '$(recall alert-token)' || true"
+}
+
 # remember NAME VALUE / recall NAME: facts that a later part needs.
 remember() {
   printf '%s' "$2" > "${FACTS}/$1"

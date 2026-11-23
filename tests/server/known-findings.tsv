@@ -1,0 +1,5 @@
+# Known findings of the server rehearsal: a step or check that fails for a defect with an open
+# issue. One line per step or check, three fields separated by one tab: the part, the name of the
+# step or check exactly as the part's script writes it, and the issue (#N). Such a failure is
+# reported as the finding and does not fail the job; if it passes, the job fails, so that the
+# line is removed once the defect is fixed. Lines starting with # are comments.
