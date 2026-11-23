@@ -475,6 +475,11 @@ def _restore(
             counter += 1
             backup = env_file.with_name(f".env.before-restore-{stamp}-{counter}")
         _server.write_atomic(backup, env_file.read_bytes(), 0o600)
+        if _server.is_root():
+            # The checkout is the service user's; a file of root's in it is one the service user
+            # cannot read (found by the server rehearsal).
+            info = ctx.paths.root.stat()
+            os.chown(backup, info.st_uid, info.st_gid)
         series["env_backup"] = backup.name
         _write_marker(marker, series)
     # Only the variables of concept section 4.2 (`render` writes exactly the table), so that the

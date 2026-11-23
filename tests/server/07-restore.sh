@@ -77,7 +77,7 @@ check "a restore that worked sends no alert" equals "${alerts_before}" alert_cou
 # --- 2. a restore that stops half-way, and --undo
 entries_before=$(config_entries)
 step "make the state's zigbee2mqtt entry immutable, so that it cannot be moved" \
-  vm 'sudo chattr +i /var/lib/cave/zigbee2mqtt && lsattr -d /var/lib/cave/zigbee2mqtt'
+  vm 'sudo chattr +i /var/lib/cave/zigbee2mqtt && sudo lsattr -d /var/lib/cave/zigbee2mqtt'
 step "sudo ./cave restore the archive again (it is meant to stop half-way)" \
   vm "cd /opt/cave && sudo ./cave restore /var/backups/cave/$(recall archive-2) > ~/restore-2.log 2>&1; echo \"exit status \$?\" >> ~/restore-2.log; cat ~/restore-2.log"
 check "the restore exits 1 and says it stopped half-way" \
@@ -102,6 +102,8 @@ check "the undo says the state from before is back and the stack is healthy" \
   contains '^The restore that stopped half-way was undone: /var/lib/cave holds the state from before\. The stack is healthy\.$' \
   log undo.log
 check "cave status exits 0 again" exits 0 cave status
+check "the .env put back is the service user's, mode 600" \
+  equals "cave 600" vm "stat -c '%U %a' /opt/cave/.env"
 check "no restore marker is left" vm 'sudo test ! -e /var/lib/cave/.cave/ops/restore.json'
 step "the owners and modes after the undo" owners /var/lib/cave owners-after-undo
 check "every file has the owner and mode it had before the half-way restore" \

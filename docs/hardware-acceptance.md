@@ -285,128 +285,103 @@ a real device's messages. There is no recorder for the FRITZ!Box: what a real bo
 ## 6. The server
 
 The update, backup, restore and watch are tested with real files and real Git, but with Docker
-faked, as an ordinary user, without systemd and without pulling a plug. What only the server can
-show is here. Do it once after the install, and again after a release that changes
-[operations.md](operations.md). Run each command in `/opt/cave`.
+faked, as an ordinary user, without systemd and without pulling a plug. The
+[server rehearsal](operations.md#the-server-rehearsal) does what those tests cannot: on a Debian 13
+virtual machine it provisions the host, installs, backs up, updates, rolls back, restores, reboots,
+cuts the power during updates and waits for the watch's alert, as root and as the service user,
+under systemd, with a real Docker. It runs on every change to the operations commands, so each
+point below says whether the rehearsal answers it, and with what, or what stays for your server
+and why. The rehearsal's machine is not a Raspberry Pi, has no SD card, no ntfy and no real mains;
+what follows from that is all that is left here. Do it once after the install, on your server, and
+again after a release that changes [operations.md](operations.md). Run each command in `/opt/cave`.
+
+| Point | Answered by | Evidence, or why it stays |
+|---|---|---|
+| 6.1 Git as the service user, started by root | The rehearsal | `update`: the nightly unit fetched as the service user and installed, no message about `/root`; `watch`: `runuser -u cave` gives `HOME=/var/lib/cave-home`, root's fetch as the service user works from the checkout and from the public repository over HTTPS without a key. |
+| 6.2 Files that belong to root and to the containers | The rehearsal | `restore`: the owners and modes of every path present before and after a backup and its restore are equal (the guide's own `find`), also in a new state directory; `.cave` and the lock are the service user's after every root command, and `apply` takes the lock after each. |
+| 6.3 The timers and the boot | The rehearsal, except the nights | `provision`, `reboot`: three timers with a next run, the backup's next run between 02:30 and 02:40 and the update's between 03:30 and 03:45, the recovery started after Docker and exited 0, the stack back by itself; `watch`: a run every five minutes, as the service user, without "permission denied". Stays: the nightly runs themselves (the rehearsal starts the units instead of waiting for the night), and the boot of a Raspberry Pi. |
+| 6.4 Docker creating a missing bind-mount source | The rehearsal | `install`, `restore`: nothing in `/opt/cave` is root's after the first `up`, after every update and restore; the mount points `packages` and `custom_components/cave_heating` are the service user's. |
+| 6.5 A real power cut | Partly | `power-cut`: the machine killed while an update stopped the stack and while it started the new release; at boot the recovery did what "Interrupted updates" says for each phase, the checkout was clean, one alert (`update rolled back`) and none for the cut itself; `reboot`: the stack comes back by itself. Stays: a real plug, which can also cut a write to the disk half-way (an SD card or an SSD without power-loss protection), and the minutes a real server is off. |
+| 6.6 The alert and the watch | Partly | `down-up`, `watch`: nothing after `down`; one alert 15 to 20 minutes after a container was stopped, no second one, the all-clear after `up`; the alert holds only the server's name, the command, fixed words and the stack's state; the URL's token is in no journal. Stays: your own receiver (ntfy on the home network, its app on the phone, its token). |
+| 6.7 The disk over many releases | Partly | `update`, `update-broken`: after an installed update the previous release's image is kept; after a rollback the failed release's image is removed by name and the others kept. Stays: many releases over months on your disk. |
+| 6.8 What Docker lists, and what it refuses to remove | The rehearsal | `watch`: `docker image ls --digests` prints one line per repository and tag with the `sha256:` digest last; `docker image rm` of the image of a stopped container is refused ("conflict … is using its referenced image") and the image stays; `update-broken`: the clean-up read the real listing and removed exactly the failed release's image. |
+| The lock's holder after a reboot | The rehearsal | `down-up`: a lock held under a name written before its process started is not named, one written after it is (Linux's `/proc`); `power-cut`: `status` names the running update. |
+
+What stays is below, for your server.
 
 ### 6.1 Git as the service user, started by root
 
-`update` runs as root and starts Git as the owner of the checkout with `runuser -u cave -- git …`,
-so that the fetch uses the service user's deploy key. `runuser` may keep root's `HOME`; OpenSSH
-takes the key from the service user's own home either way, but Git also reads its configuration
-from `HOME`.
-
-- **Observe.** `sudo ./cave update`, with or without a new release, and read its first lines and
-  `sudo -u cave ./cave status` ("Last check"). Also
-  `sudo runuser -u cave -- sh -c 'echo $HOME; git -C /opt/cave fetch --dry-run'`.
-- **Result:** the fetch worked: yes / no; `HOME` was ______ ; messages about `/root`: ______ .
-- **Do with it.** A fetch that works is all that matters. "Could not fetch releases" with
-  "Permission denied" for a path below `/root`, or a host key question, is a defect: report it with
-  the output. Until it is fixed, updates are by hand (`sudo -u cave git -C /opt/cave fetch --tags`
-  works; `update` does the rest).
+Covered by the rehearsal. On your server only if an update says "Could not fetch releases": then
+`sudo runuser -u cave -- sh -c 'echo $HOME; git -C /opt/cave fetch --dry-run'`, and report the
+output if it names a path below `/root` or asks about a host key.
 
 ### 6.2 Files that belong to root and to the containers
 
-The state holds files of root and of the containers' users. A backup must keep their owners, a
-restore must give them back, and the lock must end up the service user's whoever took it first.
+Covered by the rehearsal. Delete the `before-restore-*` directory and the `.env.before-restore-*`
+file a restore names once all is well.
 
-- **Observe.** `sudo find /var/lib/cave -path '*/.cave/ops' -prune -o -printf '%u:%g %m %p\n' | sort > /tmp/owners-before`,
-  then `sudo ./cave backup` and `sudo ./cave restore /var/backups/cave/<the archive just written>`,
-  and the same `find` into `/tmp/owners-after`; `diff /tmp/owners-before /tmp/owners-after`. Then
-  `ls -l /var/lib/cave/.cave` (the lock file and `.cave` belong to `cave`), and
-  `sudo -u cave ./cave apply` (it takes the lock as the service user).
-- **Result:** the owners and modes differ in: ______ ; `.cave` and its lock belong to: ______ ;
-  `apply` took the lock: yes / no.
-- **Do with it.** Only the times of files Home Assistant wrote meanwhile may differ. Any owner or
-  mode that changed, or `apply` refusing with "cannot take the lock", is a defect: report it.
-  Delete the `before-restore-*` directory and the `.env.before-restore-*` file the restore names
-  once all is well.
+### 6.3 The nights and the boot of your server
 
-### 6.3 The timers and the boot
+The rehearsal reads the timers' next runs and starts the units itself; it does not wait for a
+night.
 
-- **Observe.** `systemctl list-timers 'cave-*'` lists `cave-backup.timer`, `cave-update.timer` and
-  `cave-watch.timer` with their next runs; the next morning, `journalctl -u cave-backup.service -u
-  cave-update.service --since yesterday` shows both nightly runs; `journalctl -u
-  cave-watch.service --since '-30min'` shows a run every five minutes, as the user `cave`, without
-  "permission denied" for Docker. Then `sudo reboot`, and afterwards `systemctl status
-  cave-recover.service` (ran and exited 0) and `sudo -u cave ./cave status` (healthy).
-- **Result:** the three timers are listed: yes / no; the watch runs every five minutes: yes / no;
-  after the reboot the stack is healthy: yes / no.
+- **Observe.** The morning after the install,
+  `journalctl -u cave-backup.service -u cave-update.service --since yesterday` shows both nightly
+  runs. After the first `sudo reboot` of your server, `systemctl status cave-recover.service` (ran
+  and exited 0) and `sudo -u cave ./cave status` (healthy).
+- **Result:** both nightly runs are in the journal: yes / no; after the reboot the stack is
+  healthy: yes / no.
 - **Do with it.** A timer that is missing: run `sudo /opt/cave/scripts/provision-host.sh` again.
   Anything else is a defect to report.
 
 ### 6.4 Docker creating a missing bind-mount source
 
-Docker creates a bind mount's missing source as root. `init` and `restore` create the ones in the
-checkout and the state directory first, so that none of them becomes root's and blocks a later
-update of the checkout.
-
-- **Observe.** After the first `./cave up`, and again after a restore,
-  `sudo find /opt/cave /var/lib/cave/homeassistant -maxdepth 2 -user root`.
-- **Result:** listed: ______ .
-- **Do with it.** Within `/opt/cave` nothing may be listed, `tools` least of all. In
-  `/var/lib/cave/homeassistant` files Home Assistant wrote are expected, but not the mount points
-  `packages` and `custom_components/cave_heating`. One of those listed is a defect: report it, and
-  `sudo chown cave: <it>`.
+Covered by the rehearsal.
 
 ### 6.5 A real power cut
 
-- **Observe.** While the stack runs normally, pull the plug, wait a minute, and plug it in again.
-  Ten minutes after the start, `sudo -u cave ./cave status`. If you want to see
-  an update interrupted: when a new release is out, run `sudo ./cave update` and pull the plug as
-  soon as it says "Stopping the stack"; after the start, `sudo -u cave ./cave status` and
-  `journalctl -t cave --since '-1h'`.
-- **Result:** the stack came back healthy by itself: yes / no; the interrupted update was rolled
-  back at boot ("An update from … was interrupted"): yes / no; an alert arrived (with
-  `CAVE_ALERT_URL` set): ______ .
-- **Do with it.** The stack has to come back by itself, and an interrupted update has to be rolled
-  back by `cave-recover.service` at boot. An alert for the minutes of the power cut itself is a
-  defect (two runs far apart start the watch's count afresh); one for an update that was
-  interrupted is right if its way back could not finish. Report anything else.
+The rehearsal kills its machine, which loses what the machine had not written to its disk, but its
+disk never fails half-way through a write, as an SD card or an SSD without power-loss protection
+can, and it is off for seconds, not minutes.
 
-### 6.6 The alert and the watch
+- **Observe.** While the stack runs normally, pull the plug, wait a minute, and plug it in again.
+  Ten minutes after the start, `sudo -u cave ./cave status`.
+- **Result:** the stack came back healthy by itself: yes / no; an alert arrived (with
+  `CAVE_ALERT_URL` set): ______ .
+- **Do with it.** The stack has to come back by itself. An alert for the minutes of the power cut
+  itself is a defect (two runs far apart start the watch's count afresh). If the server does not
+  boot or Docker's or Home Assistant's files are damaged, that is the disk: restore the last backup
+  ([operations.md](operations.md#restoring-a-backup)) and consider an SSD.
+
+### 6.6 Your alert receiver
+
+The rehearsal's receiver is a few lines of Python in its machine. Yours is ntfy, on the phone.
 
 - **Observe.** Set `CAVE_ALERT_URL` to a topic of your ntfy server and subscribe to it on the phone.
-  `sudo -u cave ./cave down`, wait 20 minutes: nothing arrives. `sudo -u cave ./cave up`. Then stop
-  one container without `cave`, `sudo docker stop cave-homeassistant-1`: after 15 to 20 minutes
-  one alert arrives ("the stack is not healthy" or "the stack is stopped"), and no second one.
-  `sudo -u cave ./cave up`: within five minutes "healthy again". Read the alert's text.
-- **Result:** no alert after `down`: yes / no; one alert, then one all-clear: yes / no; the text
-  holds the server's name, the command and the stack's state, and nothing else: yes / no.
-- **Do with it.** Anything else is a defect to report. If your receiver needs a token, check that
-  it is not in `journalctl -u cave-watch.service` nor in `journalctl -t cave`.
+  Stop one container without `cave`, `sudo docker stop cave-homeassistant-1`: after 15 to 20
+  minutes one alert arrives on the phone. `sudo -u cave ./cave up`: within five minutes "healthy
+  again".
+- **Result:** both arrived on the phone: yes / no.
+- **Do with it.** If nothing arrives, look for `The alert to CAVE_ALERT_URL could not be sent` in
+  `journalctl -u cave-watch.service` and check the receiver. If your receiver needs a token, check
+  that it is not in `journalctl -u cave-watch.service` nor in `journalctl -t cave`.
 
 ### 6.7 The disk over many releases
+
+The rehearsal installs two releases and rolls back one; your server installs many over months.
 
 - **Observe.** After the second and every later installed update, `sudo docker image ls` and
   `df -h /var/lib/cave`.
 - **Result:** versions of the Home Assistant, broker and Zigbee2MQTT images listed: ______ .
 - **Do with it.** At most two versions of each (the running release's and the one before) are
-  expected, three after a rollback, plus any your `compose.override.yaml` names. Every other
-  image of these three repositories is removed, also one that other software pulled, unless a
-  container of it exists; images of other repositories are never touched. More than that after
-  an update that said "Installed": look for `Old images were not removed` in
+  expected, three after a rollback, plus any your `compose.override.yaml` names. More than that
+  after an update that said "Installed": look for `Old images were not removed` in
   `journalctl -u cave-update.service`, and report it if the reason does not explain it.
 
 ### 6.8 What Docker lists, and what it refuses to remove
 
-The removal of old images relies on two things the tests can only fake: what
-`docker image ls --digests --format '{{.Repository}}\t{{.Tag}}\t{{.Digest}}'` prints (one line
-per repository and tag, `<none>` as the tag of an image that has only a digest, the image's
-`sha256:` digest in the last column), and that `docker image rm` without `--force` refuses an
-image that a stopped container uses.
-
-- **Observe.** `sudo docker image ls --digests --format '{{.Repository}}\t{{.Tag}}\t{{.Digest}}'`.
-  Then stop one container without removing it, `sudo docker stop cave-mosquitto-1`, try
-  `sudo docker image rm eclipse-mosquitto:<the version it runs>`, and start it again with
-  `sudo -u cave ./cave up`.
-- **Result:** the lines look as described: yes / no (paste one) ______ ; the removal was refused
-  ("conflict … is using its referenced image"): yes / no.
-- **Do with it.** Both as described is right. A listing that looks different (another column
-  order, an empty digest for an image that was pulled) or a removal that went through is a
-  defect: report it with the output, because the update could then remove an image it means to
-  keep. (After `./cave down` there are no containers at all, so nothing protects the stack's
-  images; that is why the update removes nothing while the stack is not running.)
+Covered by the rehearsal, on Debian 13's Docker from Docker's repository, which is what
+`provision-host.sh` installs on Raspberry Pi OS as well.
 
 ## When you are done
 
