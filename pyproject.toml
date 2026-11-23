@@ -11,6 +11,8 @@ dependencies = []
 dev = [
     "pytest",
     "pytest-cov",
+    # Runs the tests in parallel (`make test`). Pinned by the test library below, like pytest.
+    "pytest-xdist",
     # Pins Home Assistant 2026.10.4. Bump together with the image tag in compose.yaml.
     "pytest-homeassistant-custom-component==0.13.375",
     "ruff",

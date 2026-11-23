@@ -15,6 +15,12 @@ PRUNE := -path ./.git -prune -o -path ./.venv -prune -o -path ./.claude -prune -
 # mount source for Home Assistant), and mypy refuses a directory without any.
 TYPED_DIRS := custom_components $(foreach dir,sim tools,$(if $(shell find $(dir) -name '*.py' -print -quit 2>/dev/null),$(dir)))
 COV_ARGS := $(addprefix --cov=,$(TYPED_DIRS)) --cov=cave_ops
+# The tests run in parallel (pytest-xdist), in PYTEST_WORKERS processes: `logical`, the default,
+# is one per logical CPU; a number sets the count; 0 runs every test in the pytest process itself.
+# worksteal: a worker that runs out of tests takes some from a busy one, so that a file of long
+# tests does not keep one worker busy at the end. Coverage is combined from every worker.
+PYTEST_WORKERS ?= logical
+XDIST_ARGS := -n $(PYTEST_WORKERS) --dist worksteal
 YAML_FILES = $(shell find . $(PRUNE) -type f \( -name '*.yml' -o -name '*.yaml' \) -print)
 # A literal # cannot be written inside a function call in a way that make 3.81 (macOS) and 4.3
 # (Linux) agree on, so it comes from a variable.
@@ -52,16 +58,20 @@ typecheck: ## mypy --strict on custom_components, sim and tools; ops and cave ag
 	MYPYPATH=ops $(RUN) mypy --python-version 3.11 -p cave_ops
 	MYPYPATH=ops $(RUN) mypy --python-version 3.11 cave
 
-test: ## pytest with coverage
-	$(RUN) pytest $(COV_ARGS) --cov-report=term-missing
+test: ## pytest with coverage, in parallel (PYTEST_WORKERS processes, default one per CPU)
+	$(RUN) pytest $(XDIST_ARGS) $(COV_ARGS) --cov-report=term-missing
 
 # The tests of the `cave` command must also pass on the oldest Python it supports. They run in an
-# isolated environment with only pytest (and PyYAML for the checks of the YAML files), so that
-# nothing from Home Assistant can creep in. The configuration file is not named pytest.ini; see
-# the note in pyproject.toml. uv downloads Python 3.11 when it is missing.
+# isolated environment with only pytest, pytest-xdist to run them in parallel like `make test`, and
+# PyYAML for the checks of the YAML files, so that nothing from Home Assistant can creep in. The
+# configuration file is not named pytest.ini; see the note in pyproject.toml. uv downloads
+# Python 3.11 when it is missing. pytest-xdist is the version uv.lock holds (pinned by the test
+# library), so that a new release cannot change how this run distributes the tests; pytest and
+# PyYAML are left to resolve as before.
+XDIST_VERSION := $(shell sed -n '/^name = "pytest-xdist"$$/{n;s/^version = "\(.*\)"$$/\1/p;}' uv.lock)
 test-py311: ## The tests of tests/ops on Python 3.11, without Home Assistant
-	$(UV) run --isolated --no-project --python 3.11 --with pytest --with pyyaml \
-		pytest -c tests/ops/py311.ini --confcutdir=tests/ops tests/ops
+	$(UV) run --isolated --no-project --python 3.11 --with pytest --with pytest-xdist==$(XDIST_VERSION) --with pyyaml \
+		pytest $(XDIST_ARGS) -c tests/ops/py311.ini --confcutdir=tests/ops tests/ops
 
 versions: ## Home Assistant's version in uv.lock, compose.yaml and ci.yml, and its client libraries, agree
 	PYTHONPATH=ops $(RUN) python -m cave_ops.versioncheck
