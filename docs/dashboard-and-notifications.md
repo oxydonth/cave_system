@@ -40,6 +40,11 @@ on a phone. So:
   the three tiles of the home are named by the entity's own name alone: "Comfort temperature",
   "Away temperature". The frontend reads it from Home Assistant, so it is in the language the
   integration names it in, and a name you give the entity in Home Assistant is shown instead.
+- The window pause row reads "Window pause: Paused" or "Window pause: Not paused" (in German
+  "Fensterpause: Pausiert" and "Nicht pausiert"), and so does the badge in the room's heading,
+  which shows just "Paused" or "Not paused". It is the heating's pause, not a window: it starts
+  only after the room's open delay and ends after its close delay, so for that time it differs from
+  the state of the window contact below it. The contact's own row says "Open" or "Closed".
 - A window contact is named "Window contact", or "Window contact 1", "Window contact 2", ... in
   the order of `windows` when the room has several. Home Assistant's own name for it comes from
   the device and its device class, "Wohnzimmer Fenster Door" for a Zigbee contact on a window.
@@ -290,12 +295,14 @@ days) and a logbook line. `homeassistant/configuration.yaml` leaves that automat
 event `cave_attention_check` out of the recorder, so a minute in which nothing changes writes
 nothing. What is still recorded: the history of the five `sensor.cave_attention_*` sensors (when
 an entry appeared or went), `script.cave_notify`, and "Cave: send a notification copy", whose
-logbook line "triggered by event cave_notify_copy" marks each push to the phone. The automation
+logbook line "triggered by event cave_notify_copy" marks each copy, whether or not a phone is set. The automation
 itself has no history and no logbook lines, so when it was turned off or on cannot be looked up
 afterwards. Its traces (Settings, Automations, the automation, Traces) keep its last 120 runs,
-two hours of checks, so the run that pushed can be found there for two hours and no longer: for
-a push in the night, look in the morning at "Cave: send a notification copy", which runs only
-for a push, keeps its last five runs and holds the message. The 120 traces take about 700 kB,
+at most two hours of checks (exactly two hours only when every minute ran), so the run that pushed
+can be found there for at most two hours. For a push in the night, look in the morning at "Cave:
+send a notification copy". It runs for every copy that `script.cave_notify` sends, an update's
+message included, and also when no phone is set, so it keeps its last five runs of anything, not
+the last five pushes. It holds the message. The 120 traces take about 700 kB,
 held in memory and written to Home Assistant's storage when it stops.
 
 ### Testing it

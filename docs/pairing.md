@@ -120,9 +120,9 @@ thermostat up as soon as the box knows it. That login needs the Smart Home permi
 1. Put the batteries in the thermostat.
 2. On the thermostat press **MENU**: it starts the registration ("Anmeldung starten"). Then, within
    the time the thermostat allows, press the **Connect** button on the FRITZ!Box, or hold its **DECT**
-   button for 6 seconds. (The box's own pages can start a registration too: **Smart Home**,
-   **Devices and Groups** (Geräte und Gruppen), register a device (Gerät anmelden), according to
-   [AVM's knowledge base article](https://fritz.com/service/wissensdatenbank/dok/FRITZ-Smart-Thermo-302/1628_FRITZ-Heizkorperregler-einsetzen/).)
+   button for 6 seconds. (The box's own pages, **Smart Home**, **Devices and Groups** (Geräte und
+   Gruppen), may be able to start a registration too, but AVM's quick guide describes only the buttons,
+   and the labels differ between FRITZ!OS versions: use the buttons.)
 3. A symbol on the thermostat's display tells you that it worked; only then mount it on the radiator,
    and let it adapt the valve stroke (it shows a temperature when it has). If the display says the
    registration failed, AVM's "Alternatives Anmelden" is: hold **MENU** for 2 seconds, press the key
@@ -154,7 +154,7 @@ profile under **Smart Home**, **Devices and Groups**:
    thermostat cannot be operated by hand, and the concept expects the box to refuse commands while
    its summer or holiday mode or the key lock is active: Home Assistant then shows the thermostat as
    `blocked`. Test reports and forum posts say that the box ships with a heating-off period of about
-   1 June to 31 August, with the key lock; I did not find that in AVM's manual for the 302. If you see
+   1 June to 31 August, with the key lock; AVM's manual for the 302 does not mention it. If you see
    such a period, delete it, and use the home mode `off` in the dashboard for the summer instead.
 4. The thermostat's own window detection (Fenster-auf-Erkennung) may stay on in a room without a window
    contact.

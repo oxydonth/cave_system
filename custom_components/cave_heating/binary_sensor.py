@@ -38,10 +38,14 @@ async def async_setup_entry(
 
 
 class WindowOpenSensor(RoomEntity, BinarySensorEntity):
-    """``binary_sensor.cave_<room>_window_open``: on while the window pause is in effect."""
+    """``binary_sensor.cave_<room>_window_open``: on while the window pause is in effect.
 
-    _attr_device_class = BinarySensorDeviceClass.WINDOW
-    _attr_translation_key = "window_open"
+    It has no device class: it is the pause, which starts after the open delay and ends after the
+    close delay, not the window, so "Open" and "Closed" would contradict the contact's own row.
+    The translations name its states "Paused" and "Not paused".
+    """
+
+    _attr_translation_key = "window_pause"
 
     def __init__(self, runtime: HeatingRuntime, room: RoomRuntime) -> None:
         """Set the entity ID."""

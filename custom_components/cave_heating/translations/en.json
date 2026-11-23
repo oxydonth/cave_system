@@ -32,8 +32,12 @@
           }
         }
       },
-      "window_open": {
-        "name": "Window open"
+      "window_pause": {
+        "name": "Window pause",
+        "state": {
+          "off": "Not paused",
+          "on": "Paused"
+        }
       }
     },
     "button": {

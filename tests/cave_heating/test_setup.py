@@ -21,6 +21,7 @@ from homeassistant.helpers import area_registry as ar
 from homeassistant.helpers import device_registry as dr
 from homeassistant.helpers import entity_registry as er
 from homeassistant.helpers import issue_registry as ir
+from homeassistant.helpers.translation import async_get_translations
 from homeassistant.setup import async_setup_component
 from homeassistant.util import dt as dt_util
 from pytest_homeassistant_custom_component.typing import ClientSessionGenerator
@@ -83,6 +84,38 @@ async def test_entity_ids_and_unique_ids_are_exactly_those_of_section_5_2(
     assert entities == expected
     for entity_id in expected:
         assert hass.states.get(entity_id) is not None, entity_id
+
+
+async def test_the_window_pause_says_what_it_is_not_that_a_window_is_open(
+    hass: HomeAssistant, home: FakeHome
+) -> None:
+    """It is the pause, not a window: no device class, so no "Open" and "Closed" beside the contact.
+
+    The entity ID stays binary_sensor.cave_<room>_window_open (concept 5.2); only the name and
+    the words for its states change, through the translations.
+    """
+    await two_thermostats(home)
+    entry = await home.start(two_rooms())
+    registry = er.async_get(hass)
+    entity_id = "binary_sensor.cave_living_room_window_open"
+    registered = registry.async_get(entity_id)
+    assert registered is not None
+    assert registered.config_entry_id == entry.entry_id
+    assert registered.unique_id == "living_room_window_open"
+    assert registered.original_device_class is None
+    assert registered.translation_key == "window_pause"
+    assert "device_class" not in home.state(entity_id).attributes
+    assert registered.original_name == "Window pause"
+
+    for language, name, paused, not_paused in (
+        ("en", "Window pause", "Paused", "Not paused"),
+        ("de", "Fensterpause", "Pausiert", "Nicht pausiert"),
+    ):
+        translations = await async_get_translations(hass, language, "entity", [DOMAIN])
+        prefix = f"component.{DOMAIN}.entity.binary_sensor.window_pause"
+        assert translations[f"{prefix}.name"] == name
+        assert translations[f"{prefix}.state.on"] == paused
+        assert translations[f"{prefix}.state.off"] == not_paused
 
 
 async def test_room_thermostat_contract(hass: HomeAssistant, home: FakeHome) -> None:

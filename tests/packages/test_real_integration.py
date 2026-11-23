@@ -206,7 +206,7 @@ async def test_the_rows_named_by_the_entitys_own_name_have_one_without_the_room(
         "number.cave_away_temperature": "Away temperature",
         "binary_sensor.cave_home_occupied": "Occupied",
         "sensor.cave_living_room_reason": "Reason",
-        "binary_sensor.cave_living_room_window_open": "Window open",
+        "binary_sensor.cave_living_room_window_open": "Window pause",
         "number.cave_living_room_comfort_temperature": "Comfort temperature",
         "number.cave_living_room_eco_temperature": "Eco temperature",
         "button.cave_living_room_resume_schedule": "Resume schedule",

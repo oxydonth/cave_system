@@ -138,7 +138,7 @@ home). Each room is a device in the area named like the room.
 | `climate.cave_<room>` | The room thermostat: modes `heat` and `off`; 5 to 30 °C in 0.5 K steps; presets `comfort`, `eco`, `away`, `boost`, `none`; attributes `reason`, `override_until`, `boost_until` (ISO time or null). Unavailable while none of its thermostats is available. |
 | `number.cave_<room>_comfort_temperature`, `number.cave_<room>_eco_temperature` | The schedule temperatures. |
 | `button.cave_<room>_resume_schedule` | Ends a boost or override. |
-| `binary_sensor.cave_<room>_window_open` | On exactly while the window pause is in effect. |
+| `binary_sensor.cave_<room>_window_open` | On exactly while the window pause is in effect. Named "Window pause", with the states "Paused" and "Not paused" (German: "Fensterpause", "Pausiert", "Nicht pausiert"); it has no device class, because it is not a window. |
 | `binary_sensor.cave_<room>_problem` | On when something needs attention. Attribute `thermostats`: thermostat entity ID → `ok`, `pending`, `unresponsive`, `blocked`, `held`, `unavailable` or `missing`. Attribute `messages`: a list of sentences. `held` and `pending` are not problems. |
 | `sensor.cave_<room>_reason` | `summer`, `room_off`, `window`, `boost`, `override`, `away`, `comfort` or `eco`. |
 | `select.cave_home_mode` | `auto`, `away` (forced setback), `off` (summer). |
