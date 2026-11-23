@@ -6,7 +6,7 @@
   "dependencies": [],
   "documentation": "https://github.com/oxydonth/cave_system",
   "integration_type": "hub",
-  "iot_class": "calculated",
+  "iot_class": "not_a_class",
   "issue_tracker": "https://github.com/oxydonth/cave_system/issues",
   "requirements": [],
   "version": "0.2.0"

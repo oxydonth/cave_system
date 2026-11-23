@@ -157,7 +157,7 @@ runs:
         grep -q '^# Placeholder until' "${dashboard}"
 
         ./cave apply | tee "${RUNNER_TEMP}/apply.txt"
-        grep -q 'Applied copy:    unchanged' "${RUNNER_TEMP}/apply.txt"
+        grep -q 'Applied copy:    UNCHANGED' "${RUNNER_TEMP}/apply.txt"
         grep -q 'Dashboard:       regenerated' "${RUNNER_TEMP}/apply.txt"
         grep -q 'has to be restarted instead' "${RUNNER_TEMP}/apply.txt"
 
