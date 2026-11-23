@@ -59,7 +59,8 @@ jobs:
   rehearsal:
     name: server rehearsal
     runs-on: ubuntu-24.04
-    timeout-minutes: 120
+    # A run takes about 45 minutes, half of it the watch's real-time wait (docs/operations.md).
+    timeout-minutes: 90
     env:
       REHEARSAL_DIR: /mnt/rehearsal
       REHEARSAL_PARTS: ${{ inputs.parts || 'all' }}

@@ -710,8 +710,11 @@ gh run watch                                               # follow it
 each part with its outcome and duration, every failed assertion and every known finding; the
 artifact `server-rehearsal-logs` holds the machine's journals, `cave status` and the alerts.
 
-**How long it takes**: about REPLACE_TOTAL minutes in all, of which the watch's real-time wait is
-about REPLACE_WATCH; the job stops after 120.
+**How long it takes**: about 45 minutes in all. The watch's real-time wait is about 27 of them (the
+alert 15 to 20 minutes after the stop, one more run to see that no second alert follows, the
+all-clear within five minutes), the restore about 4 (it waits for the watch's all-clear too), and
+everything else, every start of Home Assistant included, about 10 to 15, depending on how fast the
+runner installs QEMU. The job stops after 90 minutes.
 
 **Known findings** are listed in `tests/server/known-findings.tsv` with their issue: such a
 failure is reported and does not fail the run, and one that starts to pass fails it until the line

@@ -100,7 +100,7 @@ step "stop Home Assistant's container without cave (sudo docker stop cave-homeas
 check "docker image ls --digests prints one line per repository and tag, digest last (6.8)" \
   listing_as_documented
 check "docker image rm refuses the image of a stopped container (6.8)" \
-  contains 'conflict: unable to remove repository reference .*container [0-9a-f]+ is using its referenced image' \
+  contains '^Error response from daemon: conflict: .* container [0-9a-f]+ is using its referenced image' \
   removal_refused
 check "and the image is still there" vm "sudo docker image inspect ${HOME_ASSISTANT} > /dev/null"
 check "runuser gives Git the service user's HOME (6.1)" equals /var/lib/cave-home runuser_home
@@ -131,7 +131,7 @@ check "no second alert for the same incident" equals "$((alerts_before + 1))" al
 check "the watch ran every five minutes" gaps_are_five_minutes
 check "the watch ran as the service user" \
   equals "_UID=$(vm 'id -u cave')" \
-  vm "sudo journalctl _SYSTEMD_UNIT=cave-watch.service --since @${incident_started} -o export | grep '^_UID=' | sort -u"
+  vm "sudo journalctl _SYSTEMD_UNIT=cave-watch.service --since @${incident_started} -o export | grep -a '^_UID=' | sort -u"
 up_at=$(machine_time)
 step "cave up" cave up
 step "wait for the all-clear (at most five and a half minutes)" \
