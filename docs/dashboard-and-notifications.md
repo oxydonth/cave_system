@@ -276,8 +276,10 @@ event `cave_notify_copy`.
 **Turning "Cave: notify about what needs attention" off** stops the checks as well, also the
 one at a start. Meanwhile the bell keeps what it showed: nothing new appears, nothing that ended
 is dismissed, and after a restart it shows what was reported before the restart, as after any
-restart. At the first check after you turn it on again, within a minute, what began meanwhile is
-announced and pushed as usual and what ended is dismissed. So nothing is missed, only delayed.
+restart. At the first check after you turn it on again, within a minute, what began meanwhile
+and still holds is announced and pushed as usual, and what ended is dismissed. So what still
+needs attention is not missed, only delayed. A condition that came and went while the automation
+was off is never announced, as it would not be had Home Assistant been down for that time.
 "Cave: send a notification copy" is a separate automation: while it is off, or in the moment it
 is reloaded, a copy to the phone is lost, and the notification in the bell is still created.
 
@@ -289,9 +291,12 @@ event `cave_attention_check` out of the recorder, so a minute in which nothing c
 nothing. What is still recorded: the history of the five `sensor.cave_attention_*` sensors (when
 an entry appeared or went), `script.cave_notify`, and "Cave: send a notification copy", whose
 logbook line "triggered by event cave_notify_copy" marks each push to the phone. The automation
-itself has no history and no logbook lines. Its traces (Settings, Automations, the automation,
-Traces) keep its last 120 runs, two hours of checks, so the run that pushed can be found there;
-"Cave: send a notification copy" runs only for a push and keeps the last five.
+itself has no history and no logbook lines, so when it was turned off or on cannot be looked up
+afterwards. Its traces (Settings, Automations, the automation, Traces) keep its last 120 runs,
+two hours of checks, so the run that pushed can be found there for two hours and no longer: for
+a push in the night, look in the morning at "Cave: send a notification copy", which runs only
+for a push, keeps its last five runs and holds the message. The 120 traces take about 700 kB,
+held in memory and written to Home Assistant's storage when it stops.
 
 ### Testing it
 
