@@ -382,10 +382,31 @@ update of the checkout.
   `df -h /var/lib/cave`.
 - **Result:** versions of the Home Assistant, broker and Zigbee2MQTT images listed: ______ .
 - **Do with it.** At most two versions of each (the running release's and the one before) are
-  expected, plus any your `compose.override.yaml` names; images of other software are never
-  touched. More than two after an update that said "Installed": look for
-  `Old images were not removed` in `journalctl -u cave-update.service`, and report it if the
-  reason does not explain it.
+  expected, three after a rollback, plus any your `compose.override.yaml` names. Every other
+  image of these three repositories is removed, also one that other software pulled, unless a
+  container of it exists; images of other repositories are never touched. More than that after
+  an update that said "Installed": look for `Old images were not removed` in
+  `journalctl -u cave-update.service`, and report it if the reason does not explain it.
+
+### 6.8 What Docker lists, and what it refuses to remove
+
+The removal of old images relies on two things the tests can only fake: what
+`docker image ls --digests --format '{{.Repository}}\t{{.Tag}}\t{{.Digest}}'` prints (one line
+per repository and tag, `<none>` as the tag of an image that has only a digest, the image's
+`sha256:` digest in the last column), and that `docker image rm` without `--force` refuses an
+image that a stopped container uses.
+
+- **Observe.** `sudo docker image ls --digests --format '{{.Repository}}\t{{.Tag}}\t{{.Digest}}'`.
+  Then stop one container without removing it, `sudo docker stop cave-mosquitto-1`, try
+  `sudo docker image rm eclipse-mosquitto:<the version it runs>`, and start it again with
+  `sudo -u cave ./cave up`.
+- **Result:** the lines look as described: yes / no (paste one) ______ ; the removal was refused
+  ("conflict … is using its referenced image"): yes / no.
+- **Do with it.** Both as described is right. A listing that looks different (another column
+  order, an empty digest for an image that was pulled) or a removal that went through is a
+  defect: report it with the output, because the update could then remove an image it means to
+  keep. (After `./cave down` there are no containers at all, so nothing protects the stack's
+  images; that is why the update removes nothing while the stack is not running.)
 
 ## When you are done
 

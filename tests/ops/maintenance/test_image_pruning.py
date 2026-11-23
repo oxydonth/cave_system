@@ -314,3 +314,91 @@ def test_a_way_back_that_was_not_clean_removes_no_image_of_the_release_before(
     # And not on the nights after either, until an update has ended well again.
     assert run_cave("update").code == 0  # nothing newer: up to date
     assert images_of(RELEASES[1]) <= set(store.store)
+
+
+def test_nothing_is_removed_while_the_last_update_ended_broken(server, run_cave, store):
+    """Exit status 3 leaves maintenance to the owner: no image goes, not even one no kept release
+    names, until an update ends otherwise."""
+    install(server, run_cave, RELEASES[0])
+    install(server, run_cave, RELEASES[1])
+    publish(server, RELEASES[2])
+    server.stack.fail_up.update({RELEASES[2]})
+    server.stack.after["up"] = lambda release: server.stack.unhealthy.add(RELEASES[1])
+    assert run_cave("update").code == 3  # the previous release came back, but not healthy
+    server.stack.after.clear()
+    server.stack.after["pull"] = lambda release: store.add(*images_of(release))
+    server.stack.unhealthy.clear()
+    store.add(*images_of("v2026.11.13.1"))  # obsolete: no kept release names it
+
+    result = run_cave("update")  # nothing newer that has not failed: up to date
+
+    assert result.code == 0
+    assert images_of("v2026.11.13.1") <= set(store.store)
+    assert "the last update ended with exit status 3" in result.out
+
+
+def test_the_release_a_way_back_by_hand_returns_to_keeps_its_images_later_too(
+    server, run_cave, store
+):
+    """After a way back that was not clean, the next update that ends otherwise (here a newer
+    release whose download fails) removes images again, and still keeps those of the release the
+    last switch started from: the owner may not have put it back yet."""
+    install(server, run_cave, RELEASES[0])
+    install(server, run_cave, RELEASES[1])
+    publish(server, RELEASES[2])
+    server.stack.fail_times["up"] = 1
+    checkouts = []
+
+    def fail_the_way_back(argv):
+        checkouts.append(argv)
+        if len(checkouts) >= 2:
+            server.runner.git_fail.setdefault("checkout", []).append((1, "error: unable"))
+            server.runner.git_fail.setdefault("reset", []).append((1, "error: unable"))
+
+    server.runner.git_before["checkout"] = fail_the_way_back
+    assert run_cave("update").code == 3
+    server.runner.git_before.clear()
+    publish(server, RELEASES[3])
+    server.stack.fail["pull"] = 1
+
+    assert run_cave("update").code == 1  # not updated: the download failed
+
+    assert server.record()["last_result"]["outcome"] == "pull-failed"
+    assert images_of(RELEASES[1]) <= set(store.store), (
+        f"the release the owner was on lost its images: removed {store.removed}"
+    )
+
+
+@pytest.mark.parametrize(
+    ("in_store", "named"),
+    [
+        # Pulled by its digest only: Docker lists it with the tag <none>.
+        ("eclipse-mosquitto@sha256:" + "e" * 64, "eclipse-mosquitto:2.0.99@sha256:" + "e" * 64),
+        # Pulled by its tag before; the release names it by digest alone.
+        ("eclipse-mosquitto:2.0.99", "eclipse-mosquitto@sha256:" + "e" * 64),
+    ],
+)
+def test_an_image_named_by_digest_is_kept_by_its_digest(server, run_cave, store, in_store, named):
+    install(server, run_cave, RELEASES[0])
+    store.store[in_store] = "sha256:" + "e" * 64
+    server.stack.after["pull"] = lambda release: None
+    server.release(
+        RELEASES[1],
+        files={"compose.yaml": f"name: cave\nservices:\n  mosquitto:\n    image: {named}\n"},
+    )
+
+    assert run_cave("update").code == 0
+
+    assert in_store in store.store, f"removed: {store.removed}"
+
+
+def test_the_recovery_removes_no_image(server, run_cave, store, killed):
+    """`--recover` runs at boot and after every nightly update; it finishes what is unfinished and
+    nothing else, so it never removes an image, not even an obsolete one."""
+    _obsolete(server, run_cave, store)
+    asked = len(server.runner.fake.matching("docker", "image"))
+
+    assert run_cave("update", "--recover").code == 0
+
+    assert store.removed == []
+    assert len(server.runner.fake.matching("docker", "image")) == asked

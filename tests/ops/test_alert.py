@@ -209,7 +209,14 @@ def test_a_warning_delivered_while_the_stack_is_down_counts_as_the_incident_s_al
 def test_a_warning_while_the_stack_is_healthy_is_no_incident_alert(ctx, alert_endpoint):
     ctx.env["CAVE_ALERT_URL"] = alert_endpoint.url
 
-    alert.warn_owner(ctx, "backup", "backup failed", "The backup failed.", HEALTHY)
+    alert.warn_owner(
+        ctx,
+        "update",
+        "update failed, act now",
+        "Way back not clean.",
+        HEALTHY,
+        about_the_stack=True,
+    )
 
     assert alert.load_memory(ctx.paths).alerted is None
 

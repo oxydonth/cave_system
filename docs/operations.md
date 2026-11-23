@@ -32,7 +32,7 @@ Find the start of the message in the left column.
 | `Not updating to v…: cannot read the script token` / `… is not a single line of printable characters` | The script token file is unreadable or damaged. | Unchanged. | Remove `/var/lib/cave/homeassistant/.cave/token` and run `./cave bootstrap` again. |
 | `Not updating to v…: the running stack is not healthy` | The update found the running system unhealthy before it touched anything, and left it alone. | As before the update, still unhealthy. | See [The running stack is not healthy](#the-running-stack-is-not-healthy). |
 | `Not updating to v…: the checkout … has local changes` | Someone edited files in `/opt/cave`. | Unchanged. | See [Local changes](#local-changes). |
-| `Not updating to v…: the snapshot needs about … MiB` | Not enough disk space for the safety copy, measured after the new images were pulled. | Unchanged. | Free space on the disk that holds `/var/lib/cave`: old files in `/var/backups/cave`, `/var/lib/cave/.cave/ops/before-restore-*` left by a restore that finished (never while `status` shows an unfinished restore: the directory named in `/var/lib/cave/.cave/ops/restore.json` is then the only copy of the state from before), images: the update removes those of releases that are no longer needed by itself ([Old images](#old-images)), so `sudo docker image ls` should show at most two versions of each of this system's images; others (of other software) are yours to remove. The next night tries again. |
+| `Not updating to v…: the snapshot needs about … MiB` | Not enough disk space for the safety copy, measured after the new images were pulled. | Unchanged. | Free space on the disk that holds `/var/lib/cave`: old files in `/var/backups/cave`, `/var/lib/cave/.cave/ops/before-restore-*` left by a restore that finished (never while `status` shows an unfinished restore: the directory named in `/var/lib/cave/.cave/ops/restore.json` is then the only copy of the state from before), images: the update removes the images of this system's repositories that no kept release needs by itself ([Old images](#old-images)), so `sudo docker image ls` should show at most two or three versions of each of them; images of other repositories are yours to remove. The next night tries again. |
 | `Not updating to v…: pulling its images failed`, `Could not fetch releases` or `Could not list the releases` | No internet, GitHub or the image registry unreachable, or Git could not read the checkout. | Unchanged. | Nothing; the next night tries again. If it repeats for days, check the internet connection and the deploy key (`sudo -u cave -H git -C /opt/cave fetch`). |
 | `Not updating to v…: exporting it failed` | The release could not be unpacked into `/var/lib/cave/.cave/ops/tmp` (disk full, or a damaged repository). | Unchanged. | Free space; if it repeats, `sudo -u cave git -C /opt/cave fsck`. |
 | `Not updating to v…: its Compose file does not accept this server's .env and compose.override.yaml` | The new release needs a variable that `.env` lacks, or the local `compose.override.yaml` does not fit it. | Unchanged. Not remembered as failed. | `sudo -u cave ./cave init` (it adds missing variables), check `compose.override.yaml`, then `sudo ./cave update`. |
@@ -68,7 +68,8 @@ Find the start of the message in the left column.
 | `… Note: left in place, because they are not the new release's files: …` | After a rollback, files in `/opt/cave` that the new release would have added, but whose content is not the release's, were kept: they are yours. | As the rest of the message says. | Look at the named files; move them out of `/opt/cave` if they are in the way of the next release. |
 | `… Note: removed, because they are v…'s own files, byte for byte (Git gives them back with v…): …` | After an interrupted checkout, files the new release adds were in `/opt/cave` with exactly the release's content, so they were removed with the rest of the release. A file of yours with the same content is among them. | As the rest of the message says. | Nothing; if you had put such a file there on purpose, `sudo -u cave git -C /opt/cave show v…:<path>` gives its content back. |
 | `cave update: removed … image(s) that no release here needs any more: …` (journal and output) | After the update, old images of this system were removed ([Old images](#old-images)). | Fine. | Nothing. |
-| `Old images were not removed: …` (output only) | The update removed no images this time, for the reason named (the stack is not healthy, an update is interrupted, a restore unfinished, the previous release not recorded yet, an image line it cannot read). | Fine. | Nothing; a later update tries again. |
+| `Old images were not removed: …` (output only) | The update removed no images this time, for the reason named (the stack is not healthy, an update is interrupted, a restore unfinished, the last update ended with exit status 3, the previous release not recorded yet, an image line it cannot read). | Fine. | Nothing; a later update tries again. |
+| `Could not ask Home Assistant whether a thermostat is held: …` (`cave update`, output only) | Right before the switch, Home Assistant did not answer the question whether `cave device-check` holds a thermostat. | The update goes ahead. | Nothing. It had answered the health check with the same token a moment before; holding back every update because this one list could not be read would stop updates for good, while a check the switch spoils only has to be run again. |
 | `The alert to CAVE_ALERT_URL could not be sent: …` | An alert could not be delivered: the receiver refused, did not answer within 10 seconds, or answered with an error or a redirect (which is not followed). | As the rest of the message says; the command's exit status is unchanged. | Check the receiver and `CAVE_ALERT_URL` ([Alerts](#alerts-without-home-assistant)). `cave watch` tries its own alerts again every five minutes. |
 | `Not updating to v…: … is on another file system than the rest of the state` | Something is mounted at an entry of `/var/lib/cave` (for example a separate disk at `homeassistant`). Snapshots are put back by renaming, which cannot cross file systems. | Unchanged. | Keep all of `/var/lib/cave` on one file system: mount the disk at `/var/lib/cave` itself instead. |
 | `… The copy to CAVE_BACKUP_COPY_TO=… FAILED` | The backup was written locally, but the second location was not reachable (not mounted?). | Local backup fine. | Mount the second location, or fix `CAVE_BACKUP_COPY_TO` in `.env`. |
@@ -125,11 +126,20 @@ proxy from the environment is used, and a redirect is not followed (it counts as
   that are no warning send nothing: installed, up to date, not updated because a check or the
   download failed (the next night tries again).
 
-An alert of a command that is delivered while the stack is not healthy counts as that incident's
-alert: `cave watch` does not send another for it, and sends the all-clear once the stack is
-healthy. What the watch has sent is in `/var/lib/cave/.cave/watch.json`; an alert that could not be
-delivered is tried again at its next run. A send takes at most 10 seconds, whatever the receiver
-does, and never changes a command's exit status.
+An alert of a command about the stack (an update left it not healthy or not running; a restore
+stopped half-way, or its stack was not started or is not healthy) that is delivered while the
+stack is not healthy counts as that incident's alert: `cave watch` does not send another for it,
+and sends the all-clear once the stack is healthy. An alert about something else, such as a
+backup that was not made, does not: the watch still reports the stack. What the watch has sent is
+in `/var/lib/cave/.cave/watch.json`; an alert that could not be delivered is tried again at its
+next run. A send takes at most 10 seconds, whatever the receiver does, and never changes a
+command's exit status.
+
+**When the watch cannot write its memory** (a full disk, or `/var/lib/cave/.cave` not writable by
+the service user), it cannot count fifteen minutes either. So it alerts an incident at once, and
+again at every run, each alert saying "this may repeat every five minutes"; an all-clear it sends
+may repeat too. An unwritable memory can cause more alerts, never fewer. A full disk is a likely
+reason for Home Assistant to fail, and exactly when you need to hear.
 
 The title is `<server>: <what happened>`:
 
@@ -160,7 +170,7 @@ What `cave watch` prints (its journal is `journalctl -u cave-watch.service`), an
 | `… (since HH:MM UTC): alerted once it has lasted 15 minutes.` | An incident, not yet 15 minutes old. | The time it was first seen. |
 | `Alert sent: …` / `…: alerted already.` | The incident's alert went out now / earlier. | The incident open, until healthy. |
 | `The alert (…) could not be sent: …. The next run tries again.` | The receiver did not take it. | The incident not alerted; the next run tries again. |
-| `cave watch cannot remember what it has alerted (…)` (exit status 1) | `/var/lib/cave/.cave/watch.json` could not be written (a full disk, `.cave` not the service user's). | It may alert the same incident again every five minutes until fixed. |
+| `cave watch cannot remember what it has alerted (…): it alerts an incident at once and at every run …` (exit status 1) | `/var/lib/cave/.cave/watch.json` could not be written (a full disk, `.cave` not the service user's). | An incident is alerted at once, without waiting 15 minutes, and again every five minutes until the memory can be written; each such alert says so. Free space on the disk that holds `/var/lib/cave`, or give `.cave` back to the service user. |
 
 ## Stopped on purpose
 
@@ -168,11 +178,21 @@ What `cave watch` prints (its journal is `journalctl -u cave-watch.service`), an
 just created (before the first `./cave up`) record that the stack is stopped on purpose, in
 `/var/lib/cave/.cave/stopped.json`. While it is there and nothing runs, `status` says
 `NOT STARTED: … so the stack was not started: on purpose`, and `cave watch` raises no alert. Every
-start of the stack by `cave` removes it: `./cave up` before it starts anything, a restore, and the
-recovery. The record does not cover a stack that runs but is unhealthy, nor an interrupted update
-or a restore that stopped half-way: those are reported in any case. A record that containers still
-outlive five minutes after it was written (a `down` whose Docker failed, or a stack started with
-`docker compose` directly) is removed by `cave watch`, so that a later stop is reported.
+start of the stack by `cave` removes it: `./cave up` once Compose has started the containers, a
+restore or `--undo` once it changes the state, and the recovery. A command that refuses or fails
+before it has changed anything leaves it as it was: a restore that says "Nothing was changed", an
+`up` whose Compose fails, a `down` whose Docker fails (it records the stop first and takes it back
+then). A restore that cannot unpack its archive does not start a stack that was stopped on purpose
+either. The record does not cover a stack that runs but is unhealthy, Docker not answering, an
+interrupted update or a restore that stopped half-way: those are reported in any case. A record
+that containers still outlive five minutes after it was written (a `down` killed before Docker
+stopped anything, or a stack started with `docker compose` directly) is removed by `cave watch`,
+so that a later stop is reported.
+
+After an update from v2026.11.22.1, the note of a `--no-start` restore of that version may still
+be in `/var/lib/cave/.cave/ops/not-started.json`, which the service user cannot remove. A start
+by the service user (`./cave up`) then writes `"started": true` into `stopped.json`, which counts
+before the old note; the next start by root removes both.
 
 ## How an update works
 
@@ -196,7 +216,8 @@ share (concept section 4.5):
    fills the same disk); then the new release's Home Assistant checks the configuration and the
    new release's validator checks the applied `heating.yaml`, both in the new image. Last, it asks
    Home Assistant whether `cave device-check` holds a thermostat, and waits for the next run if
-   so. If anything fails here, the system has not been stopped for a second.
+   so; if Home Assistant cannot answer that one question, it goes ahead (it answered the health
+   check with the same token a moment before, and refusing would stop updates for good). If anything fails here, the system has not been stopped for a second.
 3. **The switch:** stop the stack, copy the state (`/var/lib/cave`) into a snapshot while nothing
    writes to it, check out the release, start it, and wait up to 15 minutes until it is healthy.
 4. **If the switch fails:** stop (a second try after 10 seconds), put back the snapshot and the
@@ -228,17 +249,41 @@ Every release pulls its images and leaves the previous ones behind, so after man
 disk check above would refuse every update. So the update removes them at the end of its run,
 holding the lock:
 
-* Only images of the repositories that this system's Compose files (`compose.yaml`,
-  `compose.sim.yaml`) name are candidates. Of those, the images of the checked-out release and of
-  the release before it (the one the last update came from, whose snapshot is kept) are kept,
-  and every image `compose.override.yaml` names. A release that failed and was rolled back has
-  its images removed with the rest.
-* Each one is removed by its name, `docker image rm`, never forced: Docker refuses an image that a
-  container uses. Nothing else on the server is touched; `docker image prune -a` and
+* Candidates are **every image of the repositories** that this system's Compose files
+  (`compose.yaml`, `compose.sim.yaml`) name: `ghcr.io/home-assistant/home-assistant`,
+  `eclipse-mosquitto`, `ghcr.io/koenkk/zigbee2mqtt` and the simulator's, whoever pulled it. An
+  image of one of these repositories that other software on the server uses is removed too if no
+  container of it exists (Docker refuses one that a container, even a stopped one, uses). Images
+  of every other repository are never touched.
+* Kept are the images that these releases name: the checked-out one; the one the last installed
+  update came from; and the one the last switch started from, which a way back by hand returns
+  to. Also every image `compose.override.yaml` names. An image pinned by digest
+  (`name:tag@sha256:…`) is kept by its tag and by its digest (`docker image ls --digests`). A
+  release that failed and was rolled back has its images removed with the rest.
+* Each one is removed by its name, `docker image rm`, never forced. `docker image prune -a` and
   `docker system prune` are never run.
-* Nothing is removed while an update is interrupted, a restore is unfinished, or the stack is not
-  running and healthy, and nothing before an update has recorded which release it came from
-  (the first update with this version records it), nor when an `image:` line names a variable.
+* Nothing is removed while an update is interrupted, a restore is unfinished, the last update
+  ended with exit status 3 (the owner may have to put the previous release back by hand, which
+  needs its images without internet), or the stack is not running and healthy; nor before an
+  update has recorded which release it came from (the first update with this version records
+  it), nor when an `image:` line names a variable.
+
+Per outcome of the update run (the exit status in brackets):
+
+| The run ended | Images removed? | Kept, besides the override's |
+|---|---|---|
+| Installed (0) | Yes | The new release's; the one it came from |
+| Up to date, or the newest release failed before and is skipped (0) | Yes, unless the last update ended with exit status 3 | The running release's; the previous; the last switch's starting point |
+| Automatic updates off, `--auto` (0) | No | All |
+| Not updated before anything was touched: no release list, a check failed or could not run, the download failed, local changes, no token, no room for the snapshot, `device-check` holds a thermostat (1) | Yes, if the stack is healthy; the new release's downloaded images go and are downloaded again next time | The running release's; the previous; the last switch's starting point |
+| Not updated: the running stack is not healthy (1) | No (not healthy) | All |
+| Not updated: a restore is unfinished (1) | No | All |
+| Not updated: another command holds the lock (1) | No (it never ran) | All |
+| Stopped before the switch, running again unchanged (1) | Yes | The running release's (the switch's starting point); the previous |
+| Rolled back (2) | Yes; the failed release's images go | The running release's (the switch's starting point); the previous |
+| Not healthy, nothing running, or the way back not clean (3) | No, and not on the nights after either, until an update ends otherwise; even then the last switch's starting point is kept, which is the release to put back by hand | All |
+| A restore's owed start: healthy (0) / not (3) | Yes / no | As above / all |
+| `--recover`, at boot or by hand (any) | Never | All |
 
 ### Before the validator exists
 
@@ -293,7 +338,9 @@ other can take it next. A command that finds the lock taken tries for two second
 who holds it, because `status` and `cave watch` look at the lock for an instant without taking
 it. It names the holder only while that process lives: a holder that could not write its name
 (the service user, while the lock file is still root's from an earlier version) is "another cave
-command". `cave watch` runs as the service user, who may ask Docker, and takes no lock.
+command". Where Linux says when a process started, a process that started after the name was
+written is not taken for the holder either: after a reboot, another process may have the same
+number. `cave watch` runs as the service user, who may ask Docker, and takes no lock.
 `cave device-check` changes no state of its own and takes no lock; the nightly update does not
 stop the stack while a check holds a thermostat, but a check started while an update is under way
 can still be spoiled by it, not the home: run checks by day. The state directory holds
@@ -505,7 +552,11 @@ has been run again.
 
 * `--data DIR` restores into another state directory (`.env` is changed to name it).
 * `--no-start` does not start the stack afterwards, also when the restore fails: see
-  [Stopped on purpose](#stopped-on-purpose).
+  [Stopped on purpose](#stopped-on-purpose). An interrupted update is the exception: with
+  `--no-start` the restore leaves it in flight, and its way back, at the next boot or with
+  `sudo ./cave update --recover`, starts the stack; `--undo --no-start` of a restore that had
+  superseded an update puts that update back in flight and finishes its way back at once, which
+  starts the stack too.
 * An archive taken with a newer release than the one checked out is refused, because an older
   Home Assistant may not read a newer database. Check out that release first
   (`sudo -u cave git -C /opt/cave checkout --detach <release>`), or pass `--force`.
