@@ -130,8 +130,6 @@ def _reload(ctx: Context, outcome: _Outcome) -> None:
 
 def run(ctx: Context, args: argparse.Namespace) -> int:
     require_initialised(ctx)
-    if not ctx.paths.heating.is_file():
-        raise CaveError(f"{ctx.paths.heating} does not exist; run `./cave init` first")
     try:
         with ctx.lock("apply"):
             return _apply(ctx)
@@ -154,6 +152,10 @@ def _apply(ctx: Context) -> int:
         ctx.warn(f"Not applied: {pending}.")
         ctx.warn("Nothing was changed.")
         return 1
+    # Only after the check above: a restore that stopped half-way may have set the file aside, and
+    # `init` is then the wrong advice.
+    if not ctx.paths.heating.is_file():
+        raise CaveError(f"{ctx.paths.heating} does not exist; run `./cave init` first")
     result = validate_and_store(ctx)
     if not result.ok:
         ctx.warn(f"{ctx.paths.heating} is not valid:")

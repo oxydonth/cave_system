@@ -12,8 +12,8 @@ name: CI
 #
 # A check with many steps lives in its own file and runs as a step of the job that has what it
 # needs. `ci-ok` is the one check to wait for: it fails when any job it needs failed or was
-# cancelled, and when one was skipped that should have run. Branch protection is unavailable
-# here, so GitHub does not enforce it.
+# cancelled, and when one was skipped that should have run. Rulesets are available since the
+# repository went public (23 November 2026), but none is set up, so GitHub does not enforce it.
 #
 # A pull request that changes only Markdown files (*.md) runs `lint`, which includes the document
 # check, and nothing else: no test reads a Markdown file except the document check, and nothing

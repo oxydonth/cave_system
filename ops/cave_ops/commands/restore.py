@@ -475,6 +475,12 @@ def _restore(
             counter += 1
             backup = env_file.with_name(f".env.before-restore-{stamp}-{counter}")
         _server.write_atomic(backup, env_file.read_bytes(), 0o600)
+        if _server.is_root():
+            # The checkout is the service user's; a file of root's in it is one the service user
+            # cannot read (found by the server rehearsal).
+            # lchown: the directory is the service user's, so never through a link.
+            info = ctx.paths.root.stat()
+            os.lchown(backup, info.st_uid, info.st_gid)
         series["env_backup"] = backup.name
         _write_marker(marker, series)
     # Only the variables of concept section 4.2 (`render` writes exactly the table), so that the
@@ -493,7 +499,7 @@ def _restore(
     _server.write_atomic(env_file, (HEADER + "\n" + render(values)).encode(), 0o600)
     if _server.is_root():
         info = ctx.paths.root.stat()
-        os.chown(env_file, info.st_uid, info.st_gid)
+        os.lchown(env_file, info.st_uid, info.st_gid)
     alert_url = ctx.env.get(alert.VARIABLE, "")
     ctx.env.update(load_env(env_file))
     # This restore's own alerts still go where alerts went when it started (if anywhere); the
@@ -804,6 +810,11 @@ def undo(ctx: Context, args: argparse.Namespace) -> int:
         backup = series.get("env_backup")
         if backup and (env_file.parent / backup).is_file():
             os.replace(env_file.parent / backup, env_file)
+            if _server.is_root():
+                # The .env put back is the checkout owner's, whoever wrote the copy (a copy made
+                # by an earlier version is root's).
+                info = ctx.paths.root.stat()
+                os.lchown(env_file, info.st_uid, info.st_gid)
         series["undone"] = True
         series["no_start"] = bool(args.no_start) or not env_file.is_file()
         _write_marker(marker, series)

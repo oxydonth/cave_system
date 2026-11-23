@@ -33,7 +33,7 @@ Find the start of the message in the left column.
 | `Not updating to v…: the running stack is not healthy` | The update found the running system unhealthy before it touched anything, and left it alone. | As before the update, still unhealthy. | See [The running stack is not healthy](#the-running-stack-is-not-healthy). |
 | `Not updating to v…: the checkout … has local changes` | Someone edited files in `/opt/cave`. | Unchanged. | See [Local changes](#local-changes). |
 | `Not updating to v…: the snapshot needs about … MiB` | Not enough disk space for the safety copy, measured after the new images were pulled. | Unchanged. | Free space on the disk that holds `/var/lib/cave`: old files in `/var/backups/cave`, `/var/lib/cave/.cave/ops/before-restore-*` left by a restore that finished (never while `status` shows an unfinished restore: the directory named in `/var/lib/cave/.cave/ops/restore.json` is then the only copy of the state from before), images: the update removes the images of this system's repositories that no kept release needs by itself ([Old images](#old-images)), so `sudo docker image ls` should show at most two or three versions of each of them; images of other repositories are yours to remove. The next night tries again. |
-| `Not updating to v…: pulling its images failed`, `Could not fetch releases` or `Could not list the releases` | No internet, GitHub or the image registry unreachable, or Git could not read the checkout. | Unchanged. | Nothing; the next night tries again. If it repeats for days, check the internet connection and the deploy key (`sudo -u cave -H git -C /opt/cave fetch`). |
+| `Not updating to v…: pulling its images failed`, `Could not fetch releases` or `Could not list the releases` | No internet, GitHub or the image registry unreachable, or Git could not read the checkout. | Unchanged. | Nothing; the next night tries again. If it repeats for days, check the internet connection, and whether the service user can fetch (`sudo -u cave -H git -C /opt/cave fetch`). |
 | `Not updating to v…: exporting it failed` | The release could not be unpacked into `/var/lib/cave/.cave/ops/tmp` (disk full, or a damaged repository). | Unchanged. | Free space; if it repeats, `sudo -u cave git -C /opt/cave fsck`. |
 | `Not updating to v…: its Compose file does not accept this server's .env and compose.override.yaml` | The new release needs a variable that `.env` lacks, or the local `compose.override.yaml` does not fit it. | Unchanged. Not remembered as failed. | `sudo -u cave ./cave init` (it adds missing variables), check `compose.override.yaml`, then `sudo ./cave update`. |
 | `Not updating to v…: the check_config could not run` / `the validator could not run` | The check in the new image did not run at all: Docker failed, it timed out, or the validator is not in the release (see [Before the validator exists](#before-the-validator-exists)). This says nothing about your configuration. | Unchanged. Not remembered as failed. | Nothing; the next night tries again. If it repeats, look at `journalctl -u cave-update.service`. |
@@ -383,16 +383,18 @@ back its owner. Run as the service user, these commands stop at once with
 development checkout, where every file belongs to you, they work without root.)
 
 Git, however, always runs as the owner of `/opt/cave` (the service user `cave`), also when the
-update runs as root: the fetch then uses the service user's deploy key in
-`/var/lib/cave-home/.ssh`, and no file in the checkout becomes root's (run as root, `cave` also
-writes no Python bytecode there). `status` needs no root.
+update runs as root: the fetch then uses the service user's Git configuration (and, on a server
+cloned over SSH while the repository was private, its deploy key in `/var/lib/cave-home/.ssh`),
+and no file in the checkout becomes root's (run as root, `cave` also writes no Python bytecode
+there). `status` needs no root.
 
 **What this means for security.** Root runs `/opt/cave/cave`, which the service user can change,
 and works in directories the service user owns (`/var/backups/cave`, the export directory). So
 the service user can become root. That adds nothing today, because the service user is in the
 `docker` group, which is equivalent to root anyway. Do not remove it from the `docker` group in
 the belief that this "hardens" the server: the hole described here would then be the open one.
-Protect the service user's deploy key and login as you would root's.
+Protect the service user's login (and a deploy key, if the server still has one) as you would
+root's.
 
 ### Turning automatic updates off
 
@@ -666,3 +668,74 @@ the state that was waiting is complete, so the owed start is given up for "stopp
    night.
 5. If the coordinator's address or the FRITZ!Box changed, edit `.env` and run
    `sudo -u cave ./cave up`.
+
+## The server rehearsal
+
+The tests in `tests/ops/` run every command above with real files and real Git, but with Docker
+faked, as an ordinary user, without systemd and without a power cut. The server rehearsal
+(`.github/workflows/server-rehearsal.yml`, its scripts in `tests/server/`) runs them for real: on
+GitHub's runner it starts a Debian 13 virtual machine from Debian's official cloud image (a dated
+build whose SHA-512 is kept in `tests/server/debian-13-genericcloud-amd64.sha512` and checked
+before every use), with QEMU and KVM, and does everything inside it over SSH, as root and as the
+service user, under systemd, with a real Docker.
+
+**What it proves**, each part a script and each assertion a line of the log with its name and how
+long it took:
+
+| Part | What happens | What it asserts |
+|---|---|---|
+| `runner` | The runner's CPUs, memory, disk and KVM. | KVM is there; without it the run stops. |
+| `machine` | The image is downloaded, verified and booted; the owner's `apt-get full-upgrade` of [install.md](install.md#1-put-the-operating-system-on-the-machine). | Debian 13, Python 3.11 or newer. |
+| `provision` | [install.md](install.md#3-provision-the-host), steps 3 and 4: `provision-host.sh` copied on its own (dry run, then for real, its check of the operating system included), the clone, the second run from the checkout. | The service user, its directories and their modes, Docker's key, the three timers with a next run, the recovery enabled, which unit runs as whom, a third run changes nothing. |
+| `install` | Steps 5 to 8: `init`, `.env`, the pull, `check`, `up`, `bootstrap`, `apply` with a room. | Owners and modes of `.env`, the token and the mount points, `status`, the watch as the service user with Docker. |
+| `backup` | `cave-backup.service`, as its timer starts it. | The archive is root's, mode 600, holds neither `.cave/ops` nor the lock; `.cave` and the lock are the service user's afterwards; `apply` works; no alert. |
+| `update` | A newer release; `cave-update.service`. | `Installed …`, the recovery after it found nothing, the new image runs and the previous one is kept, the snapshot, a clean checkout without root's files, `apply` works, no alert. |
+| `update-broken` | An image of the broker pulled by its digest only; a release whose broker never becomes healthy; `sudo ./cave update`, and a file written into the state once the switch has begun. | The digest-only image listed with the tag `<none>`; exit status 2, `Rolled back`, the file written during the switch gone (the snapshot was put back), its image and the digest-only one removed and the others kept, `Failed` in `status`, the alert `update rolled back` with only its fixed words, the next run skips it. |
+| `restore` | A backup by hand, a file and a line of `.env` written after it, and the backup restored onto the same directory; a restore that stops half-way (an entry made immutable), then `--undo`; a restore killed after it put the state and `.env` in place, then `--undo`; a restore onto a new directory with `--data`. | What was written after the backup is gone, the `.env` from before kept; no owner or mode changed and no path lost; `status`, `update`, `apply` and `backup` refuse while half-way, with their exit status; the undo brings back what was there before, the `.env` it puts back is the service user's; the alerts `restore stopped half-way`, `no backup: …` and the watch's `healthy again`; the new directory's owners equal the old one's, and the stack runs from it. |
+| `reboot` | `sudo reboot`. | The stack is back by itself, the recovery ran after Docker and exited 0, the previous boot's journal is kept, the timers' next runs (02:30 and 03:30 plus their delays), no alert. |
+| `power-cut` | The machine killed hard twice during the nightly update: while it stops the stack, and while it starts the new release, after a file was written into the state and flushed to the disk. | For each phase what [Interrupted updates](#interrupted-updates) says: the previous release again and not marked failed, or the full rollback (the file written during the switch gone, the new release's file removed, the release marked failed); a clean checkout; `Running now` in `status` during the update; one alert, none for the power cut itself. |
+| `down-up` | `down`, the watch, `up`; a lock held under a name written before and after its process started. | `NOT STARTED … on purpose`, nothing to report; who holds the lock, as Linux's `/proc` tells a reused process number apart. |
+| `watch` | Home Assistant's container stopped without `cave`, left so in real time; `cave up`. | One alert after 15 to 20 minutes, no second one, the all-clear after `up`, a run every five minutes as the service user, the alert's fixed words, the URL's token in no journal, every alert of the whole run in order. |
+
+**How to start it**: it runs once a week, on every push to `main` and every pull request that
+changes `ops/`, `cave`, `scripts/`, what an update carries to a server (`compose.yaml`,
+`homeassistant/`, `mosquitto/`, `tools/`) or the rehearsal itself, and on demand:
+
+```sh
+gh workflow run server-rehearsal.yml                       # every part
+gh workflow run server-rehearsal.yml -f parts=restore      # the parts up to restore
+gh run watch                                               # follow it
+```
+
+`parts` names the last part to run, for working on the rehearsal itself. The job summary lists
+each part with its outcome and duration, every failed assertion and every known finding; the
+artifact `server-rehearsal-logs` holds the machine's journals, `cave status` and the alerts.
+
+**How long it takes**: about 40 to 45 minutes in all. The watch's real-time wait is about 27 of
+them (the alert 15 to 20 minutes after the stop, one more run to see that no second alert follows,
+the all-clear within five minutes), the restore about 4 to 6 (it waits for the watch's all-clear
+too), and everything else, every start of Home Assistant included, about 10 to 15, depending on
+how fast the runner installs QEMU. The job stops after 90 minutes.
+
+**Known findings** are listed in `tests/server/known-findings.tsv` with their issue: such a
+failure is reported and does not fail the run, and one that starts to pass fails it until the line
+is removed.
+
+**What it does not cover**, and why it does not weaken what it asserts about the server:
+
+* Raspberry Pi OS, an ARM processor and an SD card: the machine is Debian 13 on x86-64. The
+  commands are the same Python and the same Docker; what differs is speed and the card's wear.
+* Real devices: there is no coordinator and no FRITZ!Box, as on a server before its devices.
+  `COMPOSE_PROFILES` and the FRITZ! variables stay empty, so the stack is Home Assistant and the
+  broker, exactly what [install.md](install.md#7-check-and-start) starts without a coordinator.
+  Zigbee2MQTT's container never runs; its entry in the state does.
+* GitHub: releases come from a Git server in the machine (`git://127.0.0.1`), made from the commit
+  under test and tagged by the release job's own planner; the images come from the real
+  registries. A check of the same run clones the public repository over HTTPS as the service user.
+* A real power cut: QEMU is killed, so whatever the machine had not written to its disk is lost,
+  but the disk itself does not fail half-way through a write, as a card or a cheap SSD can.
+* The receiver is a few lines of Python in the machine, not ntfy on the home network, and the
+  timers' nightly times are read, not waited for.
+* The owner's `sudo` asks for no password in the machine. Debian's daily apt timers stay on, as
+  on a server: `apt-daily.timer` is persistent and has a random delay of up to twelve hours, so it
+  can hold the package lock right after the first boot. `provision-host.sh` waits for the lock.

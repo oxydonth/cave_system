@@ -182,18 +182,13 @@ class Run:
     hold_lost: bool = False  # the hold disappeared once: Home Assistant may be restarting
     restore_sent: bool = False  # the original target was sent back
     restore_recorded: bool = False  # the table has a row for the original target
-    muted: bool = False  # writing to the terminal failed (a dropped SSH session)
 
     # --- output ------------------------------------------------------------------------------
 
     def say(self, message: str = "") -> None:
-        """Print, if the terminal is still there; never let a failed write stop the clean-up."""
-        if self.muted:
-            return
-        try:
-            self.ctx.say(message)
-        except (OSError, ValueError):  # a hung-up terminal, or a closed stream
-            self.muted = True
+        """Print, if the terminal is still there: ``Context.say`` never lets a failed write (a
+        hung-up terminal, a closed stream) stop the clean-up."""
+        self.ctx.say(message)
 
     # --- results -----------------------------------------------------------------------------
 

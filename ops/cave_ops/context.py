@@ -33,6 +33,42 @@ def syslog_journal(message: str) -> None:
         pass
 
 
+def write_line(stream: TextIO, message: str) -> None:
+    """Write one line of a command's output, at once and never at the command's expense.
+
+    Flushed at once: under systemd the output is a pipe to the journal, which Python would buffer,
+    so that the journal showed a run's progress only at its end, out of order with its warnings,
+    and lost it to a kill or a power cut (found by the server rehearsal).
+
+    Best effort: the reader may be gone (a pager closed early, `| head`, a dropped SSH session, a
+    restarted journal). Python ignores SIGPIPE, so the write raises instead, and that must never
+    stop an update or a restore half-way, least of all on its way back. The stream is then pointed
+    at /dev/null, so that neither later lines, nor the programs a command starts with this output,
+    nor Python's final flush at exit fail on it again.
+    """
+    try:
+        print(message, file=stream, flush=True)
+    except (OSError, ValueError):
+        _silence(stream)
+
+
+def _silence(stream: TextIO) -> None:
+    """Send whatever ``stream`` still has, and everything after it, to /dev/null."""
+    try:
+        target = stream.fileno()
+    except (OSError, ValueError, AttributeError):
+        return  # not a file descriptor (a test's buffer): the next write simply fails again
+    try:
+        devnull = os.open(os.devnull, os.O_WRONLY)
+        try:
+            os.dup2(devnull, target)
+        finally:
+            os.close(devnull)
+        stream.flush()
+    except (OSError, ValueError):
+        pass
+
+
 @dataclass
 class Context:
     """Everything a command needs. Fields are replaceable; the methods are conveniences."""
@@ -72,10 +108,10 @@ class Context:
 
     # --- output
     def say(self, message: str = "") -> None:
-        print(message, file=self.out)
+        write_line(self.out, message)
 
     def warn(self, message: str) -> None:
-        print(message, file=self.err)
+        write_line(self.err, message)
 
     # --- external programs, always from the checkout so Compose finds compose.yaml and .env
     def docker(

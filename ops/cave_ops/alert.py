@@ -37,7 +37,7 @@ from urllib.parse import unquote, urlsplit, urlunsplit
 
 from .health import Health, check_health
 from .paths import Paths
-from .records import write_atomic
+from .records import give_to_directory_owner, write_atomic
 
 if TYPE_CHECKING:
     from .context import Context
@@ -246,6 +246,7 @@ def save_memory(paths: Paths, memory: Memory, keep_marked: bool = False) -> None
             memory.alerted, memory.what = on_disk.alerted, on_disk.what
     text = (json.dumps(asdict(memory)) + "\n").encode()
     write_atomic(paths.watch_record, text, 0o644, writer=str(os.getpid()))
+    give_to_directory_owner(paths.watch_record)
 
 
 def mark_alerted(ctx: Context, what: str) -> None:

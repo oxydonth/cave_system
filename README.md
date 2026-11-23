@@ -20,7 +20,7 @@ from home. No vendor cloud is involved. The reasons for each decision are in the
 | Room sensors and window contacts | Sonoff SNZB-02P and SNZB-04P. |
 | A Zigbee coordinator | SMLIGHT SLZB-06MG24 over Ethernet. Not needed for FRITZ! thermostats alone. |
 | A FRITZ!Box | For FRITZ! thermostats, for knowing which phones are at home, and for the VPN to reach the system from outside. |
-| A GitHub account | With access to this private repository: the server pulls tested releases from it. |
+| Internet access to GitHub | The server clones this public repository and pulls tested releases from it over HTTPS. No GitHub account and no key are needed; an account only to report an issue. |
 
 What to buy, how many, in what order and for roughly how much is in [hardware.md](docs/hardware.md).
 
