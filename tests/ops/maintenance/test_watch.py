@@ -484,3 +484,73 @@ def test_an_alert_of_backup_about_something_else_is_not_the_stack_s_alert(
         "no backup: another command was running",
         "the stack is not healthy",
     ]
+
+
+def test_docker_that_does_not_answer_is_an_incident_even_after_down(
+    server, run_cave, receiver, watch
+):
+    """`down` stops the stack on purpose; it does not stop Docker. A Docker that does not answer
+    is something the owner has to know about, whatever stopped the stack before."""
+    assert run_cave("down").code == 0
+    server.stack.docker_down = True
+
+    every_five_minutes(watch, 0, 20)
+
+    assert headlines(receiver) == ["Docker does not answer"]
+    assert "Stack: unknown (Docker did not answer)" in receiver.received[0].body
+
+
+def test_an_alert_a_command_marks_while_the_watch_runs_is_not_lost(
+    server, run_cave, receiver, watch, monkeypatch
+):
+    """Root's command marks an incident as alerted between the watch's reading of its memory and
+    its writing: the watch keeps that mark and alerts nothing more for the incident."""
+    from cave_ops.commands import watch as watch_module
+
+    server.stack.running = None
+    real_assess = watch_module.assess
+    marked = []
+
+    def assess_while_a_command_alerts(ctx):
+        finding = real_assess(ctx)
+        if not marked:
+            marked.append(1)
+            alert.mark_alerted(ctx, "cave update: update failed, act now")
+        return finding
+
+    monkeypatch.setattr(watch_module, "assess", assess_while_a_command_alerts)
+    every_five_minutes(watch, 0, 40)
+
+    assert receiver.received == [], "the watch alerted an incident a command had alerted"
+    server.stack.start(OLD)
+    watch(45)
+    assert headlines(receiver) == ["healthy again"]
+
+
+def test_an_unwritable_memory_alerts_at_once_and_says_that_it_repeats(
+    server, run_cave, receiver, monkeypatch
+):
+    def full(*args, **kwargs):
+        raise OSError(errno.ENOSPC, "No space left on device")
+
+    monkeypatch.setattr(alert, "write_atomic", full)
+    server.stack.running = None
+
+    result = run_cave("watch")
+
+    assert result.code == 1
+    assert headlines(receiver) == ["the stack is stopped"]
+    assert "this may repeat every five minutes" in receiver.received[0].body
+    assert "it alerts an incident at once and at every run" in result.err
+
+
+def test_an_unwritable_memory_sends_nothing_for_a_healthy_stack(
+    server, run_cave, receiver, monkeypatch
+):
+    def full(*args, **kwargs):
+        raise OSError(errno.ENOSPC, "No space left on device")
+
+    monkeypatch.setattr(alert, "write_atomic", full)
+
+    assert run_cave("watch").code == 1
+    assert receiver.received == []

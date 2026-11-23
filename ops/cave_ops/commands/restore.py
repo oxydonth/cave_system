@@ -545,7 +545,8 @@ def _start(ctx: Context, args: argparse.Namespace, marker: Path, done: str) -> i
     once the start was issued, so that an interruption before it leaves `start_owed` for the
     same command or the boot's `cave update --recover` to finish."""
     ctx.say("Starting the stack ...")
-    clear_stopped(ctx.paths, ctx.wall())
+    # The record of a stack stopped on purpose was cleared when this restore or undo first
+    # changed the state, earlier in this same run.
     started = ctx.compose("up", "--detach", "--force-recreate", timeout=900.0)
     if not started.ok:
         message = (

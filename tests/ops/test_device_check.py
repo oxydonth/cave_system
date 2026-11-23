@@ -920,3 +920,44 @@ def test_a_reading_that_keeps_failing_still_ends_the_check(run_cave, fake_ha, th
     assert result.code == 2
     assert "The check could not complete" in result.out
     assert rows(result.out)["hold released"] == "pass"
+
+
+def test_home_assistant_unreachable_during_the_check_then_restarting_is_waited_for(
+    run_cave, fake_ha, clock, thermostat, faults
+):
+    """Home Assistant does not answer from the first reading on, longer than a reading is tried,
+    and comes back restarted: the hold is gone and cave_heating's services are not found for a
+    while. Nothing was changed, so only the release is left, and it is tried again rather than
+    taken for a refusal."""
+    original = faults.fake_ha
+
+    def down_for_a_while(method, url, headers, body, timeout):
+        if clock.now < 200 and url.endswith(f"/api/states/{ENTITY}"):
+            thermostat.held = False
+            raise ConnectionRefusedError("connection refused")
+        return original(method, url, headers, body, timeout)
+
+    faults.fake_ha = down_for_a_while
+    faults.fail[("cave_heating", "release")] = [400, 400]
+
+    result = run_cave("device-check", ENTITY)
+
+    assert result.code == 2
+    assert "Home Assistant did not answer" in result.out
+    assert rows(result.out)["hold released"] == "pass"
+    assert "set_temperature" not in services(fake_ha)
+
+
+def test_a_restore_refused_under_a_hold_is_not_resent_without_one(
+    run_cave, fake_ha, thermostat, faults
+):
+    """After a restart the hold is taken again, and the thermostat refuses the original target
+    (a FRITZ! key lock). That is no reason to send it again without a hold: the controller runs."""
+    thermostat.lose_hold_on_set = True
+    faults.fail[("climate", "set_temperature")] = [None] + [400] * 10_000
+
+    result = run_cave("device-check", ENTITY, "--timeout", "300")
+
+    assert rows(result.out)["original target 21 °C restored"] == "FAIL"
+    assert "without a hold" not in result.out
+    assert rows(result.out)["hold released"] == "pass"

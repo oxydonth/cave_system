@@ -106,6 +106,8 @@ class FakeStack:
     ops: list[tuple[str, str | None]] = field(default_factory=list)
     configured: list[str] = field(default_factory=list)
     """The ``COMPOSE_FILE`` of every ``config`` check of a release."""
+    docker_down: bool = False
+    """The Docker daemon does not answer: every Compose command fails."""
 
     def start(self, release: str) -> None:
         self.running = release
@@ -121,6 +123,8 @@ class FakeStack:
         return [name for name, _ in self.ops]
 
     def handle(self, args: tuple[str, ...], cwd: Path | None, env: Mapping[str, str]) -> Result:
+        if self.docker_down:
+            return Result(args, 1, "", "Cannot connect to the Docker daemon. Is it running?\n")
         rest = list(args[2:])
         while rest and rest[0] == "-f":
             del rest[:2]
@@ -218,7 +222,9 @@ class FakeImages:
                     name, tag = reference.split("@", 1)[0], "<none>"
                 else:
                     name, tag = reference.rsplit(":", 1)
-                lines.append(f"{name}\t{tag}\t{digest}")
+                # As Docker does: without --digests the column says nothing.
+                shown = digest if "--digests" in args else "<none>"
+                lines.append(f"{name}\t{tag}\t{shown}")
             return Result(args, 0, "".join(line + "\n" for line in lines))
         if command == "rm":
             assert "--force" not in args, "never forced"

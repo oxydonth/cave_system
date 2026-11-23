@@ -11,6 +11,7 @@ import base64
 import socket
 import threading
 import time
+import types
 
 import pytest
 
@@ -222,3 +223,20 @@ def test_an_undelivered_warning_is_no_incident_alert(ctx, alert_endpoint):
     )
 
     assert alert.load_memory(ctx.paths).alerted is None
+
+
+def test_a_send_that_cannot_start_its_thread_does_not_raise(ctx, monkeypatch):
+    class NoThread:
+        def __init__(self, *args, **kwargs):
+            pass
+
+        def start(self):
+            raise RuntimeError("can't start new thread")
+
+    monkeypatch.setattr(alert, "threading", types.SimpleNamespace(Thread=NoThread))
+    ctx.env["CAVE_ALERT_URL"] = "http://127.0.0.1:9/cave-alerts"
+
+    sent = alert.send(ctx, "title", "body")
+
+    assert not sent.delivered
+    assert "no thread could be started" in (sent.error or "")

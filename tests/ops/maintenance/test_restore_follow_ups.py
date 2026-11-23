@@ -10,6 +10,7 @@ import errno
 import json
 import os
 import types
+from pathlib import Path
 
 import pytest
 
@@ -39,6 +40,12 @@ def _start_owed(server, run_cave, archive, killed):
         run_cave("restore", str(archive))
     server.stack.before.clear()
     return json.loads(_marker(server).read_text())
+
+
+def _paths(server):
+    from cave_ops.paths import Paths
+
+    return Paths(root=server.root, data=server.data)
 
 
 def _disk_full(*args, **kwargs):
@@ -295,3 +302,133 @@ def test_an_undo_with_nothing_to_undo_keeps_the_record_of_down(server, run_cave)
     assert server.data.joinpath(".cave", "stopped.json").exists(), (
         "an --undo that changed nothing removed the record of `down`"
     )
+
+
+# ----------------------------------------- the first review of #30: what it found untested
+def test_a_restore_that_supersedes_an_update_names_the_files_it_removed(
+    server,
+    run_cave,
+    backups,  # noqa: F811
+    killed,
+):
+    """The update was cut off during its checkout, which had written one file of the new release.
+    The restore checks out the release from before and removes that file, which is the release's
+    own byte for byte: it says so."""
+    assert run_cave("backup").code == 0
+    [archive] = archives(backups)
+    server.release(NEW, files={"tools/new_tool.py": "print('new')\n"})
+
+    def half_done(argv):
+        if "--force" not in argv:  # the switch's checkout
+            (server.root / "tools").mkdir(exist_ok=True)
+            (server.root / "tools" / "new_tool.py").write_text("print('new')\n")
+            raise killed
+
+    server.runner.git_before["checkout"] = half_done
+    with pytest.raises(killed):
+        run_cave("update")
+    server.runner.git_before.clear()
+
+    result = run_cave("restore", str(archive))
+
+    assert result.code == 0, result.err
+    assert not (server.root / "tools" / "new_tool.py").exists()
+    assert f"Removed, because they are {NEW}'s own files, byte for byte" in result.err
+    assert "tools/new_tool.py" in result.err
+
+
+def test_the_recovery_s_start_ends_a_record_of_a_stop(server, run_cave, killed):
+    """`down` while an update is in flight records the stop; the recovery's way back starts the
+    stack, so the record would only mislead the watch and status afterwards."""
+    server.release(NEW)
+
+    def die(release):
+        if release == NEW:
+            raise killed
+
+    server.stack.before["up"] = die
+    with pytest.raises(killed):
+        run_cave("update")
+    server.stack.before.clear()
+    assert run_cave("down").code == 0
+    assert server.data.joinpath(".cave", "stopped.json").exists()
+
+    assert run_cave("update", "--recover").code == 2
+
+    assert server.stack.running == OLD
+    assert not server.data.joinpath(".cave", "stopped.json").exists()
+
+
+def test_a_restore_ends_a_record_of_a_stop_once_it_changes_the_state(
+    server,
+    run_cave,
+    backups,  # noqa: F811
+):
+    assert run_cave("backup").code == 0
+    [archive] = archives(backups)
+    assert run_cave("down").code == 0
+
+    assert run_cave("restore", str(archive)).code == 0
+
+    assert server.stack.running == OLD
+    assert not server.data.joinpath(".cave", "stopped.json").exists()
+    assert _field(run_cave("status").out, "NOT STARTED") == []
+
+
+def test_a_restore_that_cannot_unpack_leaves_a_stack_stopped_on_purpose_stopped(
+    server,
+    run_cave,
+    backups,  # noqa: F811
+    monkeypatch,
+):
+    assert run_cave("backup").code == 0
+    [archive] = archives(backups)
+    assert run_cave("down").code == 0
+    monkeypatch.setattr(restore._server, "extract", _disk_full)
+
+    result = run_cave("restore", str(archive))
+
+    assert result.code == 1
+    assert server.stack.running is None
+    assert "it had been stopped on purpose before the restore" in result.err
+    assert "`./cave down` stopped it" in " ".join(_field(run_cave("status").out, "NOT STARTED"))
+
+
+def test_an_up_whose_compose_fails_leaves_the_record_of_down(server, run_cave):
+    assert run_cave("down").code == 0
+    server.stack.fail_times["up"] = 1
+
+    assert run_cave("up").code != 0
+
+    assert server.data.joinpath(".cave", "stopped.json").exists()
+    assert run_cave("up").code == 0
+    assert not server.data.joinpath(".cave", "stopped.json").exists()
+
+
+def test_a_start_by_the_service_user_overrides_the_note_it_cannot_remove(
+    server, run_cave, monkeypatch
+):
+    """The note of v2026.11.22.1 lies in root's `.cave/ops`. The service user's `up` cannot
+    remove it; it records the start instead, which counts more than the old note: a later stop is
+    reported by the watch, and status no longer says "finished with --no-start"."""
+    from cave_ops import records
+
+    legacy = server.data / ".cave" / "ops" / "not-started.json"
+    legacy.parent.mkdir(parents=True, exist_ok=True)
+    legacy.write_text(json.dumps({"what": "the restore of cave-backup-old.tar.gz"}))
+    server.stack.running = None
+    real_unlink = Path.unlink
+
+    def roots_directory(self, missing_ok=False):
+        if self == legacy:
+            raise PermissionError(13, "Permission denied")
+        real_unlink(self, missing_ok=missing_ok)
+
+    monkeypatch.setattr(Path, "unlink", roots_directory)
+
+    assert run_cave("up").code == 0
+    server.stack.running = None
+
+    assert legacy.exists()
+    assert records.stopped(_paths(server)) is None
+    assert _field(run_cave("status").out, "NOT STARTED") == []

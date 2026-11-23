@@ -171,3 +171,71 @@ def test_a_command_that_really_holds_the_lock_still_refuses(server, run_cave, ct
     assert result.code == 1
     assert "`cave backup`" in result.err
     assert server.stack.ops == []
+
+
+# ----------------------------------------- the first review of #30: what it found untested
+def test_when_home_assistant_cannot_say_whether_a_thermostat_is_held_the_update_goes_ahead(
+    server, run_cave, ctx, fake_ha
+):
+    """It was healthy a moment before, with the same token. Holding every update back because
+    one list could not be read would stop updates for good; a check that the switch spoils only
+    has to be run again."""
+    server.release(NEW)
+
+    def states_fail(method, url, headers, body, timeout):
+        if url.endswith("/api/states"):
+            return 500, b'{"message": "internal error"}'
+        return fake_ha(method, url, headers, body, timeout)
+
+    ctx.transport = states_fail
+
+    result = run_cave("update")
+
+    assert result.code == 0, result.err
+    assert server.stack.running == NEW
+    assert "Could not ask Home Assistant whether a thermostat is held" in result.err
+
+
+@pytest.mark.parametrize("error", [OSError(5, "I/O error"), RuntimeError("a bug")])
+def test_a_failure_while_removing_old_images_never_changes_the_exit_status(
+    server, run_cave, monkeypatch, error
+):
+    from cave_ops.commands import _images
+
+    def broken(ctx):
+        raise error
+
+    monkeypatch.setattr(_images, "prune", broken)
+    server.release(NEW)
+
+    result = run_cave("update")
+
+    assert result.code == 0
+    assert server.stack.running == NEW
+    assert "Old images were not removed" in result.err
+
+
+def test_a_probe_that_lasts_a_second_still_refuses_no_update(server, run_cave, ctx, clock):
+    """The patience is meant for an instant's probe by `status` or the watch, which a busy server
+    may stretch: a second is well inside it."""
+    server.release(NEW)
+    ctx.paths.lock_file.parent.mkdir(parents=True, exist_ok=True)
+    ctx.paths.lock_file.touch()
+    probe = os.open(ctx.paths.lock_file, os.O_RDONLY)
+    fcntl.flock(probe, fcntl.LOCK_SH | fcntl.LOCK_NB)
+    waited = []
+
+    def sleep(seconds):
+        waited.append(seconds)
+        clock.sleep(seconds)
+        if sum(waited) >= 1.0 and probe not in released:
+            released.append(probe)
+            os.close(probe)
+
+    released = []
+    ctx.sleep = sleep
+
+    result = run_cave("update")
+
+    assert result.code == 0, result.err
+    assert sum(waited) >= 1.0

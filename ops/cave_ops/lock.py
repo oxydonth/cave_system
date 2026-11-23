@@ -35,6 +35,7 @@ instant probe by ``held_by``; a command that really holds the lock takes far lon
 RETRY = 0.05
 UNKNOWN_HOLDER = "another cave command"
 _PID = re.compile(r"\(pid (\d+)[,)]")
+_SINCE = re.compile(r"since (\d{4}-\d\d-\d\d \d\d:\d\d:\d\d)")
 
 
 class LockBusy(CaveError):
@@ -76,16 +77,44 @@ def _alive(pid: int) -> bool:
     return True
 
 
+def _started_at(pid: int) -> float | None:
+    """When process ``pid`` started, in seconds since the epoch; ``None`` where that cannot be
+    read (only Linux's ``/proc`` says it, which is what the server runs)."""
+    try:
+        stat = Path(f"/proc/{pid}/stat").read_text(encoding="ascii", errors="replace")
+        boot = next(
+            float(line.split()[1])
+            for line in Path("/proc/stat").read_text(encoding="ascii").splitlines()
+            if line.startswith("btime ")
+        )
+        ticks = float(stat.rsplit(")", 1)[1].split()[19])  # field 22, after "(comm)"
+        return boot + ticks / os.sysconf("SC_CLK_TCK")
+    except (OSError, ValueError, IndexError, StopIteration):
+        return None
+
+
 def _holder(fd: int) -> str:
     """The holder named in the lock file, if that process still lives; else ``UNKNOWN_HOLDER``.
 
     A holder that could not write the file (the service user, while an earlier version's lock
-    file is still root's) leaves the previous holder's name in it: a process that has ended.
+    file is still root's) leaves the previous holder's name in it: a process that has ended, or
+    whose number another process has since been given (after a reboot, say). So the name is
+    believed only while a process with that number lives and, where its start can be read, did
+    not start after the time the name was written.
     """
     text = os.pread(fd, 200, 0).decode(errors="replace").strip()
     found = _PID.search(text)
     if not text or found is None or not _alive(int(found.group(1))):
         return UNKNOWN_HOLDER
+    since = _SINCE.search(text)
+    started = _started_at(int(found.group(1)))
+    if since is not None and started is not None:
+        try:
+            written = time.mktime(time.strptime(since.group(1), "%Y-%m-%d %H:%M:%S"))
+        except (ValueError, OverflowError):
+            return UNKNOWN_HOLDER
+        if started > written + 2:  # a later process with the same number
+            return UNKNOWN_HOLDER
     return text
 
 

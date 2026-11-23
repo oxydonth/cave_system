@@ -239,3 +239,41 @@ def test_a_restore_says_that_the_alert_url_changed_without_printing_it(
     assert headlines(receiver) == ["restored stack not started"], "this restore's own alert"
     printed = result.out + result.err + "\n".join(journal)
     assert "tk_notarealtoken" not in printed
+
+
+# ----------------------------------------- the first review of #30: what it found untested
+@pytest.mark.parametrize("command", ["update", "backup"])
+def test_unset_a_warning_asks_nothing_and_says_nothing_about_alerts(
+    server,
+    run_cave,
+    ctx,
+    backups,  # noqa: F811
+    monkeypatch,
+    command,
+):
+    """Unset is today's behaviour: a warning of a command neither asks Docker for the alert's
+    stack state nor tries to send, nor says that an alert could not be sent."""
+    asked = []
+    monkeypatch.setattr(alert, "check_health", lambda ctx: asked.append(1))
+    monkeypatch.setattr(alert, "_post", lambda *args: asked.append(2))
+    ctx.env.pop("CAVE_ALERT_URL", None)
+    if command == "update":
+        server.release(NEW)
+        server.stack.unhealthy.add(NEW)
+        expected = 2
+    else:
+        from cave_ops.commands import backup
+
+        monkeypatch.setattr(backup, "write_archive", _disk_full)
+        expected = 1
+
+    result = run_cave(command)
+
+    assert result.code == expected
+    assert asked == []
+    assert "could not be sent" not in result.err
+    assert "CAVE_ALERT_URL" not in result.err
+
+
+def _disk_full(*args, **kwargs):
+    raise OSError(errno.ENOSPC, "No space left on device")
