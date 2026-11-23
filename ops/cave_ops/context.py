@@ -71,11 +71,14 @@ class Context:
         return cls(paths=Paths(root=root, data=Path(data)), env=env)
 
     # --- output
+    # Flushed at once: under systemd the output is a pipe to the journal, which Python would
+    # buffer, so that the journal showed a run's progress only at its end, out of order with its
+    # warnings, and lost it to a kill or a power cut.
     def say(self, message: str = "") -> None:
-        print(message, file=self.out)
+        print(message, file=self.out, flush=True)
 
     def warn(self, message: str) -> None:
-        print(message, file=self.err)
+        print(message, file=self.err, flush=True)
 
     # --- external programs, always from the checkout so Compose finds compose.yaml and .env
     def docker(

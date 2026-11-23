@@ -60,6 +60,19 @@ recovery_journal() {
   vm 'sudo journalctl -b -u cave-recover.service --no-pager -o cat'
 }
 
+release_4s_file_is_gone() {
+  local journal
+  journal=$(recovery_journal)
+  if grep -qF "rehearsal-release-4.txt" <<< "${journal}"; then
+    echo "the file was on the disk after the cut; the recovery says:"
+    grep -E "Note: removed, because they are $(recall tag4)'s own files, byte for byte .*: rehearsal-release-4\.txt\.\$" <<< "${journal}" ||
+      return 1
+  else
+    echo "the file did not survive the power cut; the recovery had nothing to remove"
+  fi
+  vm 'test ! -e /opt/cave/rehearsal-release-4.txt'
+}
+
 snapshots() {
   vm "sudo ls ${DATA}/.cave/ops/snapshots 2> /dev/null | xargs"
 }
@@ -107,9 +120,10 @@ check "the recovery says the update was interrupted during the switch" \
 check "it rolled back to release 2 with the state from before" \
   contains "^Update to $(recall tag4) failed: it was interrupted \(killed or a power cut\) during the switch\. Rolled back: the previous release $(recall tag2) with the state from before the update .* is running and healthy\." \
   recovery_journal
-check "it removed release 4's own file from the checkout and said so" \
-  contains "Note: removed, because they are $(recall tag4)'s own files, byte for byte .*: rehearsal-release-4\.txt\.\$" \
-  recovery_journal
+# Git does not flush the files of a checkout to the disk, so the power cut may have taken release
+# 4's file with it; if it was still there, the recovery removed it and said so.
+check "release 4's own file is not in the checkout, and the recovery named it if it removed it" \
+  release_4s_file_is_gone
 check "the recovery unit exited 2: rolled back" equals "exit-code 2" unit_outcome cave-recover.service
 check "the checkout is exactly release 2: clean, no Git lock file, no file of root's" \
   equals "" vm 'sudo -u cave git -C /opt/cave status --porcelain --untracked-files=all; ls /opt/cave/.git/*.lock 2> /dev/null; sudo find /opt/cave -user root'

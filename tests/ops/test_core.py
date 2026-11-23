@@ -275,6 +275,30 @@ def test_wait_healthy_returns_the_last_verdict_after_the_timeout(ctx, fake_runne
     assert clock.now == 20
 
 
+# ---------------------------------------------------------------------------------------- output
+@pytest.mark.parametrize("stream", ["say", "warn"])
+def test_what_a_command_says_reaches_a_pipe_at_once(tmp_path, repo_root, stream):
+    """Under systemd the output goes to the journal through a pipe, where Python buffers it. A
+    line said before a power cut or a kill must already be there (found by the server rehearsal:
+    the journal of a running update showed none of its progress)."""
+    code = (
+        "import os, sys; from pathlib import Path; from cave_ops.context import Context\n"
+        "ctx = Context.create(Path(sys.argv[1]), environ={})\n"
+        f"ctx.{stream}('Stopping the stack ...')\n"
+        "os._exit(9)  # as a kill or a power cut: nothing is flushed on the way out\n"
+    )
+    done = subprocess.run(
+        [sys.executable, "-c", code, str(tmp_path)],
+        env={**os.environ, "PYTHONPATH": str(repo_root / "ops")},
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+
+    assert done.returncode == 9
+    assert "Stopping the stack ..." in (done.stdout if stream == "say" else done.stderr)
+
+
 # ---------------------------------------------------------------------------------------- notify
 
 

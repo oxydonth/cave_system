@@ -152,6 +152,24 @@ def test_apply_refuses_while_an_update_or_restore_is_unfinished(
     assert fake_runner.calls == []
 
 
+def test_apply_names_a_half_restored_state_even_when_heating_yaml_is_set_aside(
+    run_cave, home, ctx, fake_runner
+):
+    """A restore that stops half-way may have moved Home Assistant's directory, and with it
+    heating.yaml, aside. apply said "does not exist; run `./cave init` first", which in a
+    half-restored state is the wrong advice (found by the server rehearsal). It says what
+    docs/operations.md promises: "Not applied: …" and the way out."""
+    home.heating.unlink()
+    unfinished_restore(ctx)
+
+    result = run_cave("apply")
+
+    assert result.code == 1
+    assert "Not applied: a restore of /var/backups/cave/x.tar.gz stopped half-way" in result.err
+    assert "cave init" not in result.err + result.out
+    assert fake_runner.calls == []
+
+
 @pytest.mark.parametrize(
     ("make", "says"),
     [

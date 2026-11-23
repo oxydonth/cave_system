@@ -3,8 +3,11 @@ each with the test that fails without its fix."""
 
 from __future__ import annotations
 
+import os
+
 import pytest
 
+from cave_ops import alert, records
 from cave_ops.commands import _server
 
 
@@ -51,3 +54,26 @@ def test_the_env_from_before_a_restore_belongs_to_the_checkouts_owner(
     [kept] = server.root.glob(".env.before-restore-*")
     assert owners.get(str(kept)) == server.root.stat().st_uid
     assert owners.get(str(server.root / ".env")) == server.root.stat().st_uid
+
+
+@pytest.mark.parametrize("record", ["watch", "stopped"])
+def test_a_record_root_writes_in_cave_belongs_to_the_service_user(ctx, monkeypatch, record):
+    """A restore's alert, delivered while the stack was down, marked the watch's memory as root
+    (``mark_alerted``), and a restore with ``--no-start`` writes ``stopped.json`` as root: the
+    record then stayed root's in the service user's ``.cave``, and the owners in the state changed
+    with each such run (hardware-acceptance 6.2). Root now gives it to the directory's owner."""
+    cave = ctx.paths.lock_file.parent
+    cave.mkdir(parents=True, exist_ok=True)
+    owners: dict[str, int] = {}
+    monkeypatch.setattr(os, "geteuid", lambda: 0)
+    monkeypatch.setattr(os, "lchown", lambda p, u, g: owners.__setitem__(str(p), u))
+
+    if record == "watch":
+        alert.mark_alerted(ctx, "cave restore: restore stopped half-way")
+        path = ctx.paths.watch_record
+    else:
+        records.note_stopped(ctx.paths, "a restore finished with --no-start")
+        path = ctx.paths.stopped_record
+
+    assert path.is_file()
+    assert owners.get(str(path)) == cave.stat().st_uid

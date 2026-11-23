@@ -70,6 +70,20 @@ def write_atomic(path: Path, data: bytes, mode: int = 0o644, writer: str = "") -
         os.close(directory)
 
 
+def give_to_directory_owner(path: Path) -> None:
+    """Run as root, give ``path`` to the owner of its directory.
+
+    The records in ``CAVE_DATA/.cave`` (``stopped.json``, ``watch.json``) are written by root
+    (a restore, a command's alert) as well as by the service user, in a directory that is the
+    service user's. Written by root, a record would stay root's, so that the owners in the state
+    changed with each such run (found by the server rehearsal, hardware-acceptance 6.2).
+    """
+    if os.geteuid() != 0:
+        return
+    info = path.parent.stat()
+    os.lchown(path, info.st_uid, info.st_gid)
+
+
 def utc_now() -> str:
     return datetime.datetime.now(datetime.UTC).strftime("%Y-%m-%d %H:%M UTC")
 
@@ -90,6 +104,7 @@ def note_stopped(paths: Paths, what: str, at: float | None = None) -> None:
     when = time.time() if at is None else at
     text = json.dumps({"what": what, "since": utc_now(), "at": when}) + "\n"
     write_atomic(paths.stopped_record, text.encode(), 0o644)
+    give_to_directory_owner(paths.stopped_record)
 
 
 def stopped(paths: Paths) -> Stopped | None:
@@ -146,6 +161,7 @@ def restore_stopped(paths: Paths, before: bytes | None) -> None:
         paths.stopped_record.unlink(missing_ok=True)
     else:
         write_atomic(paths.stopped_record, before, 0o644)
+        give_to_directory_owner(paths.stopped_record)
 
 
 def read_stopped(paths: Paths) -> bytes | None:
