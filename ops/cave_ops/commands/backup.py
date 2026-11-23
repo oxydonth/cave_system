@@ -169,7 +169,7 @@ def _backup(ctx: Context, directory: Path, keep: int, copy_to: Path | None) -> i
         name = _archives.archive_name(directory)
         partial = directory / f".{name}{_archives.PARTIAL}"
         ctx.say(f"Writing {directory / name} ...")
-        fd = os.open(partial, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600)
+        fd = os.open(partial, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o644)
         os.close(fd)
         manifest = write_archive(ctx, partial)
         with open(partial, "rb") as handle:

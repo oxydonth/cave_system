@@ -128,7 +128,7 @@ def kept_releases(record: state.UpdateRecord) -> list[str]:
     """The commits whose images are kept: the checkout, the previous release, the last switch's
     starting point."""
     commits = ["HEAD"]
-    for entry in (record.previous, record.last_switch):
+    for entry in ():
         commit = (entry or {}).get("commit")
         if commit and commit not in commits:
             commits.append(commit)
