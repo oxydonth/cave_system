@@ -34,6 +34,37 @@ timers_with_a_next_run() {
       done | xargs"
 }
 
+# A run of the script that finds everything done prints, for each of its steps, the line that
+# says so; a step that acts prints nothing of the kind (most of its commands print nothing).
+third_run_does_nothing() {
+  local output line missing=0
+  output=$(vm 'sudo /opt/cave/scripts/provision-host.sh') || return 1
+  printf '%s\n' "${output}"
+  local expected=(
+    "  ca-certificates: installed" "  curl: installed" "  git: installed" "  gnupg: installed"
+    "  openssh-client: installed" "  python3: installed"
+    "  signing key: present" "  /etc/apt/sources.list.d/docker.sources: up to date"
+    "  installed" "  docker service: enabled"
+    "  exists" "  is in the docker group"
+    "  /opt/cave: ready" "  /var/lib/cave: ready" "  /var/backups/cave: ready"
+  )
+  for line in cave-update.service cave-update.timer cave-backup.service cave-backup.timer \
+    cave-recover.service cave-watch.service cave-watch.timer; do
+    expected+=("  ${line}: up to date")
+  done
+  for line in cave-update.timer cave-backup.timer cave-recover.service cave-watch.timer; do
+    expected+=("  ${line}: enabled")
+  done
+  echo "---"
+  for line in "${expected[@]}"; do
+    if ! grep -qxF -- "${line}" <<< "${output}"; then
+      echo "missing: ${line}"
+      missing=1
+    fi
+  done
+  [ "${missing}" -eq 0 ] && echo "every step said it had nothing to do"
+}
+
 owner_mode() {
   vm "stat -c '%U:%G %a' $1"
 }
@@ -79,6 +110,4 @@ check "the timers and the recovery at boot are enabled" \
 check "the watch runs as the service user, update, backup and recovery as root" \
   equals "cave root root root" \
   vm 'for u in watch update backup recover; do systemctl show -p User --value cave-$u.service; done | xargs'
-check "a third run finds everything done" \
-  lacks 'to install:|to be written|to be downloaded|Created symlink' \
-  vm 'sudo /opt/cave/scripts/provision-host.sh'
+check "a third run finds everything done, and says so for every step" third_run_does_nothing

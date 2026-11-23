@@ -11,9 +11,11 @@ name: Server rehearsal
 # the machine's journals as an artifact. The ordinary pipeline (ci.yml) does not call this.
 #
 # It runs once a week, on demand, and for a push to main or a pull request that changes the
-# operations commands (ops/, cave), the provisioning (scripts/) or the rehearsal itself. Only the
-# pull_request event, never pull_request_target, and no secrets: the machine's key pair is made in
-# the job. When it ran on a pull request, it has to be green before the merge (CLAUDE.md).
+# operations commands (ops/, cave), the provisioning (scripts/), what an update carries to a
+# server (compose.yaml, the Home Assistant configuration, the broker's configuration, tools/) or
+# the rehearsal itself. Only the pull_request event, never pull_request_target, and no secrets:
+# the machine's key pair is made in the job. When it ran on a pull request, it has to be green
+# before the merge (CLAUDE.md).
 
 on:
   workflow_dispatch:
@@ -33,6 +35,10 @@ on:
       - "ops/**"
       - "cave"
       - "scripts/**"
+      - "compose.yaml"
+      - "homeassistant/**"
+      - "mosquitto/**"
+      - "tools/**"
       - "tests/server/**"
       - ".github/workflows/server-rehearsal.yml"
   pull_request:
@@ -40,6 +46,10 @@ on:
       - "ops/**"
       - "cave"
       - "scripts/**"
+      - "compose.yaml"
+      - "homeassistant/**"
+      - "mosquitto/**"
+      - "tools/**"
       - "tests/server/**"
       - ".github/workflows/server-rehearsal.yml"
 

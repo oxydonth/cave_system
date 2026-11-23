@@ -4,9 +4,21 @@
 # becomes healthy. The owner runs the update by hand (`sudo ./cave update`); it has to roll back
 # to release 2 with the state from before, remember release 3 as failed, remove release 3's image
 # and alert (docs/operations.md, the rows "Update to v… failed: … Rolled back" and "Old images").
+#
+# Release 3 fails when it starts, before Home Assistant runs on it, so it changes nothing in the
+# state itself. So that the rollback has to put the state back for the check to pass, a marker is
+# written into the state once the switch has begun (the snapshot is complete): the way back must
+# take it away with the rest of what the switch left.
+#
+# Before it, an image of the broker's repository is pulled by its digest only, as other software
+# might: Docker lists it with the tag <none> (hardware-acceptance 6.8), and the clean-up at the
+# end of the update must read that line and remove it, since no release here names it.
 
 . "$(dirname "$0")/lib.sh"
 part update-broken
+
+DIGEST_ONLY=eclipse-mosquitto@sha256:d12c8f80dfc65b768bb9acecc7ef182b976f71fb681640b66358e5e0cf94e9e9
+MARKER=/var/lib/cave/homeassistant/written-after-the-snapshot
 
 publish_release_3() {
   local tag
@@ -32,16 +44,33 @@ state_sum() {
 alerts_before=$(alert_count)
 before=$(state_sum)
 step "publish release 3" publish_release_3
-# The update runs in the step and its exit status is checked below: it is meant to fail.
-step "sudo ./cave update, by hand (release 3 does not become healthy)" \
-  vm 'cd /opt/cave && sudo ./cave update > ~/update-3.log 2>&1; echo "exit status $?" >> ~/update-3.log; cat ~/update-3.log'
+step "copy the helper that reports the point of the switch" vm_put "${SERVER_TESTS}/when.sh" when.sh
+step "pull an image of the broker's repository by its digest only" \
+  vm "sudo docker pull --quiet ${DIGEST_ONLY}"
+check "docker image ls --digests lists it with the tag <none> and its digest (6.8)" \
+  contains "^eclipse-mosquitto"$'\t'"<none>"$'\t'"${DIGEST_ONLY#*@}\$" \
+  vm "sudo docker image ls --digests --format '{{.Repository}}\t{{.Tag}}\t{{.Digest}}'"
+# The update runs in the step and its exit status is checked below: it is meant to fail. Beside
+# it, as root, the marker is written and flushed to the disk once the snapshot is complete.
+step "sudo ./cave update, by hand (release 3 does not become healthy); a marker in the state once the switch has begun" \
+  vm "rm -f ~/marker-3.log
+      (sudo bash when.sh switching /var/lib/cave > /dev/null && sudo touch ${MARKER} && sync &&
+        echo 'marker written' > ~/marker-3.log) &
+      cd /opt/cave && sudo ./cave update > ~/update-3.log 2>&1; echo \"exit status \$?\" >> ~/update-3.log
+      sudo pkill -f 'when[.]sh switching' || true  # an update that never switched: stop waiting
+      wait; cat ~/update-3.log"
+check "the marker was written while the switch ran" equals "marker written" vm 'cat ~/marker-3.log'
 check "the update exits 2: rolled back" contains '^exit status 2$' the_update
+check "the rollback took the marker away with the rest of the switch's state" \
+  vm "sudo test ! -e ${MARKER}"
 check "it says that release 3 failed and was rolled back to release 2" \
   contains "^Update to $(recall tag3) failed: .*Rolled back: the previous release $(recall tag2) with the state from before the update .* is running and healthy\." \
   the_update
-check "it removed release 3's broker image, which no kept release needs" \
-  contains "^cave update: removed 1 image\(s\) that no release here needs any more: $(broker_tag_of "$(recall tag3)")\.\$" \
+check "it removed release 3's broker image and the one with only a digest, which no kept release needs" \
+  contains "^cave update: removed 2 image\(s\) that no release here needs any more: ($(broker_tag_of "$(recall tag3)"), ${DIGEST_ONLY}|${DIGEST_ONLY}, $(broker_tag_of "$(recall tag3)"))\.\$" \
   the_update
+check "the image with only a digest is gone" lacks "${DIGEST_ONLY#*@}" \
+  vm "sudo docker image ls --digests --format '{{.Repository}}\t{{.Tag}}\t{{.Digest}}'"
 check "the broker images left are release 1's and release 2's" \
   equals "$(printf '%s\n' "$(broker_tag_of "$(recall tag1)")" "$(broker_tag_of "$(recall tag2)")" | sort | xargs)" \
   broker_images

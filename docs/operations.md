@@ -690,15 +690,16 @@ long it took:
 | `install` | Steps 5 to 8: `init`, `.env`, the pull, `check`, `up`, `bootstrap`, `apply` with a room. | Owners and modes of `.env`, the token and the mount points, `status`, the watch as the service user with Docker. |
 | `backup` | `cave-backup.service`, as its timer starts it. | The archive is root's, mode 600, holds neither `.cave/ops` nor the lock; `.cave` and the lock are the service user's afterwards; `apply` works; no alert. |
 | `update` | A newer release; `cave-update.service`. | `Installed …`, the recovery after it found nothing, the new image runs and the previous one is kept, the snapshot, a clean checkout without root's files, `apply` works, no alert. |
-| `update-broken` | A release whose broker never becomes healthy; `sudo ./cave update`. | Exit status 2, `Rolled back`, the state from before, its image removed and the others kept, `Failed` in `status`, the alert `update rolled back` with only its fixed words, the next run skips it. |
-| `restore` | A backup by hand restored onto the same directory; a restore that stops half-way (an entry made immutable), then `--undo`; a restore onto a new directory with `--data`. | No owner or mode changed; the copies kept from before; `status`, `apply` and `backup` while half-way; the alerts `restore stopped half-way`, `no backup: …` and the watch's `healthy again`; the new directory's owners equal the old one's, and the stack runs from it. |
+| `update-broken` | An image of the broker pulled by its digest only; a release whose broker never becomes healthy; `sudo ./cave update`, and a file written into the state once the switch has begun. | The digest-only image listed with the tag `<none>`; exit status 2, `Rolled back`, the file written during the switch gone (the snapshot was put back), its image and the digest-only one removed and the others kept, `Failed` in `status`, the alert `update rolled back` with only its fixed words, the next run skips it. |
+| `restore` | A backup by hand, a file and a line of `.env` written after it, and the backup restored onto the same directory; a restore that stops half-way (an entry made immutable), then `--undo`; a restore killed after it put the state and `.env` in place, then `--undo`; a restore onto a new directory with `--data`. | What was written after the backup is gone, the `.env` from before kept; no owner or mode changed and no path lost; `status`, `update`, `apply` and `backup` refuse while half-way, with their exit status; the undo brings back what was there before, the `.env` it puts back is the service user's; the alerts `restore stopped half-way`, `no backup: …` and the watch's `healthy again`; the new directory's owners equal the old one's, and the stack runs from it. |
 | `reboot` | `sudo reboot`. | The stack is back by itself, the recovery ran after Docker and exited 0, the previous boot's journal is kept, the timers' next runs (02:30 and 03:30 plus their delays), no alert. |
-| `power-cut` | The machine killed hard twice during the nightly update: while it stops the stack, and while it starts the new release. | For each phase what [Interrupted updates](#interrupted-updates) says: the previous release again and not marked failed, or the full rollback with the new release's file removed and the release marked failed; a clean checkout; `Running now` in `status` during the update; one alert, none for the power cut itself. |
+| `power-cut` | The machine killed hard twice during the nightly update: while it stops the stack, and while it starts the new release, after a file was written into the state and flushed to the disk. | For each phase what [Interrupted updates](#interrupted-updates) says: the previous release again and not marked failed, or the full rollback (the file written during the switch gone, the new release's file removed, the release marked failed); a clean checkout; `Running now` in `status` during the update; one alert, none for the power cut itself. |
 | `down-up` | `down`, the watch, `up`; a lock held under a name written before and after its process started. | `NOT STARTED … on purpose`, nothing to report; who holds the lock, as Linux's `/proc` tells a reused process number apart. |
 | `watch` | Home Assistant's container stopped without `cave`, left so in real time; `cave up`. | One alert after 15 to 20 minutes, no second one, the all-clear after `up`, a run every five minutes as the service user, the alert's fixed words, the URL's token in no journal, every alert of the whole run in order. |
 
 **How to start it**: it runs once a week, on every push to `main` and every pull request that
-changes `ops/`, `cave`, `scripts/` or the rehearsal itself, and on demand:
+changes `ops/`, `cave`, `scripts/`, what an update carries to a server (`compose.yaml`,
+`homeassistant/`, `mosquitto/`, `tools/`) or the rehearsal itself, and on demand:
 
 ```sh
 gh workflow run server-rehearsal.yml                       # every part
@@ -710,11 +711,11 @@ gh run watch                                               # follow it
 each part with its outcome and duration, every failed assertion and every known finding; the
 artifact `server-rehearsal-logs` holds the machine's journals, `cave status` and the alerts.
 
-**How long it takes**: about 45 minutes in all. The watch's real-time wait is about 27 of them (the
-alert 15 to 20 minutes after the stop, one more run to see that no second alert follows, the
-all-clear within five minutes), the restore about 4 (it waits for the watch's all-clear too), and
-everything else, every start of Home Assistant included, about 10 to 15, depending on how fast the
-runner installs QEMU. The job stops after 90 minutes.
+**How long it takes**: about 40 to 45 minutes in all. The watch's real-time wait is about 27 of
+them (the alert 15 to 20 minutes after the stop, one more run to see that no second alert follows,
+the all-clear within five minutes), the restore about 4 to 6 (it waits for the watch's all-clear
+too), and everything else, every start of Home Assistant included, about 10 to 15, depending on
+how fast the runner installs QEMU. The job stops after 90 minutes.
 
 **Known findings** are listed in `tests/server/known-findings.tsv` with their issue: such a
 failure is reported and does not fail the run, and one that starts to pass fails it until the line
@@ -735,5 +736,6 @@ is removed.
   but the disk itself does not fail half-way through a write, as a card or a cheap SSD can.
 * The receiver is a few lines of Python in the machine, not ntfy on the home network, and the
   timers' nightly times are read, not waited for.
-* Debian's daily apt timers are switched off in the machine, so that they cannot hold the
-  package lock while the provisioning script runs; on a server they run at 06:00 and 18:00.
+* The owner's `sudo` asks for no password in the machine. Debian's daily apt timers stay on, as
+  on a server: `apt-daily.timer` is persistent and has a random delay of up to twelve hours, so it
+  can hold the package lock right after the first boot. `provision-host.sh` waits for the lock.

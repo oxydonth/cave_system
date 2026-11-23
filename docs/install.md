@@ -47,6 +47,10 @@ uname -m                 # x86_64 on a mini PC, aarch64 on a Raspberry Pi
 python3 --version        # 3.11 or newer; Debian 13 has it
 ```
 
+If `apt-get` says that it "Could not get lock", Debian's own daily update is running, which it
+may do right after the first start: wait a few minutes and run it again. The provisioning script
+of the next step waits for the lock by itself.
+
 ## 2. Give the server a fixed address
 
 Everything reaches the server by its address: your browser, the phone app, and later the

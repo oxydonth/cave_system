@@ -146,6 +146,7 @@ check "every alert of the rehearsal, in order" \
     "cave-server: update rolled back (token: true)" \
     "cave-server: restore stopped half-way (token: true)" \
     "cave-server: no backup: a restore is unfinished (token: true)" \
+    "cave-server: no backup: a restore is unfinished (token: true)" \
     "cave-server: healthy again (token: true)" \
     "cave-server: update rolled back (token: true)" \
     "cave-server: the stack is not healthy (token: true)" \

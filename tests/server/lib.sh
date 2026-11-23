@@ -24,7 +24,7 @@ SERVER_TESTS=$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)
 # shellcheck disable=SC2034 # used by the parts
 REPOSITORY=$(cd "${SERVER_TESTS}/../.." && pwd)
 RESULTS=${REHEARSAL_DIR}/results.tsv
-KNOWN_FINDINGS=${SERVER_TESTS}/known-findings.tsv
+KNOWN_FINDINGS=${KNOWN_FINDINGS:-${SERVER_TESTS}/known-findings.tsv}
 # Where the parts leave what a later part needs (the release tags, the archive of a backup).
 FACTS=${REHEARSAL_DIR}/facts
 
@@ -58,6 +58,14 @@ part() {
   fi
   echo "=== Part ${PART}"
   trap part_end EXIT
+  local malformed
+  malformed=$(malformed_findings)
+  if [ -n "${malformed}" ]; then
+    echo "::error title=known-findings.tsv::lines that are not part, name and #issue: ${malformed}"
+    record part "(known-findings.tsv)" FAIL 0 "malformed: ${malformed}"
+    PART_FAILED=1
+    exit 1
+  fi
 }
 
 # selected NAME: whether REHEARSAL_PARTS ("all", or the last part to run) includes the part.
@@ -96,6 +104,14 @@ known_finding() {
   [ -f "${KNOWN_FINDINGS}" ] || return 0
   awk -F '\t' -v part="${PART}" -v name="${name}" \
     '!/^#/ && $1 == part && $2 == name { print $3 }' "${KNOWN_FINDINGS}"
+}
+
+# The lines of known-findings.tsv that are not "part<TAB>name<TAB>#issue": such a line would
+# silently not be a finding, so the part fails instead.
+malformed_findings() {
+  [ -f "${KNOWN_FINDINGS}" ] || return 0
+  awk -F '\t' '!/^#/ && !/^[[:space:]]*$/ && (NF != 3 || $1 == "" || $2 == "" || $3 !~ /^#[0-9]+$/)' \
+    "${KNOWN_FINDINGS}"
 }
 
 record() {
@@ -241,26 +257,39 @@ broker_tag_of() {
 }
 
 # alerts: every request the alert receiver got, one JSON object per line, oldest first.
+# A machine that cannot be asked fails the read, so that no "sent no alert" check passes on it.
 alerts() {
-  vm 'sudo cat /var/lib/alert-receiver/alerts.jsonl 2> /dev/null || true'
+  # shellcheck disable=SC2016 # expands in the machine
+  vm 'f=/var/lib/alert-receiver/alerts.jsonl; if sudo test -e $f; then sudo cat $f; fi'
 }
 
 alert_count() {
-  alerts | wc -l | tr -d ' '
+  local all
+  all=$(alerts) || {
+    echo "the alert receiver's record could not be read" >&2
+    return 1
+  }
+  if [ -z "${all}" ]; then echo 0; else printf '%s\n' "${all}" | wc -l | tr -d ' '; fi
 }
 
 alert_count_is() {
-  [ "$(alert_count)" -ge "$1" ]
+  local count
+  count=$(alert_count) && [ "${count}" -ge "$1" ]
 }
 
 # alert_titles_after N: the titles of the alerts after the first N, one per line, each with
 # whether it carried the URL's token.
 alert_titles_after() {
-  alerts | tail -n "+$(($1 + 1))" | jq -r '"\(.title) (token: \(.authorised))"'
+  local all
+  all=$(alerts) || return 1
+  [ -z "${all}" ] || printf '%s\n' "${all}" | tail -n "+$(($1 + 1))" |
+    jq -r '"\(.title) (token: \(.authorised))"'
 }
 
 last_alert_body() {
-  alerts | tail -n 1 | jq -r .body
+  local all
+  all=$(alerts) || return 1
+  printf '%s\n' "${all}" | tail -n 1 | jq -r .body
 }
 
 # token_in_the_journal: how many lines of the machine's whole journal hold the alert URL's token.

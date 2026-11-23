@@ -15,6 +15,7 @@
 part power-cut
 
 DATA=$(state_dir)
+MARKER=${DATA}/homeassistant/written-during-the-switch
 
 publish_release_4() {
   local tag
@@ -28,15 +29,20 @@ boot_id() {
 }
 
 # start_update_and_cut_power_when POINT: the nightly update starts; the power goes the moment the
-# machine reports POINT (when.sh). With "starting", the update's journal so far is kept first.
+# machine reports POINT (when.sh). With "starting", first a marker is written into the state and
+# flushed to the disk (the way back has to take it away again), and the update's journal so far
+# is kept.
 start_update_and_cut_power_when() {
   vm 'sudo systemctl start --no-block cave-update.service' || return 1
   if [ "$1" = starting ]; then
     # While the update is busy with its checks: who holds the lock, as cave status says it.
     sleep 5
     cave status > "${REHEARSAL_DIR}/status-during-update.txt" 2>&1
+    vm "sudo bash when.sh starting ${DATA} > /dev/null && sudo touch ${MARKER} && sync && echo now" |
+      grep -qx now || return 1
+  else
+    vm "sudo bash when.sh $1 ${DATA}" | grep -qx now || return 1
   fi
-  vm "sudo bash when.sh $1 ${DATA}" | grep -qx now || return 1
   if [ "$1" = starting ]; then
     vm 'sudo journalctl -u cave-update.service --since "-10min" --no-pager -o cat' \
       > "${REHEARSAL_DIR}/journal-before-the-cut.txt" 2>&1
@@ -103,7 +109,7 @@ check "cave status exits 0" exits 0 cave status
 
 # --- 2. while starting the new release
 boot=$(boot_id)
-step "start the nightly update again; cut the power while it starts release 4" \
+step "start the nightly update again; write a marker into the state and sync; cut the power while it starts release 4" \
   start_update_and_cut_power_when starting
 check "while the update ran, cave status named it as the lock's holder" \
   contains '^Running now: +`cave update` \(pid [0-9]+, since [0-9-]+ [0-9:]+\)$' \
@@ -120,6 +126,8 @@ check "the recovery says the update was interrupted during the switch" \
 check "it rolled back to release 2 with the state from before" \
   contains "^Update to $(recall tag4) failed: it was interrupted \(killed or a power cut\) during the switch\. Rolled back: the previous release $(recall tag2) with the state from before the update .* is running and healthy\." \
   recovery_journal
+check "the state is the one from before the update: the marker written during the switch is gone" \
+  vm "sudo test ! -e ${MARKER}"
 # Git does not flush the files of a checkout to the disk, so the power cut may have taken release
 # 4's file with it; if it was still there, the recovery removed it and said so.
 check "release 4's own file is not in the checkout, and the recovery named it if it removed it" \

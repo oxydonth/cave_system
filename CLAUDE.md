@@ -34,8 +34,9 @@ device matrix; these, the tests that need Docker and the job `e2e` (the stack, t
 - Done means: acceptance criteria demonstrated, review verdict `VERDICT: APPROVE`, and the branch rebased on the
   current `main` with the pipeline (`ci-ok`) green on its latest commit.
 - The server rehearsal (`.github/workflows/server-rehearsal.yml`, `docs/operations.md`, "The server rehearsal") is
-  not part of `ci-ok`. It runs on a pull request that changes `ops/`, `cave`, `scripts/` or the rehearsal, and when
-  it ran, it has to be green on the latest commit before the merge. It also runs weekly; GitHub turns off scheduled
+  not part of `ci-ok`. It runs on a pull request that changes `ops/`, `cave`, `scripts/`, `compose.yaml`,
+  `homeassistant/`, `mosquitto/`, `tools/` or the rehearsal, and when it ran, it has to be green on the latest commit
+  before the merge. It also runs weekly; GitHub turns off scheduled
   workflows in a public repository after 60 days without activity, so after a quiet spell check that it still runs
   (`gh workflow enable server-rehearsal.yml`).
 - Tests assert behaviour; a test that cannot fail does not count.

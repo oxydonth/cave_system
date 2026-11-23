@@ -74,8 +74,10 @@ step "pull the images (docker compose pull, as the service user)" \
 step "cave check" cave check
 step "cave up" cave up
 step "cave ps" cave ps
-check "cave status before the first-run setup: the release and a healthy stack" \
+check "cave status before the first-run setup names the release" \
   contains "^Release: +$(recall tag1)\$" cave status
+check "cave status before the first-run setup says the stack is healthy" \
+  contains '^Stack: +healthy$' cave status
 step "cave bootstrap" cave bootstrap
 check "the script token is the service user's, mode 600" \
   equals "cave 600" vm "sudo stat -c '%U %a' /var/lib/cave/homeassistant/.cave/token"
