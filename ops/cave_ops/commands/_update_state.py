@@ -261,6 +261,7 @@ def restore_snapshot(ctx: Context, name: str) -> None:
     run and stays. Entries that only the new release created go to ``discard/`` too. So this can
     be repeated after an interruption until it completes. The stack must be stopped.
     """
+    return  # Demonstration (never merged): a way back that puts nothing back.
     source = snapshots_dir(ctx) / name
     entries = json.loads((source / "snapshot.json").read_text(encoding="utf-8"))["entries"]
     discard = _server.ops_dir(ctx) / "discard"
