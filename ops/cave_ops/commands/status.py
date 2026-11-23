@@ -80,7 +80,9 @@ def run(ctx: Context, args: argparse.Namespace) -> int:
             "`sudo ./cave update --recover` starts it (the boot does too).",
         )
     deliberately = stopped(ctx.paths)
-    if deliberately is not None and not health.healthy:
+    # The record says what was meant; only a stack of which nothing runs is stopped. Over running
+    # containers it is stale (a start without `cave`), and the stack's line says what is wrong.
+    if deliberately is not None and health.stopped:
         _line(
             ctx,
             "NOT STARTED",

@@ -432,3 +432,75 @@ def test_a_start_by_the_service_user_overrides_the_note_it_cannot_remove(
     assert legacy.exists()
     assert records.stopped(_paths(server)) is None
     assert _field(run_cave("status").out, "NOT STARTED") == []
+
+
+# ------------------------------------------ the second review of #30: what runs, not the record
+def test_a_restore_after_a_start_without_cave_starts_the_stack_again_when_it_cannot_unpack(
+    server,
+    run_cave,
+    backups,  # noqa: F811
+    monkeypatch,
+):
+    """The reviewer's test. `./cave down`, then the owner starts the stack with Docker directly:
+    the record of the stop is stale, the stack runs. A restore that cannot unpack stopped it, so it
+    starts it again; the record does not decide that, what ran does."""
+    assert run_cave("backup").code == 0
+    [archive] = archives(backups)
+    assert run_cave("down").code == 0
+    server.stack.start(OLD)  # started without cave: the record of `down` is stale
+    monkeypatch.setattr(restore._server, "extract", _disk_full)
+
+    result = run_cave("restore", str(archive))
+
+    assert result.code == 1
+    assert server.stack.running == OLD, "a running stack was left stopped by a failed restore"
+    assert "stopped on purpose" not in result.err
+
+
+def test_an_undo_ends_a_record_of_a_stop_once_it_changes_the_state(
+    server,
+    run_cave,
+    backups,  # noqa: F811
+    monkeypatch,
+    killed,
+):
+    """A restore stopped half-way, then `./cave down`, then `--undo`: the undo puts the state from
+    before back and starts the stack, so the record of the stop goes."""
+    assert run_cave("backup").code == 0
+    [archive] = archives(backups)
+    renames = []
+    real_rename = os.rename
+
+    def power_cut(source, target):
+        renames.append(source)
+        if len(renames) == 6:
+            raise killed
+        real_rename(source, target)
+
+    monkeypatch.setattr(restore.os, "rename", power_cut)
+    with pytest.raises(killed):
+        run_cave("restore", str(archive))
+    monkeypatch.undo()
+    assert run_cave("down").code == 0
+    assert server.data.joinpath(".cave", "stopped.json").exists()
+
+    assert run_cave("restore", "--undo").code == 0
+
+    assert server.stack.running == OLD
+    assert not server.data.joinpath(".cave", "stopped.json").exists()
+
+
+def test_status_does_not_call_a_running_stack_stopped_on_purpose(server, run_cave):
+    """`./cave down`, then a start without `cave` that does not become healthy: the record is
+    stale, containers run. status does not say "NOT STARTED … on purpose"; the stack's line says
+    what is wrong."""
+    assert run_cave("down").code == 0
+    server.stack.start(OLD)
+    server.stack.unhealthy.add(OLD)
+
+    result = run_cave("status")
+
+    assert _field(result.out, "NOT STARTED") == []
+    assert "not healthy" in " ".join(_field(result.out, "Stack"))
+    server.stack.running = None  # and once nothing runs, the record speaks again
+    assert "`./cave down` stopped it" in " ".join(_field(run_cave("status").out, "NOT STARTED"))

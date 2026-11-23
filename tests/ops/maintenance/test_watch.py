@@ -41,12 +41,12 @@ def watch(run_cave, clock):
     only goes forward: commands run in between (which wait on it) may have moved it on."""
     origin = []
 
-    def run(minute):
+    def run(minute, code=0):
         if not origin:
             origin.append(clock.now)
         clock.now = max(clock.now, origin[0] + minute * 60.0)
         result = run_cave("watch")
-        assert result.code == 0, result.err
+        assert result.code == code, result.err
         return result
 
     return run
@@ -540,8 +540,64 @@ def test_an_unwritable_memory_alerts_at_once_and_says_that_it_repeats(
 
     assert result.code == 1
     assert headlines(receiver) == ["the stack is stopped"]
-    assert "this may repeat every five minutes" in receiver.received[0].body
-    assert "it alerts an incident at once and at every run" in result.err
+    assert "this repeats every five minutes while the incident lasts" in receiver.received[0].body
+    assert "no all-clear follows" in receiver.received[0].body
+    assert "it alerts an incident at once and at every run, and sends no all-clear" in result.err
+
+
+def test_an_unwritable_memory_repeats_the_incident_and_sends_no_all_clear(
+    server, receiver, watch, monkeypatch
+):
+    """While the memory cannot be written the watch trusts nothing it loaded: an incident is
+    alerted at every run, the all-clear is not sent (it would repeat every five minutes for as
+    long as the disk is full); the repeats stop when the stack is healthy again."""
+
+    def full(*args, **kwargs):
+        raise OSError(errno.ENOSPC, "No space left on device")
+
+    monkeypatch.setattr(alert, "write_atomic", full)
+    server.stack.running = None
+    for minute in range(0, 11, 5):
+        watch(minute, code=1)
+    assert headlines(receiver) == ["the stack is stopped"] * 3
+
+    server.stack.start(OLD)
+    for minute in range(15, 41, 5):
+        watch(minute, code=1)
+
+    assert headlines(receiver) == ["the stack is stopped"] * 3
+
+
+def test_a_memory_that_says_alerted_is_not_trusted_while_it_cannot_be_written(
+    server, receiver, watch, monkeypatch
+):
+    """Alerted and remembered before the disk filled; the incident goes on. "Alerted already" is
+    not trusted, because the watch cannot remember the next all-clear or incident either."""
+    server.stack.running = None
+    every_five_minutes(watch, 0, 15)
+    assert headlines(receiver) == ["the stack is stopped"]
+
+    def full(*args, **kwargs):
+        raise OSError(errno.ENOSPC, "No space left on device")
+
+    monkeypatch.setattr(alert, "write_atomic", full)
+    for minute in range(20, 31, 5):
+        watch(minute, code=1)
+
+    assert headlines(receiver) == ["the stack is stopped"] * 4
+
+
+def test_a_memory_that_cannot_be_read_counts_as_empty(server, receiver, watch):
+    """A damaged watch.json is read as nothing alerted, which can only lead to an alert: here it
+    is replaced at once and the count of fifteen minutes runs as usual."""
+    server.stack.running = None
+    (server.data / ".cave" / "watch.json").write_text("{ not json")
+
+    every_five_minutes(watch, 0, 10)
+    assert receiver.received == []
+    watch(15)
+
+    assert headlines(receiver) == ["the stack is stopped"]
 
 
 def test_an_unwritable_memory_sends_nothing_for_a_healthy_stack(
@@ -554,3 +610,51 @@ def test_an_unwritable_memory_sends_nothing_for_a_healthy_stack(
 
     assert run_cave("watch").code == 1
     assert receiver.received == []
+
+
+# ------------------------------------------ the second review of #30: a memory that fails later
+def test_a_full_disk_after_an_alerted_incident_still_alerts_the_next_one(
+    server, run_cave, receiver, clock, monkeypatch
+):
+    """The reviewer's test. An incident was alerted and remembered; then the disk fills; the
+    stack recovers and later stops again. The memory on disk still says "alerted", and the watch
+    must not trust it for staying silent."""
+
+    def full(*args, **kwargs):
+        raise OSError(errno.ENOSPC, "No space left on device")
+
+    origin = clock.now
+
+    def runs(minutes):
+        for minute in minutes:
+            clock.now = max(clock.now, origin + minute * 60.0)
+            run_cave("watch")
+
+    server.stack.running = None
+    runs(range(0, 16, 5))
+    assert headlines(receiver) == ["the stack is stopped"]
+    monkeypatch.setattr(alert, "write_atomic", full)
+    server.stack.start(OLD)
+    runs(range(20, 41, 5))
+    all_clears = headlines(receiver).count("healthy again")
+    server.stack.running = None
+    runs(range(45, 106, 5))
+
+    later = headlines(receiver)[1 + all_clears :]
+    assert "the stack is stopped" in later, (
+        f"second incident never alerted; received {headlines(receiver)}"
+    )
+
+
+def test_a_stack_that_runs_unhealthy_over_a_stale_record_is_an_incident(
+    server, run_cave, receiver, watch
+):
+    """`./cave down`, then a start without `cave` that does not become healthy. The record says
+    "on purpose", but containers run: the watch reports the unhealthy stack."""
+    assert run_cave("down").code == 0
+    server.stack.start(OLD)
+    server.stack.unhealthy.add(OLD)
+
+    every_five_minutes(watch, 0, 20)
+
+    assert headlines(receiver) == ["the stack is not healthy"]

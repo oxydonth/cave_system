@@ -35,7 +35,7 @@ from .. import alert
 from ..context import Context
 from ..envfile import HEADER, NAMES, load_env, parse_env, quote_value, render
 from ..errors import CaveError
-from ..health import wait_healthy
+from ..health import check_health, wait_healthy
 from ..notify import notify
 from ..paths import Paths, default_data_dir
 from ..records import Stopped, clear_stopped, note_stopped, stopped
@@ -282,8 +282,9 @@ def _restore(
     stamp = datetime.datetime.now(datetime.UTC).strftime("%Y%m%dT%H%M%SZ")
     ops = _server.ops_dir(ctx)
     # A stack stopped on purpose (`./cave down`) stays so until this restore changes something:
-    # the record is cleared where its marker is first written, or by its start.
-    stopped_before = stopped(ctx.paths)
+    # the record is cleared where its marker is first written. Whether it was stopped is decided
+    # below, by what runs, right before the restore stops the stack.
+    stopped_before: Stopped | None = None
     staging = ops / "restore-staging"
     _server.remove(staging)  # left by an interrupted restore
 
@@ -317,6 +318,12 @@ def _restore(
 
     was_running = ctx.paths.env_file.is_file()
     if was_running:
+        # The record of a stop is a statement of intent, and it can be stale (a start without
+        # `cave`, an `up` or `down` cut off between its steps). What runs is the fact: only a
+        # stack of which nothing runs counts as stopped on purpose, so that a restore that then
+        # cannot unpack leaves it as it was; one that runs is started again.
+        if check_health(ctx, api=False).running == 0:
+            stopped_before = stopped(ctx.paths)
         ctx.say("Stopping the stack ...")
         down = ctx.compose("down", timeout=300.0)
         if not down.ok:
@@ -601,7 +608,8 @@ def _unpack_failed(
     start of the restore before is given up for it; an interrupted update stays in flight, and
     the next ``cave update`` (the boot's) finishes its way back.
 
-    A stack that was stopped on purpose before the restore (``stopped_before``) is not started
+    A stack of which nothing ran, stopped on purpose before the restore (``stopped_before``,
+    decided by what ran, not by the record alone), is not started
     either: the restore changed nothing, so it stays as it was, record and all."""
     pending = load_update_record(ctx).switch
     head = f"The restore failed while unpacking: {error}. Nothing was restored."
