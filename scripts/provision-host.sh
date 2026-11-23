@@ -51,13 +51,39 @@ die() {
   exit 1
 }
 
-# Run a command, or only say that it would run.
+# Run a command, or only say that it would run. apt-get goes through apt_get below.
 run() {
   if [ "$DRY_RUN" -eq 1 ]; then
     say "  would run: $*"
+  elif [ "$1" = apt-get ]; then
+    shift
+    apt_get "$@"
   else
     "$@"
   fi
+}
+
+# apt-get, waiting for the package lock instead of failing at once. Debian's own daily apt run
+# (apt-daily.timer: persistent, with a random delay of up to twelve hours) may hold the lock right
+# after the first boot of a new server, which is when this script runs. apt waits for dpkg's lock
+# itself (DPkg::Lock::Timeout); for the lock of its package lists this tries again every ten
+# seconds, for at most ten minutes.
+apt_get() {
+  local tries=0 output status
+  while :; do
+    status=0
+    output=$(apt-get -o DPkg::Lock::Timeout=600 "$@" 2>&1) || status=$?
+    printf '%s\n' "$output"
+    if [ "$status" -eq 0 ]; then
+      return 0
+    fi
+    if ! grep -q 'Could not get lock' <<<"$output" || [ "$tries" -ge 60 ]; then
+      return "$status"
+    fi
+    tries=$((tries + 1))
+    say "  the package lock is held (Debian's daily apt run?); trying again in 10 s"
+    sleep 10
+  done
 }
 
 while [ $# -gt 0 ]; do

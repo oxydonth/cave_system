@@ -276,15 +276,16 @@ def test_wait_healthy_returns_the_last_verdict_after_the_timeout(ctx, fake_runne
 
 
 # ---------------------------------------------------------------------------------------- output
-@pytest.mark.parametrize("stream", ["say", "warn"])
-def test_what_a_command_says_reaches_a_pipe_at_once(tmp_path, repo_root, stream):
-    """Under systemd the output goes to the journal through a pipe, where Python buffers it. A
-    line said before a power cut or a kill must already be there (found by the server rehearsal:
-    the journal of a running update showed none of its progress)."""
+def test_what_a_command_says_reaches_a_pipe_at_once(tmp_path, repo_root):
+    """Under systemd the output goes to the journal through a pipe, where Python buffers standard
+    output. A line said before a power cut or a kill must already be there (found by the server
+    rehearsal: the journal of a running update showed none of its progress). Standard error needs
+    no test of its own: Python writes it line by line to a pipe anyway, so its flush changes
+    nothing."""
     code = (
         "import os, sys; from pathlib import Path; from cave_ops.context import Context\n"
         "ctx = Context.create(Path(sys.argv[1]), environ={})\n"
-        f"ctx.{stream}('Stopping the stack ...')\n"
+        "ctx.say('Stopping the stack ...')\n"
         "os._exit(9)  # as a kill or a power cut: nothing is flushed on the way out\n"
     )
     done = subprocess.run(
@@ -296,7 +297,7 @@ def test_what_a_command_says_reaches_a_pipe_at_once(tmp_path, repo_root, stream)
     )
 
     assert done.returncode == 9
-    assert "Stopping the stack ..." in (done.stdout if stream == "say" else done.stderr)
+    assert "Stopping the stack ..." in done.stdout
 
 
 # ---------------------------------------------------------------------------------------- notify
