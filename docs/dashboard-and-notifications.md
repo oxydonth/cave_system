@@ -322,6 +322,6 @@ uv run pytest tests/packages
 `heating.yaml`: the window and problem notifications come from the integration's own
 `binary_sensor.cave_<room>_window_open` and `_problem`, every `cave_*` entity of the generated
 dashboard exists in the integration, and the maintenance card shows the real `messages` and
-`thermostats` attributes. The pipeline's `stack` job runs `./cave apply` with the real validator
+`thermostats` attributes. The stack check of the pipeline's `e2e` job runs `./cave apply` with the real validator
 and generator: the starter configuration, a valid file with a room, a well-formed invalid file,
 and a held lock.

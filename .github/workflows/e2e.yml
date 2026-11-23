@@ -24,9 +24,11 @@ name: End-to-end
 #    a slow FRITZ! thermostat, a dial, offline devices, across both device families. Before the
 #    scenarios, tests/e2e/test_dashboard_browser.py opens the heating dashboard in a real browser
 #    (rooms and maintenance view, at a desktop and a phone width) and fails if any card shows an
-#    error; its screenshots are kept as an artifact for three days. The account's artifact storage
-#    has been full, so the upload may fail without failing the job; then the screenshots are
-#    printed into the job log as base64 (tests/e2e/print-screenshots.sh says how to get them back).
+#    error; its screenshots are kept as an artifact for three days. The upload works since the
+#    repository is public (23 November 2026); while it was private the account's artifact storage
+#    was full and the upload was refused. Should an upload fail again, it does not fail the job, and
+#    the screenshots are printed into the job log as base64 instead (tests/e2e/print-screenshots.sh
+#    says how to get them back).
 #
 # Called from ci.yml; its job counts towards `ci-ok` through the one calling job.
 
@@ -192,8 +194,8 @@ jobs:
       - name: Upload the screenshots
         id: upload_screenshots
         if: always()
-        # The account's artifact storage can be full; that must not fail the job. The step after
-        # this one then puts the screenshots into the log.
+        # An upload that fails (the artifact storage was full while the repository was private)
+        # must not fail the job. The step after this one then puts the screenshots into the log.
         continue-on-error: true
         uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
@@ -251,7 +253,8 @@ jobs:
 
       - name: Upload the logs, when something failed
         if: failure()
-        # The account's artifact storage can be full; that must not hide the real failure.
+        # An upload that fails (the artifact storage was full while the repository was private)
+        # must not hide the real failure.
         continue-on-error: true
         uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:

@@ -41,7 +41,7 @@ CAVE_FRITZ_PASSWORD=some-password CAVE_SIM_MQTT_HOST=127.0.0.1 PYTHONPATH=sim uv
 | `CAVE_SIM_LOG_LEVEL` | Log level | `INFO` |
 
 `python -m cave_sim.smoke` (same variables, plus `CAVE_SIM_SMOKE_HTTP_HOST`, default `127.0.0.1`)
-checks a running simulator; the pipeline's `sim` job uses it.
+checks a running simulator; the simulator check of the pipeline's `e2e` job uses it.
 
 Home Assistant connects the FRITZ!SmartHome integration to `http://127.0.0.1:8480` with
 `CAVE_FRITZ_USER` and `CAVE_FRITZ_PASSWORD`. The simulator publishes into the broker as

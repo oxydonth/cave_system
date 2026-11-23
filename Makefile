@@ -65,9 +65,12 @@ test: ## pytest with coverage, in parallel (PYTEST_WORKERS processes, default on
 # isolated environment with only pytest, pytest-xdist to run them in parallel like `make test`, and
 # PyYAML for the checks of the YAML files, so that nothing from Home Assistant can creep in. The
 # configuration file is not named pytest.ini; see the note in pyproject.toml. uv downloads
-# Python 3.11 when it is missing.
+# Python 3.11 when it is missing. pytest-xdist is the version uv.lock holds (pinned by the test
+# library), so that a new release cannot change how this run distributes the tests; pytest and
+# PyYAML are left to resolve as before.
+XDIST_VERSION := $(shell sed -n '/^name = "pytest-xdist"$$/{n;s/^version = "\(.*\)"$$/\1/p;}' uv.lock)
 test-py311: ## The tests of tests/ops on Python 3.11, without Home Assistant
-	$(UV) run --isolated --no-project --python 3.11 --with pytest --with pytest-xdist --with pyyaml \
+	$(UV) run --isolated --no-project --python 3.11 --with pytest --with pytest-xdist==$(XDIST_VERSION) --with pyyaml \
 		pytest $(XDIST_ARGS) -c tests/ops/py311.ini --confcutdir=tests/ops tests/ops
 
 versions: ## Home Assistant's version in uv.lock, compose.yaml and ci.yml, and its client libraries, agree

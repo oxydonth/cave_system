@@ -19,15 +19,16 @@ updates the concept in the same pull request.
 | `make test-py311` | `tests/ops` on Python 3.11 without Home Assistant, in parallel the same way (needs network once, for uv to fetch Python 3.11) |
 | `make versions` | The Home Assistant version in `uv.lock`, `compose.yaml` and `ci.yml` agree; `paho-mqtt` and `pyfritzhome` match Home Assistant |
 
-The pipeline's `lint` and `test` jobs run what `make check` runs, plus hassfest and the device matrix; hassfest, the
-tests that need Docker and the job `e2e` (the stack, the simulator image, the end-to-end tests) run only in the pipeline. The `cave` command (`ops/`, see `ops/README.md`) is standard library only and runs on Python 3.11; run it here with `uv run python cave ...`. Run any tool by hand with `uv run <tool>`.
+The pipeline's `lint` and `test` jobs run what `make check` runs, plus the provision-host dry run, hassfest and the
+device matrix; these, the tests that need Docker and the job `e2e` (the stack, the simulator image, the end-to-end tests) run only in the pipeline. The `cave` command (`ops/`, see `ops/README.md`) is standard library only and runs on Python 3.11; run it here with `uv run python cave ...`. Run any tool by hand with `uv run <tool>`.
 
 ## Delivery rules
 
 - One branch `wp/<number>-<slug>` from the current `main` per work package, one pull request, squash merge.
   Nobody merges their own work. No direct pushes to `main`.
-- Branch protection is not available on this private repository (the GitHub API refuses it without a paid
-  plan). These rules, and the `ci-ok` check being green, are conventions the agents follow; GitHub does not enforce them.
+- The repository is public since 23 November 2026. Branch protection and rulesets are available since then, but
+  none is set up: until the owner sets one up, these rules, and the `ci-ok` check being green, are conventions the
+  agents follow; GitHub does not enforce them.
 - The pull request description states what was built, how it was verified, and every deviation.
   A change to a contract (concept sections 4.1, 4.2, 4.4, 4.5, 5.1 and 5.2) updates the concept in the same pull request.
 - Done means: acceptance criteria demonstrated, review verdict `VERDICT: APPROVE`, and the branch rebased on the
@@ -45,7 +46,8 @@ tests that need Docker and the job `e2e` (the stack, the simulator image, the en
   `docs/work-packages.md`. GitHub bills every job rounded up to the minute, so a new check is a step in the job that
   already has what it needs (`lint` for static checks, `test` for tests and hassfest, `e2e` for checks with
   containers: `.github/actions/stack/`, `.github/actions/sim/` or `e2e.yml` itself), with
-  `if: ${{ !cancelled() }}` when it is not the first check of its job. A new job is the last resort and goes into
+  `if: ${{ !cancelled() }}` when it is not the first check of its job, except in `e2e`, whose parts depend on the
+  one before (each needs the runner the previous part left clean) and keep the default. A new job is the last resort and goes into
   `needs` of `ci-ok`. `ci-ok` is the one check to look at: it fails when a job failed, was cancelled, or was skipped
   when it should have run. `stack.yml` and `sim.yml` run one check alone on demand (`gh workflow run`).
 - A pull request that changes only Markdown files runs `lint` (with the document check, `tests/docs`) and skips the

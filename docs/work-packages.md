@@ -13,7 +13,7 @@ Work packages 1 to 9 build the system. Work packages 10 to 12 close what their r
 5. **Fix and re-review** until the verdict is APPROVE and the pipeline is green on the latest commit, rebased on the current `main`.
 6. **Merge.** Squash merge. Nobody merges their own work package.
 
-GitHub offers no branch protection for a private repository on the free plan, so these rules are conventions that everyone working on the repository follows.
+The repository is public since 23 November 2026. Branch protection and rulesets are available since then, but none is set up, so these rules are conventions that everyone working on the repository follows until the owner sets one up. (While the repository was private, the free plan offered neither.)
 
 ### Definition of done, for every work package
 
@@ -66,7 +66,7 @@ flowchart LR
 | 16 | Pipeline diet | 9 | Opus 5.5, high | Opus 5.5, high | Pipeline structure, where a mistake lets a broken change through |
 | 17 | Server rehearsal | 8, 11, 16 | Opus 5.5, high | Opus 5.5, high | Runs the operations commands for real, as root, on a throw-away machine |
 
-Work packages 2, 3 and 4 run in parallel, as do 5, 6, 7 and 8 once their dependencies are merged. Work packages 10, 11 and 12 run in parallel. Their paths overlap only in three documents: `docs/concept.md` (10: section 5.4; 11: sections 4.2 and 4.5), `docs/devices.md` (10: the device tests and the SNZB-02P; 11: the `device-check` section) and `docs/hardware-acceptance.md` (10: the point about a sensor in a steady room; 11: a new section for the server). Each edits only its own sections, and whichever merges second rebases. Work packages 16 and 17 run one after the other: 17 adds a workflow to the pipeline that 16 restructures, and starts once 16 is merged.
+Work packages 2, 3 and 4 run in parallel, as do 5, 6, 7 and 8 once their dependencies are merged. Work packages 10, 11 and 12 run in parallel. Their paths overlap only in three documents: `docs/concept.md` (10: section 5.4; 11: sections 4.2 and 4.5), `docs/devices.md` (10: the device tests and the SNZB-02P; 11: the `device-check` section) and `docs/hardware-acceptance.md` (10: the point about a sensor in a steady room; 11: a new section for the server). Each edits only its own sections, and whichever merges second rebases. Work packages 16 and 17 run one after the other: 17 adds a workflow of its own next to the pipeline that 16 restructures, and starts once 16 is merged.
 
 ### Shared files
 
@@ -80,7 +80,7 @@ Several work packages add to the same files. To keep that mechanical:
   - `release` (`release.yml`): the exception. It has `needs: ci-ok`, runs only for pushes to `main`, and `ci-ok` does not depend on it. Its calling job sets `permissions: contents: write`, because a reusable workflow cannot raise the read-only default.
 - **A new check** goes into the job that already has what it needs: a static check into `lint`, a test into the suite, a check of the integration with Docker into `test`, a check with containers into the matching part of `e2e`. A check step after the first of a job has `if: ${{ !cancelled() }}`, so that one failing check does not hide the others; the parts of `e2e` are the exception, because each needs the one before to have left a clean runner. A new check with many steps becomes a composite action under `.github/actions/` run as a step there; a new job is the last resort, with the same `needs: lint` and `if:` as `e2e`, and is added to the `needs` of `ci-ok`.
 - **Documents only.** A pull request that changes nothing but Markdown files runs `lint`, which includes the document check, and skips `test` and `e2e`; `ci-ok` accepts those as skipped. `lint` decides it from the diff of the merge commit GitHub makes of the pull request against its base, so the pull request counts as a whole, whatever was pushed. No test except the document check reads a Markdown file, and none may, unless this rule is widened. A push to `main` always runs everything.
-- **`make check`** runs on the development machine what `lint` and `test` run, except hassfest and the device matrix; hassfest, the tests that need Docker and the job `e2e` run only in the pipeline.
+- **`make check`** runs on the development machine what `lint` and `test` run, except the provision-host dry run, hassfest and the device matrix; these, the tests that need Docker and the job `e2e` run only in the pipeline.
 - Superseded runs are cancelled for pull requests only. Every run on `main` completes.
 - **The `cave` command** discovers its commands from `ops/cave_ops/commands/`, one module per command. A work package adds modules there and does not edit other commands.
 - **Core modules of the `cave` command.** WP2 delivers, besides its own commands, what later commands need: the runner for `docker` and `git`, the `.env` loader and the paths, the script-token reader, a small client for Home Assistant's REST API, the health check and the notification call of concept section 4.5, the function that validates a `heating.yaml` and stores its applied copy, the lock, and the test fixtures that fake them. Later work packages import these and do not write their own. If one of them lacks something, the work package that needs it extends it and says so in its pull request.
@@ -428,7 +428,7 @@ A new variable and the fallback channel change contracts: concept sections 4.2 a
 
 **Goal.** A pipeline run costs clearly less than it does now, and checks exactly what it checked before.
 
-**Background.** In November 2026 the pipeline used more than the 2,000 Actions minutes a private repository gets for free. A run billed about 21 minutes, 22 on `main`: GitHub bills every job rounded up to the minute, five jobs take seconds, and the test job had grown to nearly seven minutes.
+**Background.** In November 2026 the pipeline used more than the 2,000 Actions minutes a private repository gets for free. A run billed about 21 minutes, 22 on `main`: GitHub bills every job rounded up to the minute, five jobs take seconds, and the test job had grown to nearly seven minutes. The repository is public since 23 November 2026, so runs on GitHub's runners are free: the diet now buys time, not money.
 
 **Deliverables**
 
@@ -451,15 +451,20 @@ A new variable and the fallback channel change contracts: concept sections 4.2 a
 
 ## WP17 — Server rehearsal
 
-**Goal.** What the reviews of the operations commands could not verify without root, systemd and a real Docker is verified on a real Linux machine before the owner installs: a GitHub runner is one.
+**Goal.** What the reviews of the operations commands could not verify without root, systemd and a real Docker is verified on a real Debian machine before the owner installs.
+
+**Where it runs.** GitHub's runners are Ubuntu, the provisioning script accepts only Debian 13 and Raspberry Pi OS 64-bit (which is Debian 13 too), on purpose, and a runner cannot reboot. So the rehearsal starts a Debian 13 virtual machine on the runner (QEMU with KVM, from Debian's official cloud image, whose published checksum is verified) and does everything inside it over SSH. The provisioning script's check of the operating system is never switched off, and no check of any command is weakened for the rehearsal. Before anything else is built, the first step shows that the runner offers KVM; without it the rehearsal is not feasible, and the work package says so and stops. Raspberry Pi OS is not covered and stays for the owner's server.
 
 **Deliverables**
 
-- A rehearsal, as a workflow of its own that the ordinary pipeline does not call: it starts on demand, once a week, on a push to `main` that changes the operations commands or the provisioning, and on a pull request that changes the rehearsal itself. On a fresh runner it provisions the host with the provisioning script for real, installs from a local Git remote that carries releases, and then goes through what an owner does and what happens to a server: `init`, `check`, `up`, `bootstrap`, `apply`; a backup by its systemd unit; an update to a newer release; an update to a release that does not become healthy, and its way back; a restore onto the same state directory and onto a new one; `restore --undo`; the recovery unit that runs at boot; `down`, `up`; the watch with an alert receiver on the runner itself.
+- A rehearsal, as a workflow of its own that the ordinary pipeline does not call: it starts on demand, once a week, on a push to `main` that changes the operations commands or the provisioning, and on a pull request that changes the rehearsal itself. It uses the `pull_request` event only, never `pull_request_target`, and no secrets.
+- In the virtual machine it provisions the host with the provisioning script for real, installs from a local Git remote that carries releases, and then goes through what an owner does and what happens to a server: `init`, `check`, `up`, `bootstrap`, `apply`; a backup by its systemd unit; an update to a newer release; an update to a release that does not become healthy, and its way back; a restore onto the same state directory and onto a new one; `restore --undo`; a reboot of the machine, after which the stack runs again and the recovery unit has done its part; the machine switched off hard in the middle of an update's switch and started again, after which the update is finished or rolled back and nothing is left half-done; `down`, `up`; and the watch with an alert receiver in the machine: the stack is made unhealthy and left so, in real time, until the alert arrives after its fifteen minutes, and the all-clear after the stack is healthy again.
 - After each step it asserts what `docs/operations.md` promises: who owns which file, that the service user can still `apply` after root has run, what `cave status` says, which timers are enabled, which containers run, which images remain, what the receiver got.
-- It answers the points of section 6 of `docs/hardware-acceptance.md` that a runner can answer, among them what Docker really prints when images are listed with digests, that Docker refuses to remove an image a stopped container uses, and Git run for the service user by root. That section then says for each point whether the rehearsal covers it or whether it stays for the owner's server, such as a real power cut.
-- Defects the rehearsal finds in the operations commands are fixed in the same pull request when the fix is small, each with a test in the ordinary suite; otherwise they become issues and the rehearsal's step is marked as a known finding that does not hide other failures.
-- The rehearsal is documented where the operations commands are: what it proves, how to start it, how long it takes, and what it costs in Actions minutes.
+- It answers the points of section 6 of `docs/hardware-acceptance.md` that a virtual machine can answer, among them what Docker really prints when images are listed with digests, that Docker refuses to remove an image a stopped container uses, Git run for the service user by root, the timers and the boot order, and a power cut as far as a hard switch-off shows it. That section then says for each point whether the rehearsal covers it or whether it stays for the owner's server.
+- A time budget: the whole rehearsal finishes within an hour, the job has a timeout, and the log says how long each part took.
+- A step whose failure is a known finding is named in one list, with its issue. The summary reports it as a finding, the job still fails for every other failed step, and a finding that starts to pass fails the job too, as in the device tests. No step is allowed to fail silently.
+- Defects the rehearsal finds in the operations commands are fixed in the same pull request when the fix is small, each with a test in the ordinary suite; otherwise they become issues and known findings.
+- The rehearsal is documented where the operations commands are: what it proves, how to start it, how long it takes.
 
 **Acceptance**
 
