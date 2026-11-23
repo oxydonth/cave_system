@@ -6,6 +6,7 @@ entities come back with a fresh ``last_changed`` and sometimes as ``unknown`` or
 and the start event is fired.
 """
 
+import asyncio
 import copy
 from datetime import timedelta
 from typing import Any
@@ -13,6 +14,7 @@ from unittest.mock import patch
 
 import pytest
 from freezegun.api import FrozenDateTimeFactory
+from homeassistant.components.automation import AutomationEntity
 from homeassistant.const import (
     EVENT_HOMEASSISTANT_START,
     EVENT_HOMEASSISTANT_STARTED,
@@ -416,6 +418,11 @@ AUTOMATIONS = (
 )
 LAST_RAN_BEFORE_THE_RESTART = START - timedelta(hours=7)
 
+# How many rounds of the event loop a slow automation's arming takes after its executor job. A
+# minute counted by a separate automation reaches the sensors within three rounds (measured with
+# that design); twenty leave a margin, and the design here passes with any number.
+SLOW_TO_ARM_ROUNDS = 20
+
 # Where in its minute the start lands. At second 0.6, with the tracker's offset of 100 ms, the
 # minute's slot falls inside the start phase: the time pattern that is attached there fires at
 # once. At second 30 the start is over long before the next slot.
@@ -433,6 +440,9 @@ async def real_start(
     freezer: FrozenDateTimeFactory,
     start_second: float,
     restored: dict[str, dict[str, str]] | None,
+    *,
+    off: tuple[str, ...] = (),
+    slow_to_arm: str | None = None,
 ) -> tuple[Shown, list[CoreState]]:
     """Start Home Assistant for real, from not running, at ``start_second`` of a minute.
 
@@ -441,8 +451,13 @@ async def real_start(
     sensors' triggers at START, and the automations are armed only after every START listener
     has finished. ``restored`` maps a kind to the entries its sensor had listed, or is ``None``
     for a first install, where no sensor has anything to restore; the automations are always
-    restored with a ``last_triggered``. States the test sets before this call are what the
-    entities have at start-up.
+    restored with a ``last_triggered``, and as ``off`` if named in ``off``. States the test sets
+    before this call are what the entities have at start-up.
+
+    ``slow_to_arm`` names one automation whose arming first waits for one executor job, as it
+    would for a trigger platform that has to be imported. Without it, Home Assistant 2026.10
+    arms every automation in one pass of the loop, so the start cannot tell whether a design
+    relies on the order in which separate automations are armed.
 
     Returns what the UI shows and the core state at each minute's check (the event
     ``cave_attention_check``) that came during the start: one, while Home Assistant is still
@@ -458,18 +473,33 @@ async def real_start(
         )
     for automation in AUTOMATIONS:
         last = LAST_RAN_BEFORE_THE_RESTART.isoformat()
-        stored.append((State(automation, "on", {"last_triggered": last}), {}))
+        state = "off" if automation in off else "on"
+        stored.append((State(automation, state, {"last_triggered": last}), {}))
     mock_restore_cache_with_extra_data(hass, stored)
     shown = await load_package(hass)
     await use_phone(hass)
     for automation in AUTOMATIONS:
-        last_triggered = hass.states.get(automation).attributes["last_triggered"]
+        restored_state = hass.states.get(automation)
+        last_triggered = restored_state.attributes["last_triggered"]
         assert last_triggered == LAST_RAN_BEFORE_THE_RESTART, f"{automation} not restored"
+        assert restored_state.state == ("off" if automation in off else "on")
     hass.bus.async_listen_once(EVENT_HOMEASSISTANT_START, _other_integration_at_start)
     checks: list[CoreState] = []
     hass.bus.async_listen("cave_attention_check", callback(lambda _: checks.append(hass.state)))
-    freezer.move_to(START.replace(second=0) + timedelta(seconds=start_second))
-    with patch("homeassistant.helpers.event.randint", return_value=100000):
+    attach = AutomationEntity._async_attach_triggers
+
+    async def _attach(entity: AutomationEntity) -> Any:
+        if entity.entity_id == slow_to_arm:
+            await hass.async_add_executor_job(lambda: None)
+            for _ in range(SLOW_TO_ARM_ROUNDS):
+                await asyncio.sleep(0)
+        return await attach(entity)
+
+    freezer.move_to(START.replace(second=0, microsecond=0) + timedelta(seconds=start_second))
+    with (
+        patch("homeassistant.helpers.event.randint", return_value=100000),
+        patch.object(AutomationEntity, "_async_attach_triggers", _attach),
+    ):
         await hass.async_start()
         await hass.async_block_till_done()
     assert hass.state is CoreState.running
@@ -615,6 +645,75 @@ async def test_the_first_real_start_shows_what_exists_and_pushes_nothing(
     hass.states.async_set("sensor.gate_battery", "9", {**BATTERY, "friendly_name": "Gate"})
     await advance(hass, freezer, 2)
     assert [call.data["message"] for call in phone] == ["Gate is at 9 %"], "later ones are news"
+
+
+PUSHING = "automation.cave_notify_about_what_needs_attention"
+
+
+@START_SECONDS
+async def test_a_restart_while_the_pushing_automation_is_off_misses_nothing(
+    hass: HomeAssistant,
+    freezer: FrozenDateTimeFactory,
+    phone: list[ServiceCall],
+    start_second: float,
+) -> None:
+    """Off across a restart: nothing is checked, so what began meanwhile is pushed when it is on.
+
+    The sensors' own start trigger used to check them at the start even then: the new condition
+    entered `entries` unseen and was never pushed (found in the review of #32). Meanwhile the
+    UI shows what was reported before the restart, including a battery that is fine again.
+    """
+    hass.states.async_set("sensor.hall_contact_battery", "12", BATTERY)
+    hass.states.async_set("sensor.gate_battery", "9", {**BATTERY, "friendly_name": "Gate"})
+    hass.states.async_set("sensor.door_battery", "90", {**BATTERY, "friendly_name": "Door"})
+    shown, _ = await real_start(
+        hass,
+        freezer,
+        start_second,
+        {
+            "battery": {
+                "sensor.hall_contact_battery": "Hall contact is at 12 %",
+                "sensor.door_battery": "Door is at 11 %",
+            }
+        },
+        off=(PUSHING,),
+    )
+    await advance(hass, freezer, 3)
+    assert shown.messages == ["Door is at 11 %", "Hall contact is at 12 %"], "as before"
+    assert phone == []
+
+    await hass.services.async_call("automation", "turn_on", {"entity_id": PUSHING}, blocking=True)
+    await advance(hass, freezer, 1)
+
+    assert shown.messages == ["Gate is at 9 %", "Hall contact is at 12 %"]
+    assert [call.data["message"] for call in phone] == ["Gate is at 9 %"]
+
+
+async def test_a_new_condition_is_pushed_when_the_pushing_automation_is_armed_late(
+    hass: HomeAssistant, freezer: FrozenDateTimeFactory, phone: list[ServiceCall]
+) -> None:
+    """The check and the push are armed together, so their order among the automations is moot.
+
+    The arming of "Cave: notify about what needs attention" waits for an executor job here, and
+    the start lands where the minute's slot falls inside the start phase. A minute counted by
+    any other automation, before or after it in the file, would check the sensors before it
+    listens.
+    """
+    hass.states.async_set("sensor.hall_contact_battery", "12", BATTERY)
+    hass.states.async_set("sensor.gate_battery", "9", {**BATTERY, "friendly_name": "Gate"})
+    shown, checks = await real_start(
+        hass,
+        freezer,
+        0.6,
+        {"battery": {"sensor.hall_contact_battery": "Hall contact is at 12 %"}},
+        slow_to_arm=PUSHING,
+    )
+    assert checks == [CoreState.starting]
+
+    await advance(hass, freezer, 3)
+
+    assert shown.messages == ["Gate is at 9 %", "Hall contact is at 12 %"]
+    assert [call.data["message"] for call in phone] == ["Gate is at 9 %"]
 
 
 # ---------------------------------------------------------------------------------------------

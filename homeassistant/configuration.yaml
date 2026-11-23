@@ -48,9 +48,18 @@ recorder:
   # Every Zigbee device's "Last seen" changes with every message it sends (enabled through
   # device_options in compose.yaml, for cave_heating's room sensors). Recording it would add a
   # row per message per device. Nothing reads its history: cave_heating uses its current value.
+  # The notifications package (packages/cave_notifications.yaml) checks once a minute through a
+  # run of its automation "Cave: notify about what needs attention", which fires
+  # `cave_attention_check`; recorded, each quiet minute would add four rows and a logbook line.
+  # A push stays in the logbook as "Cave: send a notification copy" triggered, and the
+  # attention sensors keep their history (tests/packages/test_recorder.py).
   exclude:
     entity_globs:
       - sensor.*_last_seen
+    entities:
+      - automation.cave_notify_about_what_needs_attention
+    event_types:
+      - cave_attention_check
 
 # Only warnings and errors, plus two kinds of line that others read: "Setting up <integration>"
 # (the pipeline's stack job, to see that `cave_heating` was loaded) and "Home Assistant

@@ -75,7 +75,7 @@ def test_a_clock_near_the_boundary_of_a_minute_is_refused(
 ) -> None:
     """A test that moves the clock there fails at once instead of now and then."""
     check_clock()
-    freezer.move_to(START.replace(second=0) + timedelta(seconds=second))
+    freezer.move_to(START.replace(second=0, microsecond=0) + timedelta(seconds=second))
     with pytest.raises(AssertionError, match="see check_clock"):
         check_clock()
 
@@ -84,7 +84,7 @@ async def test_loading_the_package_near_the_boundary_of_a_minute_is_refused(
     hass: HomeAssistant, freezer: FrozenDateTimeFactory
 ) -> None:
     """``load_package`` checks the clock before it sets anything up."""
-    freezer.move_to(START.replace(second=0) + timedelta(seconds=0.6))
+    freezer.move_to(START.replace(second=0, microsecond=0) + timedelta(seconds=0.6))
     with pytest.raises(AssertionError, match="see check_clock"):
         await load_package(hass)
 
@@ -94,6 +94,6 @@ async def test_a_step_of_advance_near_the_boundary_of_a_minute_is_refused(
 ) -> None:
     """``advance`` checks the clock before every minute it moves."""
     await load_package(hass)
-    freezer.move_to(START + timedelta(seconds=29.6))
+    freezer.move_to(START.replace(second=59, microsecond=600000))
     with pytest.raises(AssertionError, match="see check_clock"):
         await advance(hass, freezer, 1)

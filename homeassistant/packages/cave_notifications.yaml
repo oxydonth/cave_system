@@ -35,6 +35,17 @@ template:
         event_type: cave_attention_check
       - trigger: homeassistant
         event: start
+    # The check at the start, too, only while the automation that pushes listens. Turned off, it
+    # would not see what the check found, and turned on again, it would find nothing new: a
+    # condition that began meanwhile would be shown, never pushed. "on" means listening here
+    # because the start trigger fires when Home Assistant has started, and an automation that is
+    # on has its triggers attached before that (in a start-up job, which Home Assistant waits
+    # for). While Home Assistant is still starting, "on" would not mean that.
+    conditions:
+      - condition: template
+        value_template: >-
+          {{ trigger.platform != 'homeassistant'
+             or is_state('automation.cave_notify_about_what_needs_attention', 'on') }}
     variables:
       # A battery sensor (a percentage, or a low-battery flag) at or below this level in percent
       # raises "low battery". Phones with the Home Assistant app (mobile_app) are not checked.
@@ -367,6 +378,11 @@ automation:
   # Sends the copy of a notification to the notify action named in input_text.cave_notify_service.
   # Only a notify action is called: any other name would run something that is not a
   # notification (a script that notifies again, a restart), so it is logged and ignored.
+  # It is a separate automation, so a copy reaches the phone only while it is armed. At a start
+  # Home Assistant 2026.10 arms it in the same pass as "Cave: notify about what needs attention",
+  # before that one can push; but if its arming alone were delayed (a trigger platform imported
+  # first), or it alone were reloaded at the moment of a push, that one copy would be lost, while
+  # the persistent notification is still created.
   - id: cave_notify_copy
     alias: "Cave: send a notification copy"
     description: Internal. Started by script.cave_notify; use that script instead.
@@ -436,6 +452,12 @@ automation:
     alias: "Cave: notify about what needs attention"
     mode: queued
     max: 50
+    # Every minute's check is a run, and Home Assistant keeps the trace of the last few runs
+    # only (5 by default), so the run that pushed would be gone within five minutes. 120 keep two
+    # hours of them. The trace of the push itself is also in "Cave: send a notification copy",
+    # which runs only for a push.
+    trace:
+      stored_traces: 120
     triggers:
       - trigger: state
         entity_id: sensor.cave_attention_battery
@@ -457,16 +479,21 @@ automation:
         entity_id: sensor.cave_attention_problems
         attribute: entries
         id: problems
-      # The sensors' clock. It is here, after the state triggers, and not a time pattern of the
-      # sensors, so that the sensors cannot be evaluated by the clock while this automation is
-      # not listening to them; a change it does not see is never pushed (issue #31). At a start
-      # Home Assistant attaches the sensors' triggers first and arms the automations afterwards,
+      # The sensors' clock. It is a trigger of this automation, and not a time pattern of the
+      # sensors or of another automation, so that the sensors cannot be checked by the clock
+      # while this automation is not listening to them; a change it does not see is never pushed
+      # (issue #31). Home Assistant attaches all triggers of one automation together, so their
+      # order in this list does not matter, but separate automations are armed separately. At a
+      # start the sensors' triggers are attached first and the automations armed afterwards,
       # and a time pattern attached in the first second of a minute fires at once: with the
-      # clock on the sensors, a start landing there evaluated them before this automation
+      # clock on the sensors, a start landing there checked them before this automation
       # listened, a new condition entered `entries` unseen, the restore automation showed it
-      # without a push, and the start's own evaluation found nothing new. Being armed is not
+      # without a push, and the start's own check found nothing new. Being armed is not
       # restored across a restart, so this holds whatever was saved before it. The same holds
-      # when the automations are reloaded or this one is turned off: no evaluation goes unseen.
+      # when this automation is reloaded or turned off: no check goes unseen (the sensors' start
+      # trigger has a condition for that, at the top). Each tick is a run of this automation,
+      # which Home Assistant records; homeassistant/configuration.yaml leaves it out of the
+      # recorder, see `trace` below and "Entities of the package" in the guide.
       - trigger: time_pattern
         minutes: "/1"
         id: tick

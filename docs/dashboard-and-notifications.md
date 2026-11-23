@@ -254,8 +254,9 @@ and with it every nightly update, empties the bell. What happens next:
   again if it was not reported before.
 - All of this holds wherever in its minute the start lands. The minute is counted by the
   automation "Cave: notify about what needs attention" itself, which fires the event
-  `cave_attention_check` that the sensors check on, so the sensors are never checked before that
-  automation listens to them (issue #31).
+  `cave_attention_check` that the sensors check on, and their check at the start runs only
+  while that automation is on, so the sensors are never checked while it is not listening to
+  them (issue #31). If that automation is off across a restart, see "Entities of the package".
 
 **Reloading.** Reloading the template entities (Developer tools, YAML) removes and adds the five
 sensors. That is treated like a start: what they list is shown, nothing is dismissed and nothing
@@ -270,9 +271,27 @@ the package creates the sensors `sensor.cave_attention_battery`, `_unavailable`,
 no reading), and three automations: "Cave: notify about what needs attention", which also fires
 the event `cave_attention_check` once a minute that the sensors check on, "Cave: show reported
 notifications again after a restart" and "Cave: send a notification copy", which listens for the
-event `cave_notify_copy`. Turning off "Cave: notify about what needs attention" stops the checks
-as well, so nothing is missed while it is off: what changed meanwhile is announced at the first
-check after it is turned on again.
+event `cave_notify_copy`.
+
+**Turning "Cave: notify about what needs attention" off** stops the checks as well, also the
+one at a start. Meanwhile the bell keeps what it showed: nothing new appears, nothing that ended
+is dismissed, and after a restart it shows what was reported before the restart, as after any
+restart. At the first check after you turn it on again, within a minute, what began meanwhile is
+announced and pushed as usual and what ended is dismissed. So nothing is missed, only delayed.
+"Cave: send a notification copy" is a separate automation: while it is off, or in the moment it
+is reloaded, a copy to the phone is lost, and the notification in the bell is still created.
+
+**What is recorded.** Every check is a run of "Cave: notify about what needs attention", once a
+minute. Recorded, each run would add four rows to Home Assistant's database (two changes of the
+automation's state, `automation_triggered` and `cave_attention_check`, 5,760 a day kept for 30
+days) and a logbook line. `homeassistant/configuration.yaml` leaves that automation and the
+event `cave_attention_check` out of the recorder, so a minute in which nothing changes writes
+nothing. What is still recorded: the history of the five `sensor.cave_attention_*` sensors (when
+an entry appeared or went), `script.cave_notify`, and "Cave: send a notification copy", whose
+logbook line "triggered by event cave_notify_copy" marks each push to the phone. The automation
+itself has no history and no logbook lines. Its traces (Settings, Automations, the automation,
+Traces) keep its last 120 runs, two hours of checks, so the run that pushed can be found there;
+"Cave: send a notification copy" runs only for a push and keeps the last five.
 
 ### Testing it
 
