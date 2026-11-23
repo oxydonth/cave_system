@@ -24,7 +24,7 @@ services:
       CAVE_FRITZ_PASSWORD: ${CAVE_FRITZ_PASSWORD:?the simulated FRITZ!Box needs CAVE_FRITZ_PASSWORD}
     ports:
       - "127.0.0.1:8480:8480"
-      - "127.0.0.1:8481:8481"
+      - "127.0.0.1:8482:8481"
     depends_on:
       mosquitto:
         condition: service_healthy

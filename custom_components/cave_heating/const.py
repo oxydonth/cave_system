@@ -4,6 +4,7 @@ Durations that steer the control logic are not here: they come from the ``timing
 room settings of ``heating.yaml`` (see ``schema.py``).
 """
 
+import os
 from datetime import timedelta
 from typing import Final
 

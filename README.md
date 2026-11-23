@@ -85,3 +85,5 @@ Contributors and coding agents: see [CLAUDE.md](CLAUDE.md) for the delivery rule
 **The documentation is checked.** `tests/docs/test_documentation.py` runs with `make test`: every relative link in a Markdown file must resolve (including the heading it names), every `cave` command and option written in code must exist, and every path of the repository written in code must exist. Rename a file, remove a command or mistype one in a guide and `make check` says where.
 
 **The browser check.** `tests/e2e/dashboard_browser.py` opens the heating dashboard of a running demo in headless Chromium, at a desktop and a phone width, and fails if a card shows an error. To run it against your own demo, install the browser once and point it at the demo: `uv run playwright install chromium`, then `uv run python tests/e2e/dashboard_browser.py --user owner --password <the demo's CAVE_HA_OWNER_PASSWORD from its demo.env> --thermostat climate.cave_living_room --out screenshots` ([docs/demo.md](docs/demo.md#the-browser-check) has the rest).
+
+The guide `docs/no-such-guide.md` does not exist (a deliberate failure of work package 16).

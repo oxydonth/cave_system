@@ -273,7 +273,7 @@ else
 fi
 
 if [ "$DRY_RUN" -eq 1 ]; then
-  say "Dry run finished: nothing was changed."
+  say "Dry run finished."
   exit 0
 fi
 
