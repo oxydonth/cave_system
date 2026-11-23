@@ -1,0 +1,237 @@
+#!/usr/bin/env bash
+# The server rehearsal's helpers (docs/operations.md, "The server rehearsal"). Every part,
+# tests/server/NN-*.sh, sources this file and then reads as a list of what happens:
+#
+#   step NAME COMMAND...   something the owner or the server does. If it fails, the part stops
+#                          there and the parts after it do not run (their state would be noise).
+#   check NAME COMMAND...  an assertion: what docs/operations.md promises. A failure is recorded
+#                          and the part goes on, so that one run shows every broken promise.
+#
+# Both print their name, the output of their command (folded into a group) and how long they took,
+# and append the result to $REHEARSAL_DIR/results.tsv, from which summary.sh writes the job
+# summary. A step or check named in known-findings.tsv is a known finding: its failure is reported
+# as that finding, and its success fails the part, because the finding has to be taken out of the
+# list (as the device tests do with their findings).
+#
+# The commands of a check are usually `equals`, `contains`, `lacks` or `exits` (below) around
+# `vm`, which runs a shell command in the virtual machine as its administrator, the user an owner
+# logs in with. Like the owner, that user reaches root and the service user through sudo.
+
+set -uo pipefail
+
+REHEARSAL_DIR=${REHEARSAL_DIR:-/mnt/rehearsal}
+SERVER_TESTS=$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)
+# shellcheck disable=SC2034 # used by the parts
+REPOSITORY=$(cd "${SERVER_TESTS}/../.." && pwd)
+RESULTS=${REHEARSAL_DIR}/results.tsv
+KNOWN_FINDINGS=${SERVER_TESTS}/known-findings.tsv
+# Where the parts leave what a later part needs (the release tags, the archive of a backup).
+FACTS=${REHEARSAL_DIR}/facts
+
+# shellcheck source=tests/server/vm.sh
+. "${SERVER_TESTS}/vm.sh"
+
+PART=""
+PART_STARTED=0
+PART_FAILED=0
+
+# part NAME: begin a part. Ends the script at once when an earlier part's step failed (the state
+# it left would make this part's results noise) or when the workflow's input leaves it out.
+part() {
+  PART=$1
+  PART_STARTED=${SECONDS}
+  mkdir -p "${FACTS}"
+  touch "${RESULTS}"
+  if [ -f "${REHEARSAL_DIR}/stopped" ]; then
+    # The failed step has failed its own part already, and the summary fails the job for it and
+    # lists this part as not run.
+    echo "Part ${PART} does not run: $(cat "${REHEARSAL_DIR}/stopped")."
+    printf '%s\t%s\t%s\t%s\t%s\t%s\n' "${PART}" part "(not run)" "NOT RUN" 0 \
+      "$(cat "${REHEARSAL_DIR}/stopped")" >> "${RESULTS}"
+    exit 0
+  fi
+  if ! selected "${PART}"; then
+    echo "Part ${PART} is left out by the workflow's input (parts: ${REHEARSAL_PARTS})."
+    printf '%s\t%s\t%s\t%s\t%s\t%s\n' "${PART}" part "(left out)" "LEFT OUT" 0 \
+      "the input parts: ${REHEARSAL_PARTS}" >> "${RESULTS}"
+    exit 0
+  fi
+  echo "=== Part ${PART}"
+  trap part_end EXIT
+}
+
+# selected NAME: whether REHEARSAL_PARTS ("all", or the last part to run) includes the part.
+selected() {
+  local wanted=${REHEARSAL_PARTS:-all} name
+  [ "${wanted}" = all ] && return 0
+  for name in ${PARTS_IN_ORDER}; do
+    [ "${name}" = "$1" ] && return 0
+    [ "${name}" = "${wanted}" ] && return 1
+  done
+  return 1
+}
+PARTS_IN_ORDER="runner machine provision install backup update update-broken restore reboot power-cut down-up watch"
+
+part_end() {
+  local status=$?
+  local took=$((SECONDS - PART_STARTED))
+  if [ "${status}" -ne 0 ] && [ "${PART_FAILED}" -eq 0 ]; then
+    # Something outside a step or check failed (a helper, the shell itself).
+    record part "(the part's script)" FAIL "${took}" "exit status ${status}"
+    PART_FAILED=1
+  fi
+  printf '%s\t%s\t%s\t%s\t%s\t%s\n' "${PART}" part "(whole part)" \
+    "$([ "${PART_FAILED}" -eq 0 ] && echo PASS || echo FAIL)" "${took}" "" >> "${RESULTS}"
+  echo "=== Part ${PART}: $([ "${PART_FAILED}" -eq 0 ] && echo passed || echo FAILED) in $(duration "${took}")"
+  [ "${PART_FAILED}" -eq 0 ] || exit 1
+}
+
+duration() {
+  printf '%dm%02ds' $(($1 / 60)) $(($1 % 60))
+}
+
+# The issue of a known finding, or nothing.
+known_finding() {
+  local name=$1
+  [ -f "${KNOWN_FINDINGS}" ] || return 0
+  awk -F '\t' -v part="${PART}" -v name="${name}" \
+    '!/^#/ && $1 == part && $2 == name { print $3 }' "${KNOWN_FINDINGS}"
+}
+
+record() {
+  local kind=$1 name=$2 outcome=$3 took=$4 note=${5:-}
+  printf '%s\t%s\t%s\t%s\t%s\t%s\n' "${PART}" "${kind}" "${name}" "${outcome}" "${took}" \
+    "${note//$'\t'/ }" >> "${RESULTS}"
+}
+
+# _run KIND NAME COMMAND...: run, time and record a step or check. Returns 0 when the part may go
+# on: the command passed, or it is a check, or it failed as a known finding.
+_run() {
+  local kind=$1 name=$2
+  shift 2
+  local started=${SECONDS} status finding took outcome
+  echo "::group::${kind} ${PART}: ${name}"
+  "$@" < /dev/null 2>&1
+  status=$?
+  echo "::endgroup::"
+  took=$((SECONDS - started))
+  finding=$(known_finding "${name}")
+  if [ "${status}" -eq 0 ] && [ -z "${finding}" ]; then
+    outcome=PASS
+    echo "PASS     ${kind} ${PART}: ${name} ($(duration "${took}"))"
+  elif [ "${status}" -ne 0 ] && [ -n "${finding}" ]; then
+    outcome=FINDING
+    echo "FINDING  ${kind} ${PART}: ${name} ($(duration "${took}")): known finding ${finding}"
+    echo "::warning title=Known finding ${finding}::${PART}: ${name}"
+  elif [ "${status}" -eq 0 ]; then
+    outcome=FAIL
+    echo "FAIL     ${kind} ${PART}: ${name} ($(duration "${took}")): passes, but it is listed" \
+      "as the known finding ${finding}; take it out of tests/server/known-findings.tsv"
+    echo "::error title=A known finding passes::${PART}: ${name} (${finding})"
+    PART_FAILED=1
+  else
+    outcome=FAIL
+    echo "FAIL     ${kind} ${PART}: ${name} ($(duration "${took}")): exit status ${status}"
+    echo "::error title=${kind} failed::${PART}: ${name}"
+    PART_FAILED=1
+  fi
+  record "${kind}" "${name}" "${outcome}" "${took}" "${finding}"
+  if [ "${kind}" = step ] && [ "${outcome}" = FAIL ] && [ "${status}" -ne 0 ]; then
+    return 1
+  fi
+  return 0
+}
+
+step() {
+  local name=$1
+  if ! _run step "$@"; then
+    echo "${PART}: the step '${name}' failed" > "${REHEARSAL_DIR}/stopped"
+    exit 1
+  fi
+}
+
+check() {
+  _run check "$@"
+}
+
+# ------------------------------------------------------------------------------------ assertions
+# equals EXPECTED COMMAND...: the command succeeds and prints exactly EXPECTED (surrounding blank
+# space aside).
+equals() {
+  local expected=$1 got status
+  shift
+  got=$("$@")
+  status=$?
+  printf 'expected: %s\n     got: %s\n' "${expected}" "${got}"
+  [ "${status}" -eq 0 ] || {
+    echo "(the command failed with exit status ${status})"
+    return 1
+  }
+  [ "$(trim "${got}")" = "$(trim "${expected}")" ]
+}
+
+trim() {
+  local text=$1
+  text=${text#"${text%%[![:space:]]*}"}
+  printf '%s' "${text%"${text##*[![:space:]]}"}"
+}
+
+# contains PATTERN COMMAND...: the command's output has a line matching the extended regular
+# expression PATTERN. The command's exit status does not matter (use exits for that).
+contains() {
+  local pattern=$1 got
+  shift
+  got=$("$@" 2>&1)
+  printf '%s\n' "${got}"
+  echo "--- looking for: ${pattern}"
+  grep -qE -- "${pattern}" <<< "${got}"
+}
+
+# lacks PATTERN COMMAND...: no line of the command's output matches PATTERN, and the command
+# succeeded (a command that failed proves nothing about what it would have printed).
+lacks() {
+  local pattern=$1 got status
+  shift
+  got=$("$@" 2>&1)
+  status=$?
+  printf '%s\n' "${got}"
+  echo "--- must not contain: ${pattern}"
+  [ "${status}" -eq 0 ] || {
+    echo "(the command failed with exit status ${status})"
+    return 1
+  }
+  ! grep -qE -- "${pattern}" <<< "${got}"
+}
+
+# exits STATUS COMMAND...: the command ends with exit status STATUS.
+exits() {
+  local expected=$1 status
+  shift
+  "$@"
+  status=$?
+  echo "--- exit status ${status}, expected ${expected}"
+  [ "${status}" -eq "${expected}" ]
+}
+
+# remember NAME VALUE / recall NAME: facts that a later part needs.
+remember() {
+  printf '%s' "$2" > "${FACTS}/$1"
+}
+
+recall() {
+  cat "${FACTS}/$1"
+}
+
+# wait_until SECONDS INTERVAL COMMAND...: repeat the command until it succeeds; fail after SECONDS.
+wait_until() {
+  local limit=$1 interval=$2 started=${SECONDS}
+  shift 2
+  until "$@"; do
+    if [ $((SECONDS - started)) -ge "${limit}" ]; then
+      echo "--- still not so after $(duration "${limit}")"
+      return 1
+    fi
+    sleep "${interval}"
+  done
+  echo "--- so after $(duration $((SECONDS - started)))"
+}

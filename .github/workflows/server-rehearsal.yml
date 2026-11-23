@@ -1,0 +1,100 @@
+name: Server rehearsal
+
+# The operations commands for real, as root, under systemd, with a real Docker, on a Debian 13
+# virtual machine (work package 17; docs/operations.md, "The server rehearsal"). The runner starts
+# the machine with QEMU and KVM from Debian's official cloud image and does everything inside it
+# over SSH: provisioning, the install, a backup by its unit, updates and a rollback, restores,
+# a reboot, a power cut in the middle of an update, and the watch with an alert receiver.
+#
+# One step per part (tests/server/NN-*.sh). A failed check is recorded and the part goes on; a
+# failed step stops its part and the parts after it. The last steps write the summary and keep
+# the machine's journals as an artifact. The ordinary pipeline (ci.yml) does not call this.
+
+on:
+  workflow_dispatch:
+    inputs:
+      parts:
+        description: >-
+          The last part to run, for developing the rehearsal part by part (runner, machine,
+          provision, install, backup, update, update-broken, restore, reboot, power-cut,
+          down-up, watch), or "all"
+        default: all
+  schedule:
+    # Mondays, 04:17 UTC.
+    - cron: "17 4 * * 1"
+  push:
+    branches: [main, wp/17-server-rehearsal]
+    paths:
+      - "ops/**"
+      - "cave"
+      - "scripts/**"
+      - "tests/server/**"
+      - ".github/workflows/server-rehearsal.yml"
+  pull_request:
+    paths:
+      - "ops/**"
+      - "cave"
+      - "scripts/**"
+      - "tests/server/**"
+      - ".github/workflows/server-rehearsal.yml"
+
+# A newer commit of a pull request cancels the rehearsal of the one before; every other run
+# completes.
+concurrency:
+  group: >-
+    ${{ github.event_name == 'pull_request'
+    && format('server-rehearsal-pr-{0}', github.event.pull_request.number)
+    || format('server-rehearsal-{0}-{1}', github.ref, github.run_id) }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
+permissions:
+  contents: read
+
+jobs:
+  rehearsal:
+    name: server rehearsal
+    runs-on: ubuntu-24.04
+    timeout-minutes: 120
+    env:
+      REHEARSAL_DIR: /mnt/rehearsal
+      REHEARSAL_PARTS: ${{ inputs.parts || 'install' }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+          # The whole history: tests/server/releases.sh bundles the commit under test with it.
+          fetch-depth: 0
+
+      - name: Room for the machine on the runner's large disk
+        run: sudo install -d -o "$(id -u)" -g "$(id -g)" "${REHEARSAL_DIR}"
+
+      - name: "Part runner: KVM, CPUs, memory, disk"
+        run: tests/server/00-runner.sh
+
+      - name: "Part machine: Debian 13 from its cloud image"
+        if: ${{ !cancelled() }}
+        run: tests/server/01-machine.sh
+
+      - name: "Part provision: provision-host.sh, the clone, the timers"
+        if: ${{ !cancelled() }}
+        run: tests/server/02-provision.sh
+
+      - name: "Part install: init, check, up, bootstrap, apply"
+        if: ${{ !cancelled() }}
+        run: tests/server/03-install.sh
+
+      - name: Summary
+        if: ${{ always() }}
+        run: tests/server/summary.sh
+
+      - name: The machine's journals and console
+        if: ${{ always() }}
+        run: tests/server/collect.sh
+
+      - name: Keep the journals
+        if: ${{ always() }}
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: server-rehearsal-logs
+          path: /mnt/rehearsal/logs
+          retention-days: 14
