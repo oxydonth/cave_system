@@ -54,11 +54,10 @@ check "docker image ls --digests lists it with the tag <none> and its digest (6.
 # it, as root, the marker is written and flushed to the disk once the snapshot is complete.
 step "sudo ./cave update, by hand (release 3 does not become healthy); a marker in the state once the switch has begun" \
   vm "rm -f ~/marker-3.log
-      (sudo bash when.sh switching /var/lib/cave > /dev/null && sudo touch ${MARKER} && sync &&
-        echo 'marker written' > ~/marker-3.log) &
+      (sudo bash when.sh switching /var/lib/cave && sudo touch ${MARKER} && sync &&
+        echo 'marker written' > ~/marker-3.log) > /dev/null 2>&1 &
       cd /opt/cave && sudo ./cave update > ~/update-3.log 2>&1; echo \"exit status \$?\" >> ~/update-3.log
-      sudo pkill -f 'when[.]sh switching' || true  # an update that never switched: stop waiting
-      wait; cat ~/update-3.log"
+      cat ~/update-3.log"
 check "the marker was written while the switch ran" equals "marker written" vm 'cat ~/marker-3.log'
 check "the update exits 2: rolled back" contains '^exit status 2$' the_update
 check "the rollback took the marker away with the rest of the switch's state" \
