@@ -167,3 +167,4 @@ gh run view <run id> --job <job id> --log | python3 tests/e2e/extract_screenshot
 there as root, so: `sudo rm -rf ~/.local/state/cave/demo` (or the directory given with `--data`).
 
 This line exists only on a demonstration branch of work package 16 and is never merged.
+See [a guide that does not exist](no-such-guide.md).
