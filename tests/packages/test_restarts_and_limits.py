@@ -42,6 +42,7 @@ from tests.packages.helpers import (
     START,
     Shown,
     advance,
+    idle,
     in_area,
     load_package,
     room,
@@ -88,7 +89,7 @@ async def restart(
     await use_phone(hass)  # the owner's setting is there before the first evaluation
     hass.bus.async_fire(EVENT_HOMEASSISTANT_START)
     hass.bus.async_fire(EVENT_HOMEASSISTANT_STARTED)
-    await hass.async_block_till_done()
+    await idle(hass)
     return shown
 
 
@@ -501,7 +502,7 @@ async def real_start(
         patch.object(AutomationEntity, "_async_attach_triggers", _attach),
     ):
         await hass.async_start()
-        await hass.async_block_till_done()
+        await idle(hass)
     assert hass.state is CoreState.running
     freezer.move_to(START + timedelta(minutes=1))  # back to second 30, see check_clock
     return shown, checks
@@ -745,7 +746,7 @@ async def test_reloading_the_template_entities_does_not_push_what_is_reported_ag
         side_effect=lambda *_args, **_kwargs: copy.deepcopy(reloaded),
     ):
         await hass.services.async_call("template", "reload", blocking=True)
-        await hass.async_block_till_done()
+        await idle(hass)
     await advance(hass, freezer, 5)
 
     assert len(phone) == 1, "no second push"
@@ -809,7 +810,7 @@ async def test_the_automation_copes_with_a_sensor_without_a_group_limit(
         "1",
         {"entries": {"climate.cave_x": "X: humidity is 80 %, time to air the room"}},
     )
-    await hass.async_block_till_done()
+    await idle(hass)
 
     assert shown.titles == ["High humidity"]
     assert len(phone) == 1

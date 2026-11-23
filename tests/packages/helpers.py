@@ -10,7 +10,7 @@ import pytest
 from freezegun.api import FrozenDateTimeFactory
 from homeassistant.components import persistent_notification as pn
 from homeassistant.config import merge_packages_config
-from homeassistant.core import HomeAssistant
+from homeassistant.core import HomeAssistant, callback
 from homeassistant.helpers import area_registry as ar
 from homeassistant.helpers import entity_registry as er
 from homeassistant.setup import async_setup_component
@@ -86,13 +86,20 @@ def failed_copy(reason: str) -> list[str]:
 
 
 class Shown:
-    """The persistent notifications that are currently shown in the Home Assistant UI."""
+    """The persistent notifications that are currently shown in the Home Assistant UI.
+
+    ``_update`` is marked as a callback, so Home Assistant calls it in the event loop, at once,
+    when a notification is created or dismissed. Without the mark the dispatcher hands it to a
+    worker thread, and a test that looks right after a service call that has already returned
+    may look before that thread has run.
+    """
 
     def __init__(self, hass: HomeAssistant) -> None:
         self.current: dict[str, pn.Notification] = {}
         self.removed: list[str] = []  # every id that was dismissed, in order
         pn.async_register_callback(hass, self._update)
 
+    @callback
     def _update(self, kind: pn.UpdateType, notifications: dict[str, pn.Notification]) -> None:
         if kind is pn.UpdateType.REMOVED:
             for notification_id in notifications:
@@ -131,7 +138,7 @@ async def load_package(
     config = await merge_packages_config(hass, {}, {"cave_notifications": package}, _fail)
     for domain in ("input_text", "script", "template", "automation"):
         assert await async_setup_component(hass, domain, config), domain
-    await hass.async_block_till_done()
+    await idle(hass)
     shown = Shown(hass)
     if settle and freezer is not None:
         await advance(hass, freezer, 1)
@@ -148,13 +155,30 @@ async def set_helper(hass: HomeAssistant, name: str, value: str) -> None:
     )
 
 
+IDLE_ROUNDS = 3
+
+
+async def idle(hass: HomeAssistant) -> None:
+    """Wait until Home Assistant has finished what a change set in motion.
+
+    ``async_block_till_done`` returns as soon as no task is left. The last step of a chain can
+    be scheduled for the next turn of the event loop without being a task yet: the copy to the
+    phone is, it leaves one turn after everything else is done. So one call is not enough, two
+    are today, and three leave a turn to spare. The count is turns of the loop, not time, so it
+    is the same on every machine. (Before ``Shown`` was updated in the event loop its worker
+    thread was a task to wait for, and that wait hid this.)
+    """
+    for _ in range(IDLE_ROUNDS):
+        await hass.async_block_till_done()
+
+
 async def advance(hass: HomeAssistant, freezer: FrozenDateTimeFactory, minutes: int) -> None:
     """Move the clock forward one minute at a time, letting Home Assistant react to each."""
     for _ in range(minutes):
         check_clock()
         freezer.tick(timedelta(minutes=1))
         async_fire_time_changed(hass)
-        await hass.async_block_till_done()
+        await idle(hass)
 
 
 def in_area(hass: HomeAssistant, entity_id: str, area_name: str) -> None:
