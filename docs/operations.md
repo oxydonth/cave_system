@@ -668,3 +668,69 @@ the state that was waiting is complete, so the owed start is given up for "stopp
    night.
 5. If the coordinator's address or the FRITZ!Box changed, edit `.env` and run
    `sudo -u cave ./cave up`.
+
+## The server rehearsal
+
+The tests in `tests/ops/` run every command above with real files and real Git, but with Docker
+faked, as an ordinary user, without systemd and without a power cut. The server rehearsal
+(`.github/workflows/server-rehearsal.yml`, its scripts in `tests/server/`) runs them for real: on
+GitHub's runner it starts a Debian 13 virtual machine from Debian's official cloud image (a dated
+build whose SHA-512 is kept in `tests/server/debian-13-genericcloud-amd64.sha512` and checked
+before every use), with QEMU and KVM, and does everything inside it over SSH, as root and as the
+service user, under systemd, with a real Docker.
+
+**What it proves**, each part a script and each assertion a line of the log with its name and how
+long it took:
+
+| Part | What happens | What it asserts |
+|---|---|---|
+| `runner` | The runner's CPUs, memory, disk and KVM. | KVM is there; without it the run stops. |
+| `machine` | The image is downloaded, verified and booted; the owner's `apt-get full-upgrade` of [install.md](install.md#1-put-the-operating-system-on-the-machine). | Debian 13, Python 3.11 or newer. |
+| `provision` | [install.md](install.md#3-provision-the-host), steps 3 and 4: `provision-host.sh` copied on its own (dry run, then for real, its check of the operating system included), the clone, the second run from the checkout. | The service user, its directories and their modes, Docker's key, the three timers with a next run, the recovery enabled, which unit runs as whom, a third run changes nothing. |
+| `install` | Steps 5 to 8: `init`, `.env`, the pull, `check`, `up`, `bootstrap`, `apply` with a room. | Owners and modes of `.env`, the token and the mount points, `status`, the watch as the service user with Docker. |
+| `backup` | `cave-backup.service`, as its timer starts it. | The archive is root's, mode 600, holds neither `.cave/ops` nor the lock; `.cave` and the lock are the service user's afterwards; `apply` works; no alert. |
+| `update` | A newer release; `cave-update.service`. | `Installed …`, the recovery after it found nothing, the new image runs and the previous one is kept, the snapshot, a clean checkout without root's files, `apply` works, no alert. |
+| `update-broken` | A release whose broker never becomes healthy; `sudo ./cave update`. | Exit status 2, `Rolled back`, the state from before, its image removed and the others kept, `Failed` in `status`, the alert `update rolled back` with only its fixed words, the next run skips it. |
+| `restore` | A backup by hand restored onto the same directory; a restore that stops half-way (an entry made immutable), then `--undo`; a restore onto a new directory with `--data`. | No owner or mode changed; the copies kept from before; `status`, `apply` and `backup` while half-way; the alerts `restore stopped half-way`, `no backup: …` and the watch's `healthy again`; the new directory's owners equal the old one's, and the stack runs from it. |
+| `reboot` | `sudo reboot`. | The stack is back by itself, the recovery ran after Docker and exited 0, the previous boot's journal is kept, the timers' next runs (02:30 and 03:30 plus their delays), no alert. |
+| `power-cut` | The machine killed hard twice during the nightly update: while it stops the stack, and while it starts the new release. | For each phase what [Interrupted updates](#interrupted-updates) says: the previous release again and not marked failed, or the full rollback with the new release's file removed and the release marked failed; a clean checkout; `Running now` in `status` during the update; one alert, none for the power cut itself. |
+| `down-up` | `down`, the watch, `up`; a lock held under a name written before and after its process started. | `NOT STARTED … on purpose`, nothing to report; who holds the lock, as Linux's `/proc` tells a reused process number apart. |
+| `watch` | Home Assistant's container stopped without `cave`, left so in real time; `cave up`. | One alert after 15 to 20 minutes, no second one, the all-clear after `up`, a run every five minutes as the service user, the alert's fixed words, the URL's token in no journal, every alert of the whole run in order. |
+
+**How to start it**: it runs once a week, on every push to `main` and every pull request that
+changes `ops/`, `cave`, `scripts/` or the rehearsal itself, and on demand:
+
+```sh
+gh workflow run server-rehearsal.yml                       # every part
+gh workflow run server-rehearsal.yml -f parts=restore      # the parts up to restore
+gh run watch                                               # follow it
+```
+
+`parts` names the last part to run, for working on the rehearsal itself. The job summary lists
+each part with its outcome and duration, every failed assertion and every known finding; the
+artifact `server-rehearsal-logs` holds the machine's journals, `cave status` and the alerts.
+
+**How long it takes**: about REPLACE_TOTAL minutes in all, of which the watch's real-time wait is
+about REPLACE_WATCH; the job stops after 120.
+
+**Known findings** are listed in `tests/server/known-findings.tsv` with their issue: such a
+failure is reported and does not fail the run, and one that starts to pass fails it until the line
+is removed.
+
+**What it does not cover**, and why it does not weaken what it asserts about the server:
+
+* Raspberry Pi OS, an ARM processor and an SD card: the machine is Debian 13 on x86-64. The
+  commands are the same Python and the same Docker; what differs is speed and the card's wear.
+* Real devices: there is no coordinator and no FRITZ!Box, as on a server before its devices.
+  `COMPOSE_PROFILES` and the FRITZ! variables stay empty, so the stack is Home Assistant and the
+  broker, exactly what [install.md](install.md#7-check-and-start) starts without a coordinator.
+  Zigbee2MQTT's container never runs; its entry in the state does.
+* GitHub: releases come from a Git server in the machine (`git://127.0.0.1`), made from the commit
+  under test and tagged by the release job's own planner; the images come from the real
+  registries. A check of the same run clones the public repository over HTTPS as the service user.
+* A real power cut: QEMU is killed, so whatever the machine had not written to its disk is lost,
+  but the disk itself does not fail half-way through a write, as a card or a cheap SSD can.
+* The receiver is a few lines of Python in the machine, not ntfy on the home network, and the
+  timers' nightly times are read, not waited for.
+* Debian's daily apt timers are switched off in the machine, so that they cannot hold the
+  package lock while the provisioning script runs; on a server they run at 06:00 and 18:00.

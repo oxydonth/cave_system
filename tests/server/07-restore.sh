@@ -51,7 +51,7 @@ alerts_before=$(alert_count)
 step "sudo ./cave backup, by hand" backup_by_hand
 step "the owners and modes before (hardware-acceptance 6.2)" owners /var/lib/cave owners-before
 step "sudo ./cave restore the archive" \
-  vm "cd /opt/cave && sudo ./cave restore /var/backups/cave/$(recall archive-2) 2>&1 | tee restore-1.log"
+  vm "set -o pipefail; cd /opt/cave && sudo ./cave restore /var/backups/cave/$(recall archive-2) 2>&1 | tee ~/restore-1.log"
 check "it restored into /var/lib/cave, because .env names it, and the stack is healthy" \
   contains "^Restored $(recall archive-2) \(taken .* with $(recall tag2)\) into /var/lib/cave\. .*The stack is healthy\.\$" \
   log restore-1.log
@@ -79,7 +79,7 @@ entries_before=$(config_entries)
 step "make the state's zigbee2mqtt entry immutable, so that it cannot be moved" \
   vm 'sudo chattr +i /var/lib/cave/zigbee2mqtt && lsattr -d /var/lib/cave/zigbee2mqtt'
 step "sudo ./cave restore the archive again (it is meant to stop half-way)" \
-  vm "cd /opt/cave && sudo ./cave restore /var/backups/cave/$(recall archive-2) > restore-2.log 2>&1; echo \"exit status \$?\" >> restore-2.log; cat restore-2.log"
+  vm "cd /opt/cave && sudo ./cave restore /var/backups/cave/$(recall archive-2) > ~/restore-2.log 2>&1; echo \"exit status \$?\" >> ~/restore-2.log; cat ~/restore-2.log"
 check "the restore exits 1 and says it stopped half-way" \
   contains '^cave: the restore stopped half-way while moving the state into place: .*Operation not permitted' \
   log restore-2.log
@@ -96,7 +96,8 @@ check "the alerts so far: restore stopped half-way, no backup" \
     "cave-server: no backup: a restore is unfinished (token: true)")" \
   alert_titles_after "${alerts_before}"
 step "the cause is removed" vm 'sudo chattr -i /var/lib/cave/zigbee2mqtt'
-step "sudo ./cave restore --undo" vm 'cd /opt/cave && sudo ./cave restore --undo 2>&1 | tee undo.log'
+step "sudo ./cave restore --undo" \
+  vm 'set -o pipefail; cd /opt/cave && sudo ./cave restore --undo 2>&1 | tee ~/undo.log'
 check "the undo says the state from before is back and the stack is healthy" \
   contains '^The restore that stopped half-way was undone: /var/lib/cave holds the state from before\. The stack is healthy\.$' \
   log undo.log
@@ -119,7 +120,7 @@ check "the alerts of this part: restore stopped half-way, no backup, healthy aga
 
 # --- 3. onto a new state directory
 step "sudo ./cave restore the archive --data ${NEW}" \
-  vm "cd /opt/cave && sudo ./cave restore /var/backups/cave/$(recall archive-2) --data ${NEW} 2>&1 | tee restore-3.log"
+  vm "set -o pipefail; cd /opt/cave && sudo ./cave restore /var/backups/cave/$(recall archive-2) --data ${NEW} 2>&1 | tee ~/restore-3.log"
 check "it restored into the new directory and the stack is healthy" \
   contains "^Restored $(recall archive-2) .* into ${NEW}\. .*The stack is healthy\.\$" log restore-3.log
 check "the new directory is the service user's, mode 750, like the provisioned one" \

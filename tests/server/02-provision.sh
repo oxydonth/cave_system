@@ -43,7 +43,7 @@ check "the dry run says what it would do and changes nothing" \
   contains '^Dry run finished: nothing was changed\.$' vm 'sudo ./provision-host.sh --dry-run'
 check "after the dry run there is no Docker and no service user" \
   vm '! command -v docker && ! id cave'
-step "provision the host" vm 'sudo ./provision-host.sh 2>&1 | tee provision-1.log'
+step "provision the host" vm 'set -o pipefail; sudo ./provision-host.sh 2>&1 | tee provision-1.log'
 check "copied on its own, the script skips the timers and says to run it again from the checkout" \
   contains 'Run /opt/cave/scripts/provision-host.sh again once the repository is cloned there' \
   vm 'cat provision-1.log'
@@ -67,7 +67,7 @@ step "clone into the empty /opt/cave as the service user" \
 check "every file of the checkout is the service user's" \
   equals "" vm 'sudo find /opt/cave ! -user cave'
 step "run the provisioning script again, from the checkout" \
-  vm 'sudo /opt/cave/scripts/provision-host.sh 2>&1 | tee provision-2.log'
+  vm 'set -o pipefail; sudo /opt/cave/scripts/provision-host.sh 2>&1 | tee provision-2.log'
 check "the second run installs the units and names the next steps" \
   contains '^  \./cave init, edit \.env, \./cave check, \./cave up, \./cave bootstrap$' \
   vm 'cat provision-2.log'

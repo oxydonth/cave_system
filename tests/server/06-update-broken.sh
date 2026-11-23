@@ -34,7 +34,7 @@ before=$(state_sum)
 step "publish release 3" publish_release_3
 # The update runs in the step and its exit status is checked below: it is meant to fail.
 step "sudo ./cave update, by hand (release 3 does not become healthy)" \
-  vm 'cd /opt/cave && sudo ./cave update > update-3.log 2>&1; echo "exit status $?" >> update-3.log; cat update-3.log'
+  vm 'cd /opt/cave && sudo ./cave update > ~/update-3.log 2>&1; echo "exit status $?" >> ~/update-3.log; cat ~/update-3.log'
 check "the update exits 2: rolled back" contains '^exit status 2$' the_update
 check "it says that release 3 failed and was rolled back to release 2" \
   contains "^Update to $(recall tag3) failed: .*Rolled back: the previous release $(recall tag2) with the state from before the update .* is running and healthy\." \
