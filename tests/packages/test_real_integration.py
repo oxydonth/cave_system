@@ -6,14 +6,16 @@ the package watches the real ``binary_sensor.cave_living_room_window_open`` and 
 The thermostat and the contacts are the fake devices of ``tests/cave_heating/fakes.py``.
 """
 
+import math
 import re
 from collections.abc import Iterator
-from datetime import timedelta
+from datetime import UTC, timedelta
 from pathlib import Path
 from typing import Any
 
 import pytest
 import yaml
+from aiohttp.web_log import AccessLogger
 from freezegun.api import FrozenDateTimeFactory
 from homeassistant.core import HomeAssistant
 from homeassistant.helpers import entity_registry as er
@@ -167,6 +169,50 @@ async def test_every_cave_entity_in_the_generated_dashboard_exists_in_the_integr
     assert missing == []
 
 
+def _named_by_their_own_name(node: Any) -> Iterator[str]:
+    """The entity of every card and row of a dashboard that is named ``{type: entity}``."""
+    if isinstance(node, dict):
+        if node.get("name") == {"type": "entity"}:
+            yield node["entity"]
+        for value in node.values():
+            yield from _named_by_their_own_name(value)
+    elif isinstance(node, list):
+        for value in node:
+            yield from _named_by_their_own_name(value)
+
+
+async def test_the_rows_named_by_the_entitys_own_name_have_one_without_the_room(
+    hass: HomeAssistant, home: FakeHome, tmp_path: Path
+) -> None:
+    """The frontend shows the registry's name of the entity alone, so each must have one.
+
+    For a `{type: entity}` name the frontend (2026.10, `formatEntityName`) takes the entity's
+    `name` from the registry, else its `original_name`; without either the row would be empty.
+    """
+    await start(home)
+    source = tmp_path / "heating.yaml"
+    source.write_text(yaml.safe_dump(HEATING, sort_keys=False))
+    dashboard = yaml.safe_load(render_file(source))
+    registry = er.async_get(hass)
+
+    names = {}
+    for entity_id in _named_by_their_own_name(dashboard):
+        entry = registry.async_get(entity_id)
+        assert entry is not None, entity_id
+        names[entity_id] = entry.name or entry.original_name
+
+    assert names == {
+        "select.cave_home_mode": "Mode",
+        "number.cave_away_temperature": "Away temperature",
+        "binary_sensor.cave_home_occupied": "Occupied",
+        "sensor.cave_living_room_reason": "Reason",
+        "binary_sensor.cave_living_room_window_open": "Window open",
+        "number.cave_living_room_comfort_temperature": "Comfort temperature",
+        "number.cave_living_room_eco_temperature": "Eco temperature",
+        "button.cave_living_room_resume_schedule": "Resume schedule",
+    }
+
+
 async def test_the_dashboards_entities_have_the_domains_its_cards_need(
     hass: HomeAssistant, home: FakeHome, tmp_path: Path
 ) -> None:
@@ -232,10 +278,15 @@ async def test_the_room_is_a_device_in_the_area_of_its_name(
 
 
 async def test_what_the_real_reload_answers_over_rest_reaches_the_person_through_apply(
-    hass: HomeAssistant, home: FakeHome, hass_client: Any
+    hass: HomeAssistant, home: FakeHome, hass_client: Any, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     """An invalid applied copy: Home Assistant's real 400 answer, read by `cave_ops`' client."""
     from cave_ops.ha import HAClient, HAError
+
+    # The test server's access log asks for the local UTC offset, which the frozen clock's
+    # `localtime` does not have, and logs "Error in logging" for every request. Give it one.
+    monkeypatch.setattr(AccessLogger, "_cached_tz", UTC)
+    monkeypatch.setattr(AccessLogger, "_cached_tz_expires", math.inf)
 
     assert await async_setup_component(hass, "api", {})
     await start(home)

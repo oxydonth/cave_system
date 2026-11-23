@@ -12,7 +12,8 @@
 # sentence a person reads. An automation sends a notification when a key appears and dismisses it
 # when the key disappears, so a problem is reported once and not once a minute. The sensors are
 # evaluated every minute, so a notification appears within a minute of the moment its condition
-# holds.
+# holds. The minute is counted by that automation itself, so the sensors can never be evaluated
+# while it is not listening (issue #31, see the automation's trigger `tick`).
 #
 # Restarts. Persistent notifications live in memory, so every restart empties the UI, while the
 # sensors keep their `entries`. At start-up an automation creates the persistent notifications of
@@ -28,10 +29,23 @@
 # not a number means the default below. Durations are in minutes.
 template:
   - triggers:
-      - trigger: time_pattern
-        minutes: "/1"
+      # Once a minute, started by the automation "Cave: notify about what needs attention" (see
+      # its trigger `tick` below for why the clock is there and not here).
+      - trigger: event
+        event_type: cave_attention_check
       - trigger: homeassistant
         event: start
+    # The check at the start, too, only while the automation that pushes listens. Turned off, it
+    # would not see what the check found, and turned on again, it would find nothing new: a
+    # condition that began meanwhile would be shown, never pushed. "on" means listening here
+    # because the start trigger fires when Home Assistant has started, and an automation that is
+    # on has its triggers attached before that (in a start-up job, which Home Assistant waits
+    # for). While Home Assistant is still starting, "on" would not mean that.
+    conditions:
+      - condition: template
+        value_template: >-
+          {{ trigger.platform != 'homeassistant'
+             or is_state('automation.cave_notify_about_what_needs_attention', 'on') }}
     variables:
       # A battery sensor (a percentage, or a low-battery flag) at or below this level in percent
       # raises "low battery". Phones with the Home Assistant app (mobile_app) are not checked.
@@ -59,6 +73,10 @@ template:
       # summary; the persistent notifications stay one per entry. A coordinator that goes
       # offline makes a handful of pushes, not one per device.
       group_limit: 3
+      # A "high humidity" notification whose room has had no reading for this long ends: the
+      # humidity sensor was removed from the room in heating.yaml, or its battery is dead. A
+      # reading that is only late (a Zigbee sensor a minute or two after a start) keeps it.
+      humidity_missing_minutes: 60
 
       # ---- What the settings are applied to; nothing to change below ----
       battery_below: >-
@@ -148,6 +166,26 @@ template:
         {% endif %}
         {% endfor %}
         {{ ns.found }}
+      # Since when each reported room has had no reading, kept in the sensor's attribute
+      # `missing_since`, which is restored across a restart like `entries`. A room whose reading
+      # has been missing for humidity_missing_minutes is left out, and so is its entry below.
+      humidity_missing: >-
+        {% set before = state_attr('sensor.cave_attention_humidity', 'entries') %}
+        {% set before = before if before is mapping else {} %}
+        {% set known = state_attr('sensor.cave_attention_humidity', 'missing_since') %}
+        {% set known = known if known is mapping else {} %}
+        {% set ns = namespace(found={}) %}
+        {% for s in states.climate
+           | selectattr('entity_id', 'search', '^climate[.]cave_')
+           | selectattr('entity_id', 'in', before.keys() | list) %}
+        {% if s.attributes.get('current_humidity') is not number %}
+        {% set since = as_datetime(known.get(s.entity_id), none) or now() %}
+        {% if (now() - since).total_seconds() < humidity_missing_minutes * 60 %}
+        {% set ns.found = dict(ns.found, **{s.entity_id: since.isoformat()}) %}
+        {% endif %}
+        {% endif %}
+        {% endfor %}
+        {{ ns.found }}
       humidity_entries: >-
         {% set before = state_attr('sensor.cave_attention_humidity', 'entries') %}
         {% set before = before if before is mapping else {} %}
@@ -161,7 +199,7 @@ template:
         {% set ns.found = dict(ns.found, **{s.entity_id: (area_name(s.entity_id) or s.name)
              ~ ': humidity is ' ~ ('%g' | format(reading)) ~ ' %, time to air the room'}) %}
         {% endif %}
-        {% elif s.entity_id in before %}
+        {% elif s.entity_id in before and s.entity_id in humidity_missing %}
         {% set ns.found = dict(ns.found, **{s.entity_id: before[s.entity_id]}) %}
         {% endif %}
         {% endfor %}
@@ -215,6 +253,7 @@ template:
         attributes:
           entries: "{{ humidity_entries }}"
           group_limit: "{{ group_limit }}"
+          missing_since: "{{ humidity_missing }}"
 
       - name: Cave attention problems
         unique_id: cave_attention_problems
@@ -339,6 +378,11 @@ automation:
   # Sends the copy of a notification to the notify action named in input_text.cave_notify_service.
   # Only a notify action is called: any other name would run something that is not a
   # notification (a script that notifies again, a restart), so it is logged and ignored.
+  # It is a separate automation, so a copy reaches the phone only while it is armed. At a start
+  # Home Assistant 2026.10 arms it in the same pass as "Cave: notify about what needs attention",
+  # before that one can push; but if its arming alone were delayed (a trigger platform imported
+  # first), or it alone were reloaded at the moment of a push, that one copy would be lost, while
+  # the persistent notification is still created.
   - id: cave_notify_copy
     alias: "Cave: send a notification copy"
     description: Internal. Started by script.cave_notify; use that script instead.
@@ -408,6 +452,12 @@ automation:
     alias: "Cave: notify about what needs attention"
     mode: queued
     max: 50
+    # Every minute's check is a run, and Home Assistant keeps the trace of the last few runs
+    # only (5 by default), so the run that pushed would be gone within five minutes. 120 keep two
+    # hours of them. The trace of the push itself is also in "Cave: send a notification copy",
+    # which runs only for a push.
+    trace:
+      stored_traces: 120
     triggers:
       - trigger: state
         entity_id: sensor.cave_attention_battery
@@ -429,56 +479,82 @@ automation:
         entity_id: sensor.cave_attention_problems
         attribute: entries
         id: problems
+      # The sensors' clock. It is a trigger of this automation, and not a time pattern of the
+      # sensors or of another automation, so that the sensors cannot be checked by the clock
+      # while this automation is not listening to them; a change it does not see is never pushed
+      # (issue #31). Home Assistant attaches all triggers of one automation together, so their
+      # order in this list does not matter, but separate automations are armed separately. At a
+      # start the sensors' triggers are attached first and the automations armed afterwards,
+      # and a time pattern attached in the first second of a minute fires at once: with the
+      # clock on the sensors, a start landing there checked them before this automation
+      # listened, a new condition entered `entries` unseen, the restore automation showed it
+      # without a push, and the start's own check found nothing new. Being armed is not
+      # restored across a restart, so this holds whatever was saved before it. The same holds
+      # when this automation is reloaded or turned off: no check goes unseen (the sensors' start
+      # trigger has a condition for that, at the top). Each tick is a run of this automation,
+      # which Home Assistant records; homeassistant/configuration.yaml leaves it out of the
+      # recorder, see `trace` below and "Entities of the package" in the guide.
+      - trigger: time_pattern
+        minutes: "/1"
+        id: tick
     variables:
       titles: *titles
-      # A sensor that has just been added (Home Assistant started, or the template entities
-      # were reloaded) has no earlier entries to compare with. That is not a change in the
-      # home: what it lists is shown in the UI, nothing is sent to the phone, nothing dismissed.
-      startup: >-
-        {{ trigger.from_state is none or trigger.to_state is none
-           or trigger.from_state.attributes.entries is not mapping
-           or trigger.to_state.attributes.entries is not mapping }}
-      before: >-
-        {{ trigger.from_state.attributes.entries
-           if trigger.from_state is not none and trigger.from_state.attributes.entries is mapping
-           else {} }}
-      after: >-
-        {{ trigger.to_state.attributes.entries
-           if trigger.to_state is not none and trigger.to_state.attributes.entries is mapping
-           else {} }}
-      appeared: "{{ after.keys() | reject('in', before.keys() | list) | list }}"
-      disappeared: "{{ before.keys() | reject('in', after.keys() | list) | list }}"
-      limit: >-
-        {{ trigger.to_state.attributes.get('group_limit', 3) | int(3)
-           if trigger.to_state is not none else 3 }}
-      grouped: "{{ not startup and appeared | count > limit }}"
-      summary: >-
-        {% set ns = namespace(sentences=[]) %}
-        {% for key in appeared %}{% set ns.sentences = ns.sentences + [after[key]] %}{% endfor %}
-        {{ appeared | count }} new: {{ ns.sentences | join('; ') | truncate(500) }}
     actions:
-      # One persistent notification per entry; the phone gets them one by one, or, when there
-      # are more than the limit, only the summary below.
-      - repeat:
-          for_each: "{{ appeared }}"
-          sequence:
-            - action: script.cave_notify
-              data:
-                title: "{{ titles[trigger.id] }}"
-                message: "{{ after[repeat.item] }}"
-                notification_id: "cave_{{ trigger.id }}_{{ repeat.item }}"
-                copy: "{{ not (grouped or startup) }}"
-      - if: "{{ grouped }}"
+      - if: "{{ trigger.id == 'tick' }}"
         then:
-          - event: cave_notify_copy
-            event_data:
-              title: "{{ titles[trigger.id] }}"
-              message: "{{ summary }}"
-      - if: "{{ not startup }}"
-        then:
+          - event: cave_attention_check
+        else:
+          - variables:
+              # A sensor that has just been added (Home Assistant started, or the template
+              # entities were reloaded) has no earlier entries to compare with. That is not a
+              # change in the home: what it lists is shown in the UI, nothing is sent to the
+              # phone, nothing dismissed.
+              startup: >-
+                {{ trigger.from_state is none or trigger.to_state is none
+                   or trigger.from_state.attributes.entries is not mapping
+                   or trigger.to_state.attributes.entries is not mapping }}
+              before: >-
+                {{ trigger.from_state.attributes.entries
+                   if trigger.from_state is not none
+                      and trigger.from_state.attributes.entries is mapping
+                   else {} }}
+              after: >-
+                {{ trigger.to_state.attributes.entries
+                   if trigger.to_state is not none
+                      and trigger.to_state.attributes.entries is mapping
+                   else {} }}
+              appeared: "{{ after.keys() | reject('in', before.keys() | list) | list }}"
+              disappeared: "{{ before.keys() | reject('in', after.keys() | list) | list }}"
+              limit: >-
+                {{ trigger.to_state.attributes.get('group_limit', 3) | int(3)
+                   if trigger.to_state is not none else 3 }}
+              grouped: "{{ not startup and appeared | count > limit }}"
+              summary: >-
+                {% set ns = namespace(sentences=[]) %}
+                {% for key in appeared %}{% set ns.sentences = ns.sentences + [after[key]] %}{% endfor %}
+                {{ appeared | count }} new: {{ ns.sentences | join('; ') | truncate(500) }}
+          # One persistent notification per entry; the phone gets them one by one, or, when
+          # there are more than the limit, only the summary below.
           - repeat:
-              for_each: "{{ disappeared }}"
+              for_each: "{{ appeared }}"
               sequence:
-                - action: persistent_notification.dismiss
+                - action: script.cave_notify
                   data:
+                    title: "{{ titles[trigger.id] }}"
+                    message: "{{ after[repeat.item] }}"
                     notification_id: "cave_{{ trigger.id }}_{{ repeat.item }}"
+                    copy: "{{ not (grouped or startup) }}"
+          - if: "{{ grouped }}"
+            then:
+              - event: cave_notify_copy
+                event_data:
+                  title: "{{ titles[trigger.id] }}"
+                  message: "{{ summary }}"
+          - if: "{{ not startup }}"
+            then:
+              - repeat:
+                  for_each: "{{ disappeared }}"
+                  sequence:
+                    - action: persistent_notification.dismiss
+                      data:
+                        notification_id: "cave_{{ trigger.id }}_{{ repeat.item }}"

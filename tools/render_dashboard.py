@@ -95,6 +95,15 @@ ALLOWED_BADGE_OPTIONS: dict[str, frozenset[str]] = {
 # Options of an entity row given as a mapping (an entities card row without a `type`).
 ALLOWED_ROW_OPTIONS = frozenset({"entity", "name", "icon", "secondary_info"})
 
+# The `name` of a card, row or badge is a text, or a name item (or a list of them) that the
+# frontend fills in from Home Assistant's registries. The frontend of Home Assistant 2026.10
+# (home-assistant-frontend 20260930.5, `formatEntityName`, used by entity rows, tiles and
+# badges) knows the item types entity, device, parent_device, area, floor and text; `entity` is
+# the entity's own name, without its device's.
+ALLOWED_NAME_ITEM_OPTIONS: dict[str, frozenset[str]] = {
+    "entity": frozenset({"type"}),
+}
+
 ALLOWED_VIEW_OPTIONS = frozenset({"title", "path", "icon", "type", "sections"})
 ALLOWED_SECTION_OPTIONS = frozenset({"type", "cards"})
 
@@ -234,18 +243,50 @@ def _entity_badge(entity: str) -> Card:
     return {"type": "entity", "entity": entity, "show_state": True}
 
 
+# The name of an entity without the name of its device. The cave entities of a room belong to
+# the room's device, so Home Assistant calls them "Wohnzimmer Comfort temperature"; under the
+# room's heading the room is named already, and on a phone the prefix pushes the rest out of the
+# row ("Wohnzimmer Comf..."). The frontend takes the entity's own name from the registry, so it
+# stays in the language the integration names it in, and follows a name the owner gives it.
+OWN_NAME: dict[str, str] = {"type": "entity"}
+
+
+def _own_name(entity: str) -> Card:
+    return {"entity": entity, "name": dict(OWN_NAME)}
+
+
+def window_rows(windows: Sequence[str]) -> list[Card]:
+    """The rows of a room's window contacts, each named as what it is to the heating.
+
+    Home Assistant names a contact after its device and its device class: "Wohnzimmer Fenster
+    Door" for a Zigbee contact on a window. The generator knows a contact only by its entity ID
+    in heating.yaml. The frontend could show the device's name alone, but leaves the row empty
+    for an entity without a device, such as a group helper or an input_boolean, which
+    heating.yaml accepts as a window. So the row says what the file says the entity is: one of
+    the room's window contacts, numbered in the order of the file when there are several. A
+    contact on a balcony door is a window contact to the heating as well, and is shown as one.
+    """
+    if len(windows) == 1:
+        return [{"entity": windows[0], "name": "Window contact"}]
+    return [
+        {"entity": window, "name": f"Window contact {number}"}
+        for number, window in enumerate(windows, start=1)
+    ]
+
+
 def _room_section(room: Room) -> dict[str, Any]:
     prefix = f"cave_{room.id}"
-    rows = [
-        f"sensor.{prefix}_reason",
-        f"binary_sensor.{prefix}_window_open",
-        f"number.{prefix}_comfort_temperature",
-        f"number.{prefix}_eco_temperature",
-        f"button.{prefix}_resume_schedule",
+    rows: list[Card | str] = [
+        _own_name(f"sensor.{prefix}_reason"),
+        _own_name(f"binary_sensor.{prefix}_window_open"),
+        _own_name(f"number.{prefix}_comfort_temperature"),
+        _own_name(f"number.{prefix}_eco_temperature"),
+        _own_name(f"button.{prefix}_resume_schedule"),
     ]
+    # The schedule is the owner's helper, not the room's device, and keeps the owner's name.
     if room.schedule is not None:
         rows.append(room.schedule)
-    rows.extend(room.windows)
+    rows.extend(window_rows(room.windows))
     history = [f"climate.{prefix}"]
     history.extend(
         sensor for sensor in (room.temperature_sensor, room.humidity_sensor) if sensor is not None
@@ -281,14 +322,16 @@ def _home_section(home: Home) -> dict[str, Any]:
         {
             "type": "tile",
             "entity": "select.cave_home_mode",
+            "name": dict(OWN_NAME),
             "features": [{"type": "select-options", "style": "buttons"}],
         },
         {
             "type": "tile",
             "entity": "number.cave_away_temperature",
+            "name": dict(OWN_NAME),
             "features": [{"type": "numeric-input", "style": "buttons"}],
         },
-        {"type": "tile", "entity": "binary_sensor.cave_home_occupied"},
+        {"type": "tile", "entity": "binary_sensor.cave_home_occupied", "name": dict(OWN_NAME)},
     ]
     if home.presence:
         cards.append(
@@ -490,6 +533,24 @@ def _check_options(
     return [f"{where}: {kind} option `{key}` is not allowed" for key in item if key not in allowed]
 
 
+def _check_name(where: str, item: Mapping[str, Any]) -> list[str]:
+    """A `name` is a text, or name items listed in ``ALLOWED_NAME_ITEM_OPTIONS``."""
+    name = item.get("name")
+    if name is None or isinstance(name, str):
+        return []
+    parts = name if isinstance(name, list) else [name]
+    problems: list[str] = []
+    for index, part in enumerate(parts):
+        here = f"{where}.name" + (f"[{index}]" if isinstance(name, list) else "")
+        kind = part.get("type") if isinstance(part, Mapping) else part
+        allowed = ALLOWED_NAME_ITEM_OPTIONS.get(kind) if isinstance(kind, str) else None
+        if allowed is None:
+            problems.append(f"{here}: name item `{kind}` is not allowed")
+        else:
+            problems.extend(_check_options("name item", here, part, allowed))
+    return problems
+
+
 def _check_features(where: str, card: Mapping[str, Any]) -> list[str]:
     problems: list[str] = []
     for index, feature in enumerate(card.get("features", [])):
@@ -510,6 +571,7 @@ def _check_card(where: str, card: Any) -> list[str]:
     if allowed is None:
         return [f"{where}: card type `{card_type}` is not allowed"]
     problems = _check_options("card", where, card, allowed)
+    problems.extend(_check_name(where, card))
     problems.extend(_check_features(where, card))
     for index, badge in enumerate(card.get("badges", [])):
         here = f"{where}.badges[{index}]"
@@ -518,6 +580,7 @@ def _check_card(where: str, card: Any) -> list[str]:
             problems.append(f"{here}: badge type `{badge.get('type')}` is not allowed")
         else:
             problems.extend(_check_options("badge", here, badge, allowed_badge))
+            problems.extend(_check_name(here, badge))
     if card_type == "entities":
         for index, row in enumerate(card.get("entities", [])):
             if isinstance(row, Mapping):
@@ -526,6 +589,7 @@ def _check_card(where: str, card: Any) -> list[str]:
                     problems.append(f"{here}: row type `{row['type']}` is not allowed")
                     continue
                 problems.extend(_check_options("row", here, row, ALLOWED_ROW_OPTIONS))
+                problems.extend(_check_name(here, row))
     return problems
 
 

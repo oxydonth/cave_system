@@ -14,16 +14,22 @@ views:
       icon: mdi:home-thermometer
     - type: tile
       entity: select.cave_home_mode
+      name:
+        type: entity
       features:
       - type: select-options
         style: buttons
     - type: tile
       entity: number.cave_away_temperature
+      name:
+        type: entity
       features:
       - type: numeric-input
         style: buttons
     - type: tile
       entity: binary_sensor.cave_home_occupied
+      name:
+        type: entity
     - type: entities
       title: Who is home
       show_header_toggle: false
@@ -53,14 +59,26 @@ views:
     - type: entities
       show_header_toggle: false
       entities:
-      - sensor.cave_living_room_reason
-      - binary_sensor.cave_living_room_window_open
-      - number.cave_living_room_comfort_temperature
-      - number.cave_living_room_eco_temperature
-      - button.cave_living_room_resume_schedule
+      - entity: sensor.cave_living_room_reason
+        name:
+          type: entity
+      - entity: binary_sensor.cave_living_room_window_open
+        name:
+          type: entity
+      - entity: number.cave_living_room_comfort_temperature
+        name:
+          type: entity
+      - entity: number.cave_living_room_eco_temperature
+        name:
+          type: entity
+      - entity: button.cave_living_room_resume_schedule
+        name:
+          type: entity
       - schedule.living_room_heating
-      - binary_sensor.wohnzimmer_fenster_contact
-      - binary_sensor.wohnzimmer_balkontuer_contact
+      - entity: binary_sensor.wohnzimmer_fenster_contact
+        name: Window contact 1
+      - entity: binary_sensor.wohnzimmer_balkontuer_contact
+        name: Window contact 2
     - type: history-graph
       hours_to_show: 24
       entities:
@@ -89,13 +107,24 @@ views:
     - type: entities
       show_header_toggle: false
       entities:
-      - sensor.cave_bathroom_reason
-      - binary_sensor.cave_bathroom_window_open
-      - number.cave_bathroom_comfort_temperature
-      - number.cave_bathroom_eco_temperature
-      - button.cave_bathroom_resume_schedule
+      - entity: sensor.cave_bathroom_reason
+        name:
+          type: entity
+      - entity: binary_sensor.cave_bathroom_window_open
+        name:
+          type: entity
+      - entity: number.cave_bathroom_comfort_temperature
+        name:
+          type: entity
+      - entity: number.cave_bathroom_eco_temperature
+        name:
+          type: entity
+      - entity: button.cave_bathroom_resume_schedule
+        name:
+          type: entity
       - schedule.bathroom_heating
-      - binary_sensor.bad_fenster_contact
+      - entity: binary_sensor.bad_fenster_contact
+        name: Window contact
     - type: history-graph
       hours_to_show: 24
       entities:
@@ -124,11 +153,21 @@ views:
     - type: entities
       show_header_toggle: false
       entities:
-      - sensor.cave_kids_reason
-      - binary_sensor.cave_kids_window_open
-      - number.cave_kids_comfort_temperature
-      - number.cave_kids_eco_temperature
-      - button.cave_kids_resume_schedule
+      - entity: sensor.cave_kids_reason
+        name:
+          type: entity
+      - entity: binary_sensor.cave_kids_window_open
+        name:
+          type: entity
+      - entity: number.cave_kids_comfort_temperature
+        name:
+          type: entity
+      - entity: number.cave_kids_eco_temperature
+        name:
+          type: entity
+      - entity: button.cave_kids_resume_schedule
+        name:
+          type: entity
     - type: history-graph
       hours_to_show: 24
       entities:

@@ -6,14 +6,27 @@ entities come back with a fresh ``last_changed`` and sometimes as ``unknown`` or
 and the start event is fired.
 """
 
+import asyncio
+import copy
 from datetime import timedelta
 from typing import Any
 from unittest.mock import patch
 
 import pytest
 from freezegun.api import FrozenDateTimeFactory
-from homeassistant.const import EVENT_HOMEASSISTANT_START, EVENT_HOMEASSISTANT_STARTED
-from homeassistant.core import CoreState, Event, HomeAssistant, ServiceCall, State
+from homeassistant.components.automation import AutomationEntity
+from homeassistant.const import (
+    EVENT_HOMEASSISTANT_START,
+    EVENT_HOMEASSISTANT_STARTED,
+)
+from homeassistant.core import (
+    CoreState,
+    Event,
+    HomeAssistant,
+    ServiceCall,
+    State,
+    callback,
+)
 from homeassistant.helpers import device_registry as dr
 from homeassistant.helpers import entity_registry as er
 from homeassistant.helpers.entity import entity_sources
@@ -51,15 +64,23 @@ def phone(hass: HomeAssistant) -> list[ServiceCall]:
     return async_mock_service(hass, "notify", "test_phone")
 
 
-async def restart(hass: HomeAssistant, restored: dict[str, dict[str, str]]) -> Shown:
+async def restart(
+    hass: HomeAssistant,
+    restored: dict[str, dict[str, str]],
+    attributes: dict[str, dict[str, Any]] | None = None,
+) -> Shown:
     """Start Home Assistant with the sensors' last entries restored and nothing in the UI.
 
-    ``restored`` maps a kind (``battery``, ``windows``, ...) to the entries it had listed.
+    ``restored`` maps a kind (``battery``, ``windows``, ...) to the entries it had listed, and
+    ``attributes`` a kind to further attributes its sensor had (``missing_since``).
     States the test sets before this call are what the entities have at start-up.
     """
     stored = []
     for kind, entries in restored.items():
-        state = State(f"sensor.cave_attention_{kind}", str(len(entries)), {"entries": entries})
+        more = (attributes or {}).get(kind, {})
+        state = State(
+            f"sensor.cave_attention_{kind}", str(len(entries)), {"entries": entries, **more}
+        )
         extra = {"native_value": str(len(entries)), "native_unit_of_measurement": None}
         stored.append((state, extra))
     mock_restore_cache_with_extra_data(hass, stored)
@@ -256,6 +277,107 @@ async def test_after_a_restart_high_humidity_that_goes_on_is_not_announced_again
     assert phone == []
 
 
+HUMIDITY_TEXT = "Bad: humidity is 80 %, time to air the room"
+
+
+async def test_high_humidity_ends_when_the_room_has_had_no_reading_for_an_hour(
+    hass: HomeAssistant, freezer: FrozenDateTimeFactory, phone: list[ServiceCall]
+) -> None:
+    """The humidity sensor was taken out of the room, or its battery died: the entry ends.
+
+    Before, an entry stayed for as long as the reading was missing, which could be for ever.
+    """
+    shown = await load_package(hass, freezer)
+    await use_phone(hass)
+    room(hass, "Bad", "bathroom", humidity=80)
+    await advance(hass, freezer, 2)
+    assert shown.messages == [HUMIDITY_TEXT]
+
+    set_humidity(hass, "bathroom", None)
+    await advance(hass, freezer, 59)
+    assert shown.messages == [HUMIDITY_TEXT], "kept while the reading is missing for less"
+    await advance(hass, freezer, 2)
+
+    assert shown.current == {}
+    assert hass.states.get("sensor.cave_attention_humidity").attributes["missing_since"] == {}
+    assert len(phone) == 1, "the end is not pushed"
+
+
+async def test_a_reading_that_comes_back_within_the_hour_starts_the_hour_again(
+    hass: HomeAssistant, freezer: FrozenDateTimeFactory
+) -> None:
+    """A gap in the readings is forgotten once a reading arrives; the next gap counts anew."""
+    shown = await load_package(hass, freezer)
+    room(hass, "Bad", "bathroom", humidity=80)
+    await advance(hass, freezer, 2)
+    set_humidity(hass, "bathroom", None)
+    await advance(hass, freezer, 40)
+
+    set_humidity(hass, "bathroom", 75)
+    await advance(hass, freezer, 1)
+    set_humidity(hass, "bathroom", None)
+    await advance(hass, freezer, 40)
+
+    assert shown.messages == [HUMIDITY_TEXT]
+    await advance(hass, freezer, 21)
+    assert shown.current == {}
+
+
+async def test_after_a_restart_a_room_without_a_reading_for_an_hour_is_not_shown_again(
+    hass: HomeAssistant, freezer: FrozenDateTimeFactory, phone: list[ServiceCall]
+) -> None:
+    """The room has had no humidity sensor since before the restart: it does not come back."""
+    room(hass, "Bad", "bathroom")
+    since = (START - timedelta(hours=2)).isoformat()
+    shown = await restart(
+        hass,
+        {"humidity": {"climate.cave_bathroom": HUMIDITY_TEXT}},
+        {"humidity": {"missing_since": {"climate.cave_bathroom": since}}},
+    )
+    assert shown.current == {}, "shown again at start"
+
+    await advance(hass, freezer, 5)
+
+    assert shown.current == {}
+    assert phone == []
+
+
+async def test_after_a_restart_a_reading_missing_for_less_than_an_hour_keeps_its_entry(
+    hass: HomeAssistant, freezer: FrozenDateTimeFactory, phone: list[ServiceCall]
+) -> None:
+    """The hour counts from when the reading went missing, also across the restart."""
+    room(hass, "Bad", "bathroom")
+    since = (START - timedelta(minutes=50)).isoformat()
+    shown = await restart(
+        hass,
+        {"humidity": {"climate.cave_bathroom": HUMIDITY_TEXT}},
+        {"humidity": {"missing_since": {"climate.cave_bathroom": since}}},
+    )
+    assert shown.messages == [HUMIDITY_TEXT]
+
+    await advance(hass, freezer, 8)
+    assert shown.messages == [HUMIDITY_TEXT]
+    await advance(hass, freezer, 3)
+
+    assert shown.current == {}
+    assert phone == []
+
+
+async def test_after_a_restart_an_entry_whose_reading_never_returns_ends_after_an_hour(
+    hass: HomeAssistant, freezer: FrozenDateTimeFactory, phone: list[ServiceCall]
+) -> None:
+    """Reported before the restart with a reading, and none since: an hour from the start."""
+    room(hass, "Bad", "bathroom")
+    shown = await restart(hass, {"humidity": {"climate.cave_bathroom": HUMIDITY_TEXT}})
+
+    await advance(hass, freezer, 59)
+    assert shown.messages == [HUMIDITY_TEXT]
+    await advance(hass, freezer, 2)
+
+    assert shown.current == {}
+    assert phone == []
+
+
 async def test_a_restart_with_nothing_reported_shows_nothing(
     hass: HomeAssistant, freezer: FrozenDateTimeFactory, phone: list[ServiceCall]
 ) -> None:
@@ -282,56 +404,312 @@ async def test_a_new_condition_after_a_restart_is_still_announced(
     assert [call.data["message"] for call in phone] == ["Gate is at 9 %"]
 
 
+# ---------------------------------------------------------------------------------------------
+# A real start (issue #31)
+# ---------------------------------------------------------------------------------------------
+
+# The package's automations, restored as Home Assistant restores them: on, with the time they
+# last ran before the restart. Nothing that is restored may stand in for "this start has been
+# seen": in a real home it is all there from the first moment.
+AUTOMATIONS = (
+    "automation.cave_send_a_notification_copy",
+    "automation.cave_show_reported_notifications_again_after_a_restart",
+    "automation.cave_notify_about_what_needs_attention",
+)
+LAST_RAN_BEFORE_THE_RESTART = START - timedelta(hours=7)
+
+# How many rounds of the event loop a slow automation's arming takes after its executor job. A
+# minute counted by a separate automation reaches the sensors within three rounds (measured with
+# that design); twenty leave a margin, and the design here passes with any number.
+SLOW_TO_ARM_ROUNDS = 20
+
+# Where in its minute the start lands. At second 0.6, with the tracker's offset of 100 ms, the
+# minute's slot falls inside the start phase: the time pattern that is attached there fires at
+# once. At second 30 the start is over long before the next slot.
+START_SECONDS = pytest.mark.parametrize(
+    "start_second", [30.0, 0.6], ids=["start-at-second-30", "start-at-second-0.6"]
+)
+
+
 def _other_integration_at_start(_event: Event) -> None:
     """Any integration that does work at start: not a callback, so it runs in the executor."""
 
 
-@pytest.mark.parametrize(
-    "start_second",
-    [
-        30.0,
-        pytest.param(
-            0.6,
-            marks=pytest.mark.xfail(
-                strict=True,
-                raises=AssertionError,
-                reason="issue #31: a minute slot inside the start phase evaluates the sensors "
-                "before the automations are armed, so the new condition is never pushed",
-            ),
-        ),
-    ],
-    ids=["start-at-second-30", "start-at-second-0.6"],
-)
+async def real_start(
+    hass: HomeAssistant,
+    freezer: FrozenDateTimeFactory,
+    start_second: float,
+    restored: dict[str, dict[str, str]] | None,
+    *,
+    off: tuple[str, ...] = (),
+    slow_to_arm: str | None = None,
+) -> tuple[Shown, list[CoreState]]:
+    """Start Home Assistant for real, from not running, at ``start_second`` of a minute.
+
+    Unlike ``restart``, which sets the package up on a running Home Assistant and fires the start
+    events by hand, this goes through ``async_start``: the template integration attaches the
+    sensors' triggers at START, and the automations are armed only after every START listener
+    has finished. ``restored`` maps a kind to the entries its sensor had listed, or is ``None``
+    for a first install, where no sensor has anything to restore; the automations are always
+    restored with a ``last_triggered``, and as ``off`` if named in ``off``. States the test sets
+    before this call are what the entities have at start-up.
+
+    ``slow_to_arm`` names one automation whose arming first waits for one executor job, as it
+    would for a trigger platform that has to be imported. Without it, Home Assistant 2026.10
+    arms every automation in one pass of the loop, so the start cannot tell whether a design
+    relies on the order in which separate automations are armed.
+
+    Returns what the UI shows and the core state at each minute's check (the event
+    ``cave_attention_check``) that came during the start: one, while Home Assistant is still
+    starting, when the start lands at the beginning of a minute, and none at second 30. The
+    clock is back at second 30 of the minute after ``START`` when it returns, for ``advance``.
+    """
+    hass.set_state(CoreState.not_running)
+    stored: list[tuple[State, dict[str, Any]]] = []
+    for kind, entries in (restored or {}).items():
+        state = State(f"sensor.cave_attention_{kind}", str(len(entries)), {"entries": entries})
+        stored.append(
+            (state, {"native_value": str(len(entries)), "native_unit_of_measurement": None})
+        )
+    for automation in AUTOMATIONS:
+        last = LAST_RAN_BEFORE_THE_RESTART.isoformat()
+        state = "off" if automation in off else "on"
+        stored.append((State(automation, state, {"last_triggered": last}), {}))
+    mock_restore_cache_with_extra_data(hass, stored)
+    shown = await load_package(hass)
+    await use_phone(hass)
+    for automation in AUTOMATIONS:
+        restored_state = hass.states.get(automation)
+        last_triggered = restored_state.attributes["last_triggered"]
+        assert last_triggered == LAST_RAN_BEFORE_THE_RESTART, f"{automation} not restored"
+        assert restored_state.state == ("off" if automation in off else "on")
+    hass.bus.async_listen_once(EVENT_HOMEASSISTANT_START, _other_integration_at_start)
+    checks: list[CoreState] = []
+    hass.bus.async_listen("cave_attention_check", callback(lambda _: checks.append(hass.state)))
+    attach = AutomationEntity._async_attach_triggers
+
+    async def _attach(entity: AutomationEntity) -> Any:
+        if entity.entity_id == slow_to_arm:
+            await hass.async_add_executor_job(lambda: None)
+            for _ in range(SLOW_TO_ARM_ROUNDS):
+                await asyncio.sleep(0)
+        return await attach(entity)
+
+    freezer.move_to(START.replace(second=0, microsecond=0) + timedelta(seconds=start_second))
+    with (
+        patch("homeassistant.helpers.event.randint", return_value=100000),
+        patch.object(AutomationEntity, "_async_attach_triggers", _attach),
+    ):
+        await hass.async_start()
+        await hass.async_block_till_done()
+    assert hass.state is CoreState.running
+    freezer.move_to(START + timedelta(minutes=1))  # back to second 30, see check_clock
+    return shown, checks
+
+
+@START_SECONDS
 async def test_a_new_condition_across_a_real_start_is_announced(
     hass: HomeAssistant,
     freezer: FrozenDateTimeFactory,
     phone: list[ServiceCall],
     start_second: float,
 ) -> None:
-    """The same as above, with Home Assistant really starting, not already running.
+    """A battery that ran low while Home Assistant was down is pushed once, wherever it starts.
 
-    The template integration attaches the time pattern at START and the automations are armed
-    only after every START listener has finished. When the start phase reaches a minute's slot
-    (here, START at second 0.6 with a tracker offset of 100 ms), the sensors are evaluated before
-    the automation that pushes is listening.
+    Before the fix of issue #31, a start at second 0.6 evaluated the sensors before the
+    automation that pushes was listening: the gate's battery was shown, never pushed.
     """
-    hass.set_state(CoreState.not_running)
     hass.states.async_set("sensor.hall_contact_battery", "12", BATTERY)
     hass.states.async_set("sensor.gate_battery", "9", {**BATTERY, "friendly_name": "Gate"})
-    entries = {"sensor.hall_contact_battery": "Hall contact is at 12 %"}
-    state = State("sensor.cave_attention_battery", "1", {"entries": entries})
-    mock_restore_cache_with_extra_data(
-        hass, [(state, {"native_value": "1", "native_unit_of_measurement": None})]
+    shown, checks = await real_start(
+        hass,
+        freezer,
+        start_second,
+        {"battery": {"sensor.hall_contact_battery": "Hall contact is at 12 %"}},
     )
-    shown = await load_package(hass)
-    await use_phone(hass)
-    hass.bus.async_listen_once(EVENT_HOMEASSISTANT_START, _other_integration_at_start)
+    # At second 0.6 the minute's slot still falls inside the start phase; its check now comes
+    # from the automation that pushes, so it is seen.
+    assert checks == ([CoreState.starting] if start_second < 1 else [])
 
-    freezer.move_to(START.replace(second=0) + timedelta(seconds=start_second))
-    with patch("homeassistant.helpers.event.randint", return_value=100000):
-        await hass.async_start()
-        await hass.async_block_till_done()
-    freezer.move_to(START + timedelta(minutes=1))  # back to second 30, see check_clock
+    await advance(hass, freezer, 3)
+
+    assert shown.messages == ["Gate is at 9 %", "Hall contact is at 12 %"]
+    assert [call.data["message"] for call in phone] == ["Gate is at 9 %"]
+
+
+@START_SECONDS
+async def test_a_condition_that_ended_during_a_real_start_is_gone_and_not_pushed(
+    hass: HomeAssistant,
+    freezer: FrozenDateTimeFactory,
+    phone: list[ServiceCall],
+    start_second: float,
+) -> None:
+    """The battery was replaced while Home Assistant was down: nothing in the UI, nothing sent.
+
+    The restore automation must not bring the old notification back after the first evaluation
+    has dropped it, in whichever order the two run.
+    """
+    hass.states.async_set("sensor.hall_contact_battery", "100", BATTERY)
+    hass.states.async_set("binary_sensor.gate_battery", "off", {"device_class": "battery"})
+    shown, _ = await real_start(
+        hass,
+        freezer,
+        start_second,
+        {
+            "battery": {
+                "sensor.hall_contact_battery": "Hall contact is at 12 %",
+                "binary_sensor.gate_battery": "Gate reports a low battery",
+            }
+        },
+    )
+    assert shown.current == {}, "shown again although it had ended"
+
+    await advance(hass, freezer, 5)
+
+    assert shown.current == {}
+    assert phone == []
+
+
+@START_SECONDS
+async def test_many_new_conditions_across_a_real_start_are_one_summary(
+    hass: HomeAssistant,
+    freezer: FrozenDateTimeFactory,
+    phone: list[ServiceCall],
+    start_second: float,
+) -> None:
+    """More than the group limit new since before the restart: one push, one notification each."""
+    for number in range(5):
+        hass.states.async_set(
+            f"sensor.b{number}_battery", "10", {**BATTERY, "friendly_name": f"B{number}"}
+        )
+    hass.states.async_set("sensor.hall_contact_battery", "12", BATTERY)
+    shown, _ = await real_start(
+        hass,
+        freezer,
+        start_second,
+        {"battery": {"sensor.hall_contact_battery": "Hall contact is at 12 %"}},
+    )
+
+    await advance(hass, freezer, 3)
+
+    assert len(shown.current) == 6
+    assert len(phone) == 1
+    assert phone[0].data["message"].startswith("5 new: B")
+
+
+@START_SECONDS
+async def test_a_dismissed_notification_comes_back_once_after_a_real_start_and_stays_dismissed(
+    hass: HomeAssistant,
+    freezer: FrozenDateTimeFactory,
+    phone: list[ServiceCall],
+    start_second: float,
+) -> None:
+    """Dismissals are not remembered across a restart: it is shown again, silently, once.
+
+    Dismissed again after the start, it stays away while the condition goes on.
+    """
+    hass.states.async_set("sensor.hall_contact_battery", "12", BATTERY)
+    shown, _ = await real_start(
+        hass,
+        freezer,
+        start_second,
+        {"battery": {"sensor.hall_contact_battery": "Hall contact is at 12 %"}},
+    )
+    assert shown.messages == ["Hall contact is at 12 %"]
+
+    (notification_id,) = shown.current
+    await hass.services.async_call(
+        "persistent_notification", "dismiss", {"notification_id": notification_id}, blocking=True
+    )
+    await advance(hass, freezer, 10)
+
+    assert shown.current == {}
+    assert phone == []
+
+
+@START_SECONDS
+async def test_the_first_real_start_shows_what_exists_and_pushes_nothing(
+    hass: HomeAssistant,
+    freezer: FrozenDateTimeFactory,
+    phone: list[ServiceCall],
+    start_second: float,
+) -> None:
+    """A first install: nothing to compare with, so what already holds is shown, not pushed."""
+    hass.states.async_set("sensor.hall_contact_battery", "12", BATTERY)
+    shown, _ = await real_start(hass, freezer, start_second, None)
+
+    await advance(hass, freezer, 3)
+    assert shown.messages == ["Hall contact is at 12 %"]
+    assert phone == []
+
+    hass.states.async_set("sensor.gate_battery", "9", {**BATTERY, "friendly_name": "Gate"})
+    await advance(hass, freezer, 2)
+    assert [call.data["message"] for call in phone] == ["Gate is at 9 %"], "later ones are news"
+
+
+PUSHING = "automation.cave_notify_about_what_needs_attention"
+
+
+@START_SECONDS
+async def test_a_restart_while_the_pushing_automation_is_off_misses_nothing(
+    hass: HomeAssistant,
+    freezer: FrozenDateTimeFactory,
+    phone: list[ServiceCall],
+    start_second: float,
+) -> None:
+    """Off across a restart: nothing is checked, so what began meanwhile is pushed when it is on.
+
+    The sensors' own start trigger used to check them at the start even then: the new condition
+    entered `entries` unseen and was never pushed (found in the review of #32). Meanwhile the
+    UI shows what was reported before the restart, including a battery that is fine again.
+    """
+    hass.states.async_set("sensor.hall_contact_battery", "12", BATTERY)
+    hass.states.async_set("sensor.gate_battery", "9", {**BATTERY, "friendly_name": "Gate"})
+    hass.states.async_set("sensor.door_battery", "90", {**BATTERY, "friendly_name": "Door"})
+    shown, _ = await real_start(
+        hass,
+        freezer,
+        start_second,
+        {
+            "battery": {
+                "sensor.hall_contact_battery": "Hall contact is at 12 %",
+                "sensor.door_battery": "Door is at 11 %",
+            }
+        },
+        off=(PUSHING,),
+    )
+    await advance(hass, freezer, 3)
+    assert shown.messages == ["Door is at 11 %", "Hall contact is at 12 %"], "as before"
+    assert phone == []
+
+    await hass.services.async_call("automation", "turn_on", {"entity_id": PUSHING}, blocking=True)
+    await advance(hass, freezer, 1)
+
+    assert shown.messages == ["Gate is at 9 %", "Hall contact is at 12 %"]
+    assert [call.data["message"] for call in phone] == ["Gate is at 9 %"]
+
+
+async def test_a_new_condition_is_pushed_when_the_pushing_automation_is_armed_late(
+    hass: HomeAssistant, freezer: FrozenDateTimeFactory, phone: list[ServiceCall]
+) -> None:
+    """The check and the push are armed together, so their order among the automations is moot.
+
+    The arming of "Cave: notify about what needs attention" waits for an executor job here, and
+    the start lands where the minute's slot falls inside the start phase. A minute counted by
+    any other automation, before or after it in the file, would check the sensors before it
+    listens.
+    """
+    hass.states.async_set("sensor.hall_contact_battery", "12", BATTERY)
+    hass.states.async_set("sensor.gate_battery", "9", {**BATTERY, "friendly_name": "Gate"})
+    shown, checks = await real_start(
+        hass,
+        freezer,
+        0.6,
+        {"battery": {"sensor.hall_contact_battery": "Hall contact is at 12 %"}},
+        slow_to_arm=PUSHING,
+    )
+    assert checks == [CoreState.starting]
+
     await advance(hass, freezer, 3)
 
     assert shown.messages == ["Gate is at 9 %", "Hall contact is at 12 %"]
@@ -360,7 +738,12 @@ async def test_reloading_the_template_entities_does_not_push_what_is_reported_ag
 
     package = load_yaml_dict(str(PACKAGE))
     reloaded = {"homeassistant": {"packages": {"cave_notifications": package}}}
-    with patch("homeassistant.config.load_yaml_config_file", return_value=reloaded):
+    # A fresh copy for every read: Home Assistant merges the packages into what it read, and a
+    # second read of the same object would merge them twice ("duplicate key").
+    with patch(
+        "homeassistant.config.load_yaml_config_file",
+        side_effect=lambda *_args, **_kwargs: copy.deepcopy(reloaded),
+    ):
         await hass.services.async_call("template", "reload", blocking=True)
         await hass.async_block_till_done()
     await advance(hass, freezer, 5)
@@ -369,6 +752,30 @@ async def test_reloading_the_template_entities_does_not_push_what_is_reported_ag
     assert shown.removed == [], "nothing was dismissed"
     assert shown.titles == ["Low battery"]
     assert hass.states.get("sensor.cave_attention_battery") is not None
+
+
+async def test_while_the_pushing_automation_is_off_nothing_is_checked_and_nothing_missed(
+    hass: HomeAssistant, freezer: FrozenDateTimeFactory, phone: list[ServiceCall]
+) -> None:
+    """The minute is counted by "Cave: notify about what needs attention" itself.
+
+    Turned off, it neither checks nor pushes; what changed meanwhile is pushed at the first check
+    after it is turned on again, instead of having entered the sensors unseen.
+    """
+    shown = await load_package(hass, freezer)
+    await use_phone(hass)
+    automation = {"entity_id": "automation.cave_notify_about_what_needs_attention"}
+    await hass.services.async_call("automation", "turn_off", automation, blocking=True)
+    hass.states.async_set("sensor.hall_contact_battery", "12", BATTERY)
+    await advance(hass, freezer, 5)
+    assert hass.states.get("sensor.cave_attention_battery").attributes["entries"] == {}
+    assert shown.current == {}
+
+    await hass.services.async_call("automation", "turn_on", automation, blocking=True)
+    await advance(hass, freezer, 1)
+
+    assert shown.messages == ["Hall contact is at 12 %"]
+    assert [call.data["message"] for call in phone] == ["Hall contact is at 12 %"]
 
 
 async def test_what_exists_when_the_sensors_are_first_added_is_shown_and_not_pushed(

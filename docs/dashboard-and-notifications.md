@@ -32,6 +32,25 @@ A home without rooms still has both views; the room view says that no rooms are 
 
 The texts of the dashboard are English. Room names are the `name` from the file.
 
+**How rows are named.** Home Assistant names an entity after its device and then itself, which
+in a room's list repeats the room: "Wohnzimmer Comfort temperature", cut to "Wohnzimmer Comf..."
+on a phone. So:
+
+- The room's own entities (reason, window pause, comfort and eco temperature, resume button) and
+  the three tiles of the home are named by the entity's own name alone: "Comfort temperature",
+  "Away temperature". The frontend reads it from Home Assistant, so it is in the language the
+  integration names it in, and a name you give the entity in Home Assistant is shown instead.
+- A window contact is named "Window contact", or "Window contact 1", "Window contact 2", ... in
+  the order of `windows` when the room has several. Home Assistant's own name for it comes from
+  the device and its device class, "Wohnzimmer Fenster Door" for a Zigbee contact on a window.
+  The generator knows a contact only by its entity ID, and the device's name alone would leave
+  the row empty for a contact without a device (a group helper, an `input_boolean`), so the row
+  says what the file says it is. A contact on a balcony door is a window contact to the heating
+  and is shown as one: "Window contact 2" next to the window's "Window contact 1". Its state
+  says "Open" or "Closed".
+- The schedule keeps the name of its helper, and the history graphs and "Who is home" show
+  Home Assistant's names.
+
 ### Generating it
 
 `./cave apply` does three things, in this order, after you have edited `cave/heating.yaml`:
@@ -103,7 +122,11 @@ Home Assistant 2026.10 dashboard documentation, and refuses to write anything el
 another built-in card, add it to those lists from the documentation of that card, and to the
 list in `tests/tools/test_render_dashboard.py`, which exists so that widening the list is
 deliberate. A card option that does not exist shows as an error card in the browser, so add only
-what the documentation lists.
+what the documentation lists. A `name` that is not a text is a name item the frontend fills in
+from Home Assistant (`{type: entity}`, the entity's own name); the item types it may use are
+listed in `ALLOWED_NAME_ITEM_OPTIONS`, checked against the frontend of Home Assistant 2026.10
+(`home-assistant-frontend` 20260930.5), which knows `entity`, `device`, `parent_device`,
+`area`, `floor` and `text`.
 
 ### Changing the generator
 
@@ -176,12 +199,17 @@ is dismissed again when the condition ends, and does not return while Home Assis
 running once you have dismissed it, unless the condition ends and starts again. A restart is
 different: see "Restarts" below, where what you dismissed comes back.
 
+**A first install pushes nothing** for conditions that already exist when the package starts
+for the first time: a battery that is already low, a device that is already gone. They have
+nothing to be compared with, so they appear in the bell only, and the phone hears of what
+happens from then on. The same holds for a kind of notification that a new release adds.
+
 | Notification | Condition | Default |
 |---|---|---|
 | Low battery | A battery sensor of a device in the home, in percent or as a low-battery flag, is at or below the limit. It ends when the level is at or above the clearing level. The battery of a phone with the Home Assistant app is not checked | 20 %, clears at 30 % |
 | Device unavailable | Every entity of a device has been unavailable for this long. Zigbee2MQTT itself waits 25 hours before it marks a battery device unavailable | 60 minutes |
 | Window left open | A room's `binary_sensor.cave_<room>_window_open` has been on for this long. That sensor turns on only after the room's window delay | 30 minutes |
-| High humidity | The humidity of a room is above the limit; it ends, and may notify again, only when it is below the second value. The room's humidity is the `current_humidity` of `climate.cave_<room>`, which is the reading of the `humidity_sensor` named for the room in `heating.yaml`, so no area has to be assigned to the sensor. A room without a `humidity_sensor`, a sensor that belongs to no room (the garden, the cellar) and an unavailable sensor give no notification | 70 %, ends below 65 % |
+| High humidity | The humidity of a room is above the limit; it ends, and may notify again, only when it is below the second value. The room's humidity is the `current_humidity` of `climate.cave_<room>`, which is the reading of the `humidity_sensor` named for the room in `heating.yaml`, so no area has to be assigned to the sensor. A room without a `humidity_sensor`, a sensor that belongs to no room (the garden, the cellar) and an unavailable sensor give no notification. A notification whose room has had no reading for an hour ends, also across a restart: the sensor was taken out of the room in `heating.yaml`, or its battery is dead. A shorter gap, such as a Zigbee sensor that reports a minute or two after a start, keeps it | 70 %, ends below 65 % |
 | Heating problem | A room's `binary_sensor.cave_<room>_problem` has been on for this long; the message lists what is wrong. `held` and `pending` thermostats do not turn that sensor on | 10 minutes |
 
 Texts are in English and name the room by its Home Assistant area where the entity has one.
@@ -220,9 +248,15 @@ and with it every nightly update, empties the bell. What happens next:
   was reported stays while its sensor is on, however young its state looks after the restart.
   So a problem that goes on is not announced again because the restart made it look new.
 - A condition that ended while Home Assistant was down is dismissed at the first check. A new
-  condition is announced as usual, with the full time limit counted from the start.
+  condition is announced as usual, with the full time limit counted from the start; a condition
+  that began while Home Assistant was down is pushed once.
 - After a restart, a device that was silent before the restart counts its hour from the start
   again if it was not reported before.
+- All of this holds wherever in its minute the start lands. The minute is counted by the
+  automation "Cave: notify about what needs attention" itself, which fires the event
+  `cave_attention_check` that the sensors check on, and their check at the start runs only
+  while that automation is on, so the sensors are never checked while it is not listening to
+  them (issue #31). If that automation is off across a restart, see "Entities of the package".
 
 **Reloading.** Reloading the template entities (Developer tools, YAML) removes and adds the five
 sensors. That is treated like a start: what they list is shown, nothing is dismissed and nothing
@@ -232,10 +266,37 @@ is sent to the phone.
 
 Besides `script.cave_notify`, `input_text.cave_notify_service` and the seven limit helpers above,
 the package creates the sensors `sensor.cave_attention_battery`, `_unavailable`, `_windows`,
-`_humidity` and `_problems` (state: how many entries; attribute `entries`: key to sentence), and
-three automations: "Cave: notify about what needs attention", "Cave: show reported notifications
-again after a restart" and "Cave: send a notification copy", which listens for the event
-`cave_notify_copy`.
+`_humidity` and `_problems` (state: how many entries; attribute `entries`: key to sentence;
+`sensor.cave_attention_humidity` also has `missing_since`, since when each reported room has had
+no reading), and three automations: "Cave: notify about what needs attention", which also fires
+the event `cave_attention_check` once a minute that the sensors check on, "Cave: show reported
+notifications again after a restart" and "Cave: send a notification copy", which listens for the
+event `cave_notify_copy`.
+
+**Turning "Cave: notify about what needs attention" off** stops the checks as well, also the
+one at a start. Meanwhile the bell keeps what it showed: nothing new appears, nothing that ended
+is dismissed, and after a restart it shows what was reported before the restart, as after any
+restart. At the first check after you turn it on again, within a minute, what began meanwhile
+and still holds is announced and pushed as usual, and what ended is dismissed. So what still
+needs attention is not missed, only delayed. A condition that came and went while the automation
+was off is never announced, as it would not be had Home Assistant been down for that time.
+"Cave: send a notification copy" is a separate automation: while it is off, or in the moment it
+is reloaded, a copy to the phone is lost, and the notification in the bell is still created.
+
+**What is recorded.** Every check is a run of "Cave: notify about what needs attention", once a
+minute. Recorded, each run would add four rows to Home Assistant's database (two changes of the
+automation's state, `automation_triggered` and `cave_attention_check`, 5,760 a day kept for 30
+days) and a logbook line. `homeassistant/configuration.yaml` leaves that automation and the
+event `cave_attention_check` out of the recorder, so a minute in which nothing changes writes
+nothing. What is still recorded: the history of the five `sensor.cave_attention_*` sensors (when
+an entry appeared or went), `script.cave_notify`, and "Cave: send a notification copy", whose
+logbook line "triggered by event cave_notify_copy" marks each push to the phone. The automation
+itself has no history and no logbook lines, so when it was turned off or on cannot be looked up
+afterwards. Its traces (Settings, Automations, the automation, Traces) keep its last 120 runs,
+two hours of checks, so the run that pushed can be found there for two hours and no longer: for
+a push in the night, look in the morning at "Cave: send a notification copy", which runs only
+for a push, keeps its last five runs and holds the message. The 120 traces take about 700 kB,
+held in memory and written to Home Assistant's storage when it stops.
 
 ### Testing it
 

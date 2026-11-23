@@ -1,9 +1,12 @@
 """What the tests of the notifications package share: loading it, and watching what it shows."""
 
+import logging
+import re
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
 from typing import Any
 
+import pytest
 from freezegun.api import FrozenDateTimeFactory
 from homeassistant.components import persistent_notification as pn
 from homeassistant.config import merge_packages_config
@@ -25,8 +28,9 @@ START = datetime(2026, 1, 14, 12, 0, 30, tzinfo=UTC)
 def check_clock() -> None:
     """Fail unless the frozen clock is clear of the boundary of a minute.
 
-    The sensors' time pattern fires at second 0 of a minute plus a random offset of up to
-    0.5 s, and ``advance`` keeps the clock's second within the minute. Two seconds break it:
+    The time pattern that evaluates the sensors fires at second 0 of a minute plus a random
+    offset of up to 0.5 s, and ``advance`` keeps the clock's second within the minute. Two
+    seconds break it:
 
     - In the first second of a minute, past the offset, the first time the tracker computes
       while the package is set up is already over, so the sensors are evaluated during the set-up,
@@ -38,6 +42,47 @@ def check_clock() -> None:
     """
     second = dt_util.utcnow().second
     assert 1 <= second <= 58, f"the clock is at second {second} of a minute, see check_clock"
+
+
+def logged_errors(caplog: pytest.LogCaptureFixture) -> list[logging.LogRecord]:
+    """The errors logged while the test's fixtures were set up and while the test ran.
+
+    ``caplog.records`` alone is the records of the phase that is running, which for a fixture
+    that looks after the test is its own teardown: it would see none of them.
+    """
+    return [
+        record
+        for phase in ("setup", "call")
+        for record in caplog.get_records(phase)
+        if record.levelno >= logging.ERROR
+    ]
+
+
+def unexpected_errors(records: list[logging.LogRecord], expected: list[str]) -> list[str]:
+    """The messages of ``records`` that no pattern of ``expected`` matches as a whole."""
+    return [
+        record.getMessage()
+        for record in records
+        if record.levelno >= logging.ERROR
+        and not any(re.fullmatch(pattern, record.getMessage()) for pattern in expected)
+    ]
+
+
+def failed_copy(reason: str) -> list[str]:
+    """What "Cave: send a notification copy" logs when the notify action fails with ``reason``.
+
+    The action in the helper does not exist, is not a valid name, or raises: the automation
+    logs the step that failed and the run, both with Home Assistant's ``reason``, and for an
+    error other than a missing action also that the automation failed.
+    """
+    why = re.escape(reason)
+    step = r"(Service not found|Error)"
+    return [
+        rf"Cave: send a notification copy: If at step 2: Error executing script\. {step} for "
+        rf"call_service at pos 1: {why}",
+        rf"Cave: send a notification copy: Error executing script\. {step} for if at pos 2: {why}",
+        rf"Error while executing automation automation\.cave_send_a_notification_copy: {why}",
+    ]
 
 
 class Shown:

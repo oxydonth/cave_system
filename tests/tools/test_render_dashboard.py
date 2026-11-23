@@ -49,6 +49,9 @@ BUILT_IN_FEATURES = {
     "select-options",
 }
 BUILT_IN_BADGES = {"entity"}
+# Name items of the frontend (`name: {type: ...}`), filled in from the registries.
+BUILT_IN_NAME_ITEMS = {"entity"}
+OWN_NAME = {"type": "entity"}
 
 
 def _golden_diff(expected: str, actual: str, name: str) -> str:
@@ -122,11 +125,11 @@ def test_a_room_with_nothing_optional_has_only_what_it_always_has() -> None:
     assert heading["heading"] == "Office"
     assert thermostat["entity"] == "climate.cave_office"
     assert rows["entities"] == [
-        "sensor.cave_office_reason",
-        "binary_sensor.cave_office_window_open",
-        "number.cave_office_comfort_temperature",
-        "number.cave_office_eco_temperature",
-        "button.cave_office_resume_schedule",
+        {"entity": "sensor.cave_office_reason", "name": OWN_NAME},
+        {"entity": "binary_sensor.cave_office_window_open", "name": OWN_NAME},
+        {"entity": "number.cave_office_comfort_temperature", "name": OWN_NAME},
+        {"entity": "number.cave_office_eco_temperature", "name": OWN_NAME},
+        {"entity": "button.cave_office_resume_schedule", "name": OWN_NAME},
     ]
     assert history["entities"] == ["climate.cave_office"]
 
@@ -141,14 +144,14 @@ def test_every_optional_key_reaches_the_dashboard() -> None:
     assert presence["entities"] == ["device_tracker.max_phone", "person.anna", "zone.home"]
     living = sections[1]["cards"]
     assert living[2]["entities"] == [
-        "sensor.cave_living_room_reason",
-        "binary_sensor.cave_living_room_window_open",
-        "number.cave_living_room_comfort_temperature",
-        "number.cave_living_room_eco_temperature",
-        "button.cave_living_room_resume_schedule",
+        {"entity": "sensor.cave_living_room_reason", "name": OWN_NAME},
+        {"entity": "binary_sensor.cave_living_room_window_open", "name": OWN_NAME},
+        {"entity": "number.cave_living_room_comfort_temperature", "name": OWN_NAME},
+        {"entity": "number.cave_living_room_eco_temperature", "name": OWN_NAME},
+        {"entity": "button.cave_living_room_resume_schedule", "name": OWN_NAME},
         "schedule.living_room_heating",
-        "binary_sensor.wohnzimmer_fenster_contact",
-        "binary_sensor.wohnzimmer_balkontuer_contact",
+        {"entity": "binary_sensor.wohnzimmer_fenster_contact", "name": "Window contact 1"},
+        {"entity": "binary_sensor.wohnzimmer_balkontuer_contact", "name": "Window contact 2"},
     ]
     assert living[3]["entities"] == [
         "climate.cave_living_room",
@@ -156,7 +159,72 @@ def test_every_optional_key_reaches_the_dashboard() -> None:
         "sensor.wohnzimmer_humidity",
     ]
     bathroom = sections[2]["cards"]
-    assert "binary_sensor.bad_fenster_contact" in bathroom[2]["entities"]
+    assert {"entity": "binary_sensor.bad_fenster_contact", "name": "Window contact"} in bathroom[2][
+        "entities"
+    ]
+
+
+def _rows(dashboard: dict[str, Any]) -> Iterator[dict[str, Any] | str]:
+    for section in dashboard["views"][0]["sections"]:
+        for card in section["cards"]:
+            if card["type"] == "entities":
+                yield from card["entities"]
+
+
+@pytest.mark.parametrize("home", HOMES)
+def test_no_window_contact_is_left_to_the_name_of_its_device_class(home: str) -> None:
+    """Every contact of `windows` has a name of its own, not "Wohnzimmer Fenster Door".
+
+    Home Assistant names a Zigbee contact after its device and its device class, so the row of a
+    window would read as a door.
+    """
+    source = GOLDEN / home / "heating.yaml"
+    windows = {w for room in load_home(source).rooms for w in room.windows}
+    dashboard = yaml.safe_load(render_file(source))
+
+    named = {row["entity"]: row["name"] for row in _rows(dashboard) if isinstance(row, dict)}
+
+    assert windows <= set(named)
+    assert all(named[window].startswith("Window contact") for window in windows)
+
+
+@pytest.mark.parametrize(
+    ("windows", "names"),
+    [
+        (["binary_sensor.a"], ["Window contact"]),
+        (
+            ["binary_sensor.fenster", "binary_sensor.balkontuer", "input_boolean.x"],
+            ["Window contact 1", "Window contact 2", "Window contact 3"],
+        ),
+    ],
+    ids=["one", "several"],
+)
+def test_window_contacts_are_numbered_in_the_order_of_the_file_when_there_are_several(
+    windows: list[str], names: list[str]
+) -> None:
+    rows = render_dashboard.window_rows(windows)
+
+    assert rows == [
+        {"entity": window, "name": name} for window, name in zip(windows, names, strict=True)
+    ]
+
+
+def test_the_rooms_and_the_homes_own_entities_are_named_without_their_device() -> None:
+    """Under the heading "Wohnzimmer" a row says "Comfort temperature", not the room again.
+
+    Home Assistant's name, "Wohnzimmer Comfort temperature", is cut to "Wohnzimmer Comf..." on a
+    phone. Every `cave_` entity in a row or tile is named by its own name, and nothing else is.
+    """
+    dashboard = yaml.safe_load(render_file(GOLDEN / "all_optional" / "heating.yaml"))
+    sections = dashboard["views"][0]["sections"]
+    tiles = [card for card in sections[0]["cards"] if card["type"] == "tile"]
+    rows = [row for row in _rows(dashboard) if isinstance(row, dict)]
+
+    for item in [*tiles, *rows]:
+        is_cave = item["entity"].split(".")[1].startswith("cave_")
+        assert (item.get("name") == OWN_NAME) == is_cave, item
+    assert len(tiles) == 3
+    assert "schedule.living_room_heating" in list(_rows(dashboard))
 
 
 def test_the_room_view_has_the_controls_of_the_home_header() -> None:
@@ -202,7 +270,7 @@ def test_the_generator_names_no_device(tmp_path: Path) -> None:
 
 
 def _walk_types(dashboard: dict[str, Any]) -> Iterator[tuple[str, str]]:
-    """Every ``(kind, type)`` the dashboard uses: cards, features and heading badges."""
+    """Every ``(kind, type)`` the dashboard uses: cards, features, heading badges, name items."""
     for view in dashboard["views"]:
         for section in view["sections"]:
             for card in section["cards"]:
@@ -211,6 +279,10 @@ def _walk_types(dashboard: dict[str, Any]) -> Iterator[tuple[str, str]]:
                     yield "feature", feature["type"]
                 for badge in card.get("badges", []):
                     yield "badge", badge["type"]
+                rows = [row for row in card.get("entities", []) if isinstance(row, dict)]
+                for item in [card, *card.get("badges", []), *rows]:
+                    if isinstance(item.get("name"), dict):
+                        yield "name item", item["name"]["type"]
 
 
 def _all_used_types() -> set[tuple[str, str]]:
@@ -227,6 +299,7 @@ def test_only_built_in_cards_features_and_badges_are_used() -> None:
     assert {t for kind, t in used if kind == "card"} <= BUILT_IN_CARDS
     assert {t for kind, t in used if kind == "feature"} <= BUILT_IN_FEATURES
     assert {t for kind, t in used if kind == "badge"} <= BUILT_IN_BADGES
+    assert {t for kind, t in used if kind == "name item"} <= BUILT_IN_NAME_ITEMS
     assert not [t for _, t in used if t.startswith("custom:")]
 
 
@@ -235,15 +308,17 @@ def test_the_generators_allow_list_is_the_written_out_list() -> None:
     assert render_dashboard.ALLOWED_CARD_TYPES == BUILT_IN_CARDS
     assert set(render_dashboard.ALLOWED_FEATURE_OPTIONS) == BUILT_IN_FEATURES
     assert set(render_dashboard.ALLOWED_BADGE_OPTIONS) == BUILT_IN_BADGES
+    assert set(render_dashboard.ALLOWED_NAME_ITEM_OPTIONS) == BUILT_IN_NAME_ITEMS
 
 
 def test_the_allow_list_is_not_wider_than_what_is_used() -> None:
-    """Every allowed card type, feature and badge is exercised by a golden file."""
+    """Every allowed card type, feature, badge and name item is exercised by a golden file."""
     used = _all_used_types()
 
     assert {t for kind, t in used if kind == "card"} == BUILT_IN_CARDS
     assert {t for kind, t in used if kind == "feature"} == BUILT_IN_FEATURES
     assert {t for kind, t in used if kind == "badge"} == BUILT_IN_BADGES
+    assert {t for kind, t in used if kind == "name item"} == BUILT_IN_NAME_ITEMS
 
 
 @pytest.mark.parametrize("home", HOMES)
@@ -302,6 +377,23 @@ def test_the_check_rejects_a_feature_badge_or_row_outside_the_lists() -> None:
     assert any("feature type" in p for p in problems)
     assert any("badge type" in p for p in problems)
     assert any("row type" in p for p in problems)
+
+
+def test_the_check_rejects_a_name_item_outside_the_list() -> None:
+    """A name item the generator does not use, or a misspelt one, is refused wherever it is."""
+    dashboard = _dashboard()
+    cards = dashboard["views"][0]["sections"][1]["cards"]
+    cards[0]["badges"][0]["name"] = {"type": "device"}
+    cards[2]["entities"][0]["name"] = [{"type": "entity"}, {"type": "aera"}]
+    dashboard["views"][0]["sections"][0]["cards"][1]["name"] = {"type": "entity", "x": 1}
+
+    problems = check_dashboard(dashboard)
+
+    assert problems == [
+        "views[0].sections[0].cards[1].name: name item option `x` is not allowed",
+        "views[0].sections[1].cards[0].badges[0].name: name item `device` is not allowed",
+        "views[0].sections[1].cards[2].entities[0].name[1]: name item `aera` is not allowed",
+    ]
 
 
 def test_the_check_rejects_a_view_type_outside_sections() -> None:
