@@ -3,9 +3,9 @@ name: CI
 # This file lists the jobs. GitHub bills every job rounded up to the whole minute, so a check that
 # takes seconds is a step in a job that exists anyway, not a job of its own:
 #
-#   lint   static checks, the version check, the document check, the provision-host dry run,
-#          hassfest, and which kind of change this is (below)
-#   test   the test suite on Python 3.14 and 3.11, the device matrix
+#   lint   static checks, the version check, the document check, the provision-host dry run, and
+#          which kind of change this is (below)
+#   test   the test suite on Python 3.14 and 3.11, the device matrix, hassfest
 #   e2e    e2e.yml, everything with containers: the stack check (.github/actions/stack), the
 #          simulator check (.github/actions/sim), then first-run setup, the dashboard in a
 #          browser and the scenarios on the demo
@@ -48,15 +48,6 @@ jobs:
     outputs:
       # "true" unless this is a pull request that changes nothing but Markdown files.
       code: ${{ steps.changes.outputs.code }}
-    # Runs the official hassfest image directly instead of through home-assistant/actions,
-    # whose action.yml uses the untagged :latest image: a new Home Assistant release could
-    # then turn this job red with no change here. The Home Assistant version appears in
-    # three places that move together, in one pull request: `homeassistant` in uv.lock
-    # (through pytest-homeassistant-custom-component), the tag of this image, and the image
-    # tag in compose.yaml. `make versions` (below) enforces it. The digest is the registry's
-    # Docker-Content-Digest for the tag.
-    env:
-      HASSFEST_IMAGE: ghcr.io/home-assistant/hassfest:2026.10.4@sha256:e5828f7e305518506d8b4e8346411357d68358531b761bd118fe6a1631feff44
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
@@ -130,9 +121,6 @@ jobs:
           test ! -e /etc/apt/sources.list.d/docker.sources
           test ! -e /var/lib/cave
           test ! -e /opt/cave
-      - name: hassfest
-        if: ${{ !cancelled() }}
-        run: docker run --rm -v "${GITHUB_WORKSPACE}:/github/workspace" "${HASSFEST_IMAGE}"
 
   test:
     name: test
@@ -140,6 +128,15 @@ jobs:
     if: ${{ !cancelled() && needs.lint.outputs.code == 'true' }}
     runs-on: ubuntu-24.04
     timeout-minutes: 15
+    # Runs the official hassfest image directly instead of through home-assistant/actions,
+    # whose action.yml uses the untagged :latest image: a new Home Assistant release could
+    # then turn this job red with no change here. The Home Assistant version appears in
+    # three places that move together, in one pull request: `homeassistant` in uv.lock
+    # (through pytest-homeassistant-custom-component), the tag of this image, and the image
+    # tag in compose.yaml. `make versions` (job lint) enforces it. The digest is the registry's
+    # Docker-Content-Digest for the tag.
+    env:
+      HASSFEST_IMAGE: ghcr.io/home-assistant/hassfest:2026.10.4@sha256:e5828f7e305518506d8b4e8346411357d68358531b761bd118fe6a1631feff44
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
@@ -166,6 +163,9 @@ jobs:
         # An explicit `bash` runs with pipefail, so the script's exit status survives the tee.
         shell: bash
         run: uv run --locked python -m tests.devices.matrix test-results.xml | tee -a "${GITHUB_STEP_SUMMARY}"
+      - name: hassfest
+        if: ${{ !cancelled() }}
+        run: docker run --rm -v "${GITHUB_WORKSPACE}:/github/workspace" "${HASSFEST_IMAGE}"
 
   e2e:
     name: e2e
