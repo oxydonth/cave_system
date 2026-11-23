@@ -141,6 +141,13 @@ class HAClient:
             raise
         return result
 
+    def states(self) -> list[dict[str, Any]]:
+        """``GET /api/states``: every entity's state."""
+        listing = self.request("GET", "/api/states")
+        if not isinstance(listing, list):
+            raise HAError(200, "/api/states answered in an unexpected shape")
+        return [item for item in listing if isinstance(item, dict)]
+
     def services(self) -> dict[str, set[str]]:
         """``GET /api/services``, as ``{domain: {service, ...}}``."""
         listing = self.request("GET", "/api/services")

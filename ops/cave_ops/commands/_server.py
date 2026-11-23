@@ -26,6 +26,7 @@ from collections.abc import Callable, Iterator
 from pathlib import Path, PurePosixPath
 from typing import Any
 
+from .. import records
 from ..context import Context
 from ..errors import CaveError
 from ..runner import Result
@@ -115,26 +116,28 @@ def remove_stale_git_locks(ctx: Context) -> None:
 
 def check_out_exactly(
     ctx: Context, commit: str, other: str, *, remove_added: bool
-) -> tuple[str | None, list[str]]:
+) -> tuple[str | None, list[str], list[str]]:
     """Make the checkout exactly ``commit``, whatever an interrupted checkout of ``other`` left:
     Git's lock files, HEAD where it was, files of both in the working tree.
 
     With ``remove_added`` (only when a checkout of ``other`` may have run), a file that ``other``
     adds is removed if, and only if, its content is ``other``'s own: the owner's untracked files
     are never touched, even where ``other`` has a file of the same name. Returns what failed (or
-    ``None``) and the paths that were left in place.
+    ``None``), the paths that were left in place and the paths that were removed (a file of the
+    owner's that is byte for byte ``other``'s is among them: checking out ``other`` gives it back).
     """
     remove_stale_git_locks(ctx)
     done = git(ctx, "checkout", "--force", "--detach", commit)
     if not done.ok:
         done = git(ctx, "reset", "--hard", commit)
     if not done.ok:
-        return done.output.strip()[-300:] or f"exit status {done.returncode}", []
+        return done.output.strip()[-300:] or f"exit status {done.returncode}", [], []
     if not remove_added:
-        return None, []
+        return None, [], []
     added = git(ctx, "diff", "--name-only", "--diff-filter=A", "-z", commit, other)
     if not added.ok:
-        return f"the files {other} added could not be listed: {added.output.strip()[-300:]}", []
+        listed = f"the files {other} added could not be listed: {added.output.strip()[-300:]}"
+        return listed, [], []
     present = [
         name
         for name in filter(None, added.stdout.split("\0"))
@@ -142,11 +145,12 @@ def check_out_exactly(
     ]
     regular = [name for name in present if (ctx.paths.root / name).is_file()]
     kept = [name for name in present if name not in regular]
+    removed: list[str] = []
     if regular:
         here = git(ctx, "hash-object", "--", *regular)
         theirs = git(ctx, "rev-parse", *(f"{other}:{name}" for name in regular))
         if not here.ok or not theirs.ok:
-            return None, present
+            return None, present, []
         for name, mine, released in zip(
             regular, here.stdout.split(), theirs.stdout.split(), strict=False
         ):
@@ -155,11 +159,12 @@ def check_out_exactly(
                 continue
             path = ctx.paths.root / name
             path.unlink()
+            removed.append(name)
             parent = path.parent
             while parent != ctx.paths.root and not any(parent.iterdir()):
                 parent.rmdir()
                 parent = parent.parent
-    return None, sorted(kept)
+    return None, sorted(kept), sorted(removed)
 
 
 def entries_elsewhere(ctx: Context) -> list[str]:
@@ -218,29 +223,6 @@ def restore_start_owed(ctx: Context) -> str | None:
     return f"{what} {series.get('archive', 'an archive')}"
 
 
-NOT_STARTED = "not-started.json"
-"""A note that a restore or ``--undo`` finished with ``--no-start``: ``status`` says so while the
-stack is not running; nothing refuses because of it; ``update`` removes it once the stack runs."""
-
-
-def note_not_started(ctx: Context, what: str) -> None:
-    write_atomic(ops_dir(ctx) / NOT_STARTED, json.dumps({"what": what}).encode(), 0o644)
-
-
-def not_started(ctx: Context) -> str | None:
-    try:
-        raw = json.loads((ops_dir(ctx) / NOT_STARTED).read_text(encoding="utf-8"))
-    except FileNotFoundError:
-        return None
-    except (OSError, ValueError):
-        return "a restore"
-    return str(raw.get("what", "a restore")) if isinstance(raw, dict) else "a restore"
-
-
-def clear_not_started(ctx: Context) -> None:
-    (ops_dir(ctx) / NOT_STARTED).unlink(missing_ok=True)
-
-
 def give_to_checkout_owner(ctx: Context, path: Path) -> None:
     """Make ``path`` the checkout owner's, so that Git running as that user can write there."""
     if is_root():
@@ -249,18 +231,33 @@ def give_to_checkout_owner(ctx: Context, path: Path) -> None:
 
 
 # ---------------------------------------------------------------------------- files with owners
+NOT_STATE = ("lock", OPS_DIR, "stopped.json", "watch.json")
+"""Entries of ``CAVE_DATA/.cave`` that are records of the commands, not state: the lock, the
+``ops`` directory, the record of a stack stopped on purpose and what ``cave watch`` has said
+(``records.py``, ``alert.py``). No snapshot, backup or restore moves them."""
+
+
 def state_entries(data: Path) -> list[str]:
     """What a snapshot or backup holds, relative to ``CAVE_DATA``: every top-level entry, and
-    inside ``.cave`` everything except the lock and the commands' own ``ops`` directory."""
+    inside ``.cave`` everything except the commands' own records (``NOT_STATE``) and their
+    temporary files."""
     if not data.is_dir():
         return []
     entries = sorted(name for name in os.listdir(data) if name != ".cave")
     meta = data / ".cave"
     if meta.is_dir():
-        entries += sorted(
-            f".cave/{name}" for name in os.listdir(meta) if name not in ("lock", OPS_DIR)
-        )
+        entries += sorted(f".cave/{name}" for name in os.listdir(meta) if not _a_record(name))
     return entries
+
+
+def _a_record(name: str) -> bool:
+    """One of ``NOT_STATE``, or a temporary file of one (``.<name>.tmp``, ``.<name>.<writer>.tmp``,
+    ``records.write_atomic``)."""
+    if name in NOT_STATE:
+        return True
+    return name.endswith(".tmp") and any(
+        name == f".{record}.tmp" or name.startswith(f".{record}.") for record in NOT_STATE
+    )
 
 
 def _keep_owner(path: Path, info: os.stat_result) -> None:
@@ -321,31 +318,7 @@ def sync() -> None:
     os.sync()
 
 
-def write_atomic(path: Path, data: bytes, mode: int = 0o644) -> None:
-    """Replace ``path`` with ``data`` so that a reader, or a power cut, sees old or new only.
-
-    The temporary file is created fresh and never through a symbolic link, because this runs as
-    root in directories that other users can write.
-    """
-    path.parent.mkdir(parents=True, exist_ok=True)
-    tmp = path.with_name(f".{path.name}.tmp")
-    tmp.unlink(missing_ok=True)
-    fd = os.open(tmp, os.O_WRONLY | os.O_CREAT | os.O_EXCL | os.O_NOFOLLOW, mode)
-    try:
-        with os.fdopen(fd, "wb") as handle:
-            handle.write(data)
-            handle.flush()
-            os.fsync(handle.fileno())
-        os.chmod(tmp, mode)
-        os.replace(tmp, path)
-    except BaseException:
-        tmp.unlink(missing_ok=True)
-        raise
-    directory = os.open(path.parent, os.O_RDONLY)
-    try:
-        os.fsync(directory)
-    finally:
-        os.close(directory)
+write_atomic = records.write_atomic
 
 
 # ------------------------------------------------------------------------------------- archives

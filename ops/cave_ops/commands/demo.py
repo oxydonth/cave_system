@@ -38,9 +38,8 @@ from ..envfile import NAMES, fresh_values, generate_secret, load_env, render, wr
 from ..errors import CaveError
 from ..heating import validate_and_store
 from ..mosquitto import password_line
-from ..paths import Paths
+from ..paths import APPLIED_IN_CONTAINER, DASHBOARD_IN_CONTAINER, GENERATOR, Paths
 from ..state import HA_FILES, MOUNT_DIRS, PLACEHOLDER_DASHBOARD, home_assistant_directories
-from .apply import APPLIED_IN_CONTAINER, DASHBOARD_IN_CONTAINER, GENERATOR
 from .bootstrap import set_up_home_assistant, settings_from_env
 
 HELP = "Start (or `down`: stop) a demo with simulated devices in a stack of its own"

@@ -1,0 +1,12 @@
+# Installed and enabled by scripts/provision-host.sh. See docs/operations.md, "Alerts".
+[Unit]
+Description=cave_system: watch the stack every five minutes
+
+[Timer]
+# Every five minutes (cave watch's INTERVAL; an incident is alerted after 15 minutes).
+OnCalendar=*:0/5
+AccuracySec=30s
+Persistent=false
+
+[Install]
+WantedBy=timers.target

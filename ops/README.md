@@ -18,16 +18,18 @@ each part (`tests/ops/conftest.py`).
 | Module | Provides |
 |---|---|
 | `cli.py` | Command discovery (`discover()`), the argument parser and `main(argv, root=, ctx=)`. A `CaveError` becomes `cave: <message>` and exit status 1. |
-| `context.py` | `Context`: `paths`, `env` (`.env` overlaid by the process environment), `runner`, `out`/`err`, `ha()`, `lock(name)`, `docker(...)`, `compose(...)`, `git(...)`, `say()`/`warn()`, `journal`, `sleep`/`monotonic`, `compose_files`, `compose_env`. `Context.create(root)` builds the real one. See "Compose with overlays and environment" below. |
-| `paths.py` | `Paths(root, data)`: every path of concept sections 4.2 and 4.5 (`heating`, `heating_applied`, `dashboard`, `token`, `lock_file`, ...), and `container_path(host_path)` for the path inside the Home Assistant container. |
+| `context.py` | `Context`: `paths`, `env` (`.env` overlaid by the process environment), `runner`, `out`/`err`, `ha()`, `lock(name)`, `docker(...)`, `compose(...)`, `git(...)`, `say()`/`warn()`, `journal`, `sleep`/`monotonic`, `wall` (seconds since the epoch, for what is compared across runs), `compose_files`, `compose_env`. `Context.create(root)` builds the real one. See "Compose with overlays and environment" below. |
+| `paths.py` | `Paths(root, data)`: every path of concept sections 4.2 and 4.5 (`heating`, `heating_applied`, `dashboard`, `token`, `lock_file`, `stopped_record`, `watch_record`, ...), and `container_path(host_path)` for the path inside the Home Assistant container. Also the container's paths of the dashboard generator and its files (`GENERATOR`, `APPLIED_IN_CONTAINER`, `DASHBOARD_IN_CONTAINER`), which `apply` and `demo` both use. |
 | `envfile.py` | The variable table of concept section 4.2 (`VARIABLES`), `.env` parsing (`parse_env`: quotes, inline comments; no `$` interpolation, so use single quotes for values with `$`), `missing_names()` / `apply_updates()` to complete a `.env` in place, and rendering. `.env.example` is rendered from the table: `PYTHONPATH=ops python3 -m cave_ops.envfile > .env.example`. |
 | `runner.py` | `Runner` protocol and `SubprocessRunner`: `run(args, cwd=, env=, capture=, check=, input_text=, timeout=) -> Result(returncode, stdout, stderr)`. A missing program is status 127 and a timeout is status 124, not exceptions; `check=True` raises `CommandError`. Nothing in `cave` runs unbounded by accident: `ctx.git()` defaults to 120 s, the health check asks Docker with 60 s, `run_in_homeassistant` defaults to 600 s, which also has to cover the first pull of the image (about 2 GB): pull first with `ctx.compose("pull", timeout=None)` where a slow link is likely. |
-| `ha.py` | `read_token(paths)` and `HAClient`: `config()`, `get_state()`, `services()`, `has_service()`, `call_service()`. Failures are `HAError` (with `status`) and `HAUnreachable`. The transport is replaceable. |
-| `health.py` | `check_health(ctx)` and `wait_healthy(ctx, timeout=, interval=)`: "Healthy" as defined in concept section 4.5, returning `Health(healthy, problems)`. Without the script token it proves: every container of the active profiles runs and passes its health check, which for Home Assistant includes that it logged "Home Assistant initialized". It does not prove that Home Assistant is out of recovery mode. With the token it also requires `/api/config` to report `state` RUNNING, no `recovery_mode`/`safe_mode`, and `cave_heating` set up. |
+| `ha.py` | `read_token(paths)` and `HAClient`: `config()`, `get_state()`, `states()`, `services()`, `has_service()`, `call_service()`. Failures are `HAError` (with `status`) and `HAUnreachable`. The transport is replaceable. |
+| `health.py` | `check_health(ctx)` and `wait_healthy(ctx, timeout=, interval=)`: "Healthy" as defined in concept section 4.5, returning `Health(healthy, problems, running)`; `running` counts the services whose container runs (`None`: Docker could not be asked), `stopped` is `running == 0`, and `state()` says it in the fixed words an alert may carry. Without the script token it proves: every container of the active profiles runs and passes its health check, which for Home Assistant includes that it logged "Home Assistant initialized". It does not prove that Home Assistant is out of recovery mode. With the token it also requires `/api/config` to report `state` RUNNING, no `recovery_mode`/`safe_mode`, and `cave_heating` set up. |
 | `notify.py` | `notify(ctx, title, message)`: the notification contract of concept section 4.5 (`script.cave_notify` called with the fields `title` and `message`, else `persistent_notification.create`, always also the journal). Never raises. |
+| `alert.py` | Alerts without Home Assistant (concept section 4.5), only when `CAVE_ALERT_URL` is set: `send(ctx, title, body)` posts ntfy's format with `urllib`, no proxy, no redirect, at most `TIMEOUT` (10) seconds in a thread it abandons after that, never raises, never prints the URL. `warn_owner(ctx, command, headline, happened, health=None, about_the_stack=False)` is what a command calls for a warning: fixed words only, never its message; `about_the_stack` marks an alert that tells of the stack itself, which then also counts as the watch's alert for the incident. `Memory`, `load_memory`, `save_memory`, `mark_alerted`: what `cave watch` has sent (`CAVE_DATA/.cave/watch.json`). |
+| `records.py` | `write_atomic(path, data, mode, writer=)` (`writer` gives each of several writers its own temporary file), and the record of a stack stopped on purpose (`CAVE_DATA/.cave/stopped.json`): `note_stopped(paths, what, at)`, `stopped(paths)`, `clear_stopped(paths, at)`, and `read_stopped` / `restore_stopped` for a command that must put it back after a failure. |
 | `container.py` | `run_in_homeassistant(ctx, command, entrypoint=, workdir=, capture=)`: a one-off command in the pinned Home Assistant image with the service's mounts (`/config`, `/cave/tools`); for everything that needs Home Assistant's own Python packages. |
 | `heating.py` | `validate_and_store(ctx, source=None) -> ApplyResult`: reads the file **once**, validates a staged copy of exactly those bytes in a one-off container, and only if it passes stores those same bytes as the applied copy. Also `validate()`, `validation_result()` (the validator's `Result` itself, to tell a rejection from a validator that could not run) and `store_applied(ctx, path_or_bytes)`. |
-| `lock.py` | `Lock(path, command)` and `ctx.lock(command)`: the one lock of concept section 4.5, `with ctx.lock("update"): ...`. Raises `LockBusy` naming the holder. Root and the service user take it in either order: it needs no write access to the file (a read-only holder only cannot write its name), and root gives `.cave` and the lock file to the owner of `CAVE_DATA` (a linked `.cave` is refused). `held_by(path)` says who holds it without taking it (for `status`). |
+| `lock.py` | `Lock(path, command, sleep=, monotonic=)` and `ctx.lock(command)`: the one lock of concept section 4.5, `with ctx.lock("update"): ...`. Raises `LockBusy` naming the holder after trying for `PATIENCE` (2) seconds; the holder is named only while its process lives. Root and the service user take it in either order: it needs no write access to the file (a read-only holder only cannot write its name), and root gives `.cave` and the lock file to the owner of `CAVE_DATA` (a linked `.cave` is refused). `held_by(path)` says who holds it without taking it (for `status` and `cave watch`): an instant's shared lock, which the patience covers. |
 | `mosquitto.py` | `password_line(user, password)`: a line of the broker's password file; `accepts(text, user, password)`: whether a password file lets that login in. |
 | `versioncheck.py` | The version check behind `make versions`. |
 | `errors.py` | `CaveError`: raise it for failures the user can act on. |
@@ -68,9 +70,13 @@ Rules for commands:
 * A command that uses Compose starts with `require_initialised(ctx)`.
 * `apply`, `bootstrap`, `update`, `backup` and `restore` hold `ctx.lock(...)`; `apply`, `bootstrap`
   and `backup` also refuse while `_update_state.maintenance_pending(ctx)` names an interrupted
-  update or a restore that stopped half-way. `demo` (its own state) and `device-check` (no state
-  of its own) take no lock.
-* Report every outcome of a script (`update`, `backup`) through `notify()`.
+  update or a restore that stopped half-way. `demo` (its own state), `device-check` (no state
+  of its own) and `watch` (it only reads `held_by`) take no lock.
+* Report every outcome of a script (`update`, `backup`) through `notify()`, and every outcome whose
+  message is a warning also through `alert.warn_owner()`, with fixed words.
+* A command that starts the home's stack calls `records.clear_stopped()` once it has started it or
+  changed the state; one that stops it on purpose calls `records.note_stopped()`. A command that
+  refuses or fails before it changes anything leaves the record as it was.
 * Whatever needs Home Assistant's own Python packages runs in a one-off container, as
   `heating.validate()` does, never by importing Home Assistant here.
 * Document the command in `docs/` where a user would look.
@@ -109,15 +115,18 @@ home's state.
 
 ## Update, backup and restore
 
-`update`, `status`, `backup` and `restore` share helpers that only they use, in
+`update`, `status`, `backup`, `restore` and `watch` share helpers that only they use, in
 `commands/_server.py` (which user may run them, Git as the owner of the checkout,
-`check_out_exactly` after an interrupted checkout, copying files with their owners, and
+`check_out_exactly` after an interrupted checkout, which returns what it left and what it removed,
+copying files with their owners, `state_entries` (never the commands' own records), and
 `extract`, which checks an archive as a whole and never writes outside its target; use it for
 every archive that root unpacks), `commands/_update_state.py` (the update record
 and the snapshots), `commands/_archives.py` (backup archives, SQLite's online backup) and
-`commands/_releases.py` (release tags; also run by the pipeline's release job). Their working
-files live in `CAVE_DATA/.cave/ops/`, which neither a snapshot nor a backup contains. Every other
-entry of `CAVE_DATA`, including the rest of `CAVE_DATA/.cave/`, is in both. docs/operations.md
+`commands/_releases.py` (release tags; also run by the pipeline's release job) and
+`commands/_images.py` (removing the images of releases no longer needed, at the end of an update
+run). Their working files live in `CAVE_DATA/.cave/ops/`, which neither a snapshot nor a backup
+contains, and neither contains the lock, `stopped.json` nor `watch.json`. Every other entry of
+`CAVE_DATA`, including the rest of `CAVE_DATA/.cave/`, is in both. docs/operations.md
 explains them to the owner; their tests are in `tests/ops/maintenance/`.
 
 ## Recipes
@@ -169,5 +178,7 @@ def test_example(run_cave, fake_runner, fake_ha, write_token):
     assert fake_ha.service_calls == [...]
 ```
 
-An unexpected command fails the test, so a test states every program the command may run. Tests
+An unexpected command fails the test, so a test states every program the command may run. The
+tests of `tests/ops/maintenance/` fake Docker's image store too (`server.runner.images`), and
+`alert_endpoint` is a local HTTP receiver for `CAVE_ALERT_URL`. Tests
 must also pass on Python 3.11 (`make test-py311`): no syntax or library newer than 3.11.

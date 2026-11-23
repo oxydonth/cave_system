@@ -29,6 +29,7 @@ from ..envfile import (
 from ..errors import CaveError
 from ..mosquitto import accepts, password_line
 from ..paths import Paths, default_data_dir
+from ..records import note_stopped
 from ..state import HA_FILES, MOUNT_DIRS, PLACEHOLDER_DASHBOARD, home_assistant_directories
 
 HELP = "Create the state directories, secrets and .env (changes nothing when run again)"
@@ -186,6 +187,9 @@ def run(ctx: Context, args: argparse.Namespace) -> int:
     paths = _ensure_env(ctx, report, requested)
     ctx.paths = paths
     values = load_env(paths.env_file)
+    # A state directory without `.cave` has never been started by cave: until the first `up`, a
+    # stack that does not run is not something `cave watch` reports.
+    fresh = not paths.lock_file.parent.exists()
 
     for directory in (
         paths.data,
@@ -200,6 +204,10 @@ def run(ctx: Context, args: argparse.Namespace) -> int:
     ):
         _make_dir(report, directory)
     _make_dir(report, paths.token.parent, 0o700)
+    if fresh:
+        note_stopped(
+            paths, "`./cave init` created the state, and it has not been started yet", ctx.wall()
+        )
     for relative in MOUNT_DIRS:
         _make_dir(report, paths.ha_config / relative)
 

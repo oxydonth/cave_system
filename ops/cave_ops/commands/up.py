@@ -1,4 +1,11 @@
-"""``cave up``: start the stack and wait until it is healthy."""
+"""``cave up``: start the stack and wait until it is healthy.
+
+Once Compose has started the containers, it removes the record of a stack stopped on purpose
+(``records.py``), which ``down``, a ``--no-start`` and a fresh ``init`` write: from then on a stack
+that is not running or not healthy is something ``cave watch`` reports, and ``cave status`` no
+longer says it was stopped on purpose. An ``up`` that fails before anything is started leaves the
+record as it was.
+"""
 
 from __future__ import annotations
 
@@ -6,6 +13,7 @@ import argparse
 
 from ..context import Context
 from ..health import wait_healthy
+from ..records import clear_stopped
 from ._common import require_initialised
 
 HELP = "Create and start the containers of the active profiles, then wait until healthy"
@@ -31,6 +39,14 @@ def run(ctx: Context, args: argparse.Namespace) -> int:
     started = ctx.compose("up", "--detach", "--force-recreate", capture=False)
     if not started.ok:
         return started.returncode
+    try:
+        clear_stopped(ctx.paths, ctx.wall())
+    except OSError as error:
+        ctx.warn(
+            f"Could not remove the record of a stack stopped on purpose ({error}); `cave status` "
+            "may still say so, and `cave watch` removes it once the containers have run five "
+            "minutes."
+        )
     if args.no_wait:
         return 0
     ctx.say("Waiting until healthy ...")

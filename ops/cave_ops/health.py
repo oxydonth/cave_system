@@ -25,13 +25,33 @@ DOCKER_TIMEOUT = 60.0  # seconds for each Docker question; a hung daemon is "not
 
 @dataclass(frozen=True)
 class Health:
-    """The verdict and, when it is negative, what is wrong, one problem per entry."""
+    """The verdict and, when it is negative, what is wrong, one problem per entry.
+
+    ``running`` counts the services of the active profiles whose container runs; ``None`` when
+    Docker could not be asked. ``0`` means the stack is stopped.
+    """
 
     healthy: bool
     problems: tuple[str, ...] = ()
+    running: int | None = None
 
     def describe(self) -> str:
         return "healthy" if self.healthy else "not healthy: " + "; ".join(self.problems)
+
+    @property
+    def stopped(self) -> bool:
+        """No container of the stack runs (``False`` when Docker could not be asked)."""
+        return self.running == 0
+
+    def state(self) -> str:
+        """The stack's state in a few fixed words, for alerts: nothing else goes into them."""
+        if self.healthy:
+            return "running and healthy"
+        if self.running is None:
+            return "unknown (Docker did not answer)"
+        if self.running == 0:
+            return "stopped: nothing runs"
+        return "running, but NOT healthy"
 
 
 def parse_compose_ps(text: str) -> list[dict[str, Any]]:
@@ -66,6 +86,7 @@ def check_health(ctx: Context, *, api: bool = True) -> Health:
     except ValueError:
         return Health(False, ("docker compose ps gave output that is not JSON",))
 
+    running = 0
     for service in services:
         container = containers.get(service)
         if container is None:
@@ -75,12 +96,14 @@ def check_health(ctx: Context, *, api: bool = True) -> Health:
         health = container.get("Health", "")
         if state != "running":
             problems.append(f"{service}: {state or 'not running'}")
-        elif health not in ("", "healthy"):
+            continue
+        running += 1
+        if health not in ("", "healthy"):
             problems.append(f"{service}: health check {health}")
 
     if not problems and api:
         problems.extend(_check_api(ctx))
-    return Health(not problems, tuple(problems))
+    return Health(not problems, tuple(problems), running)
 
 
 def _check_api(ctx: Context) -> list[str]:

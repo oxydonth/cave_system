@@ -282,6 +282,132 @@ the change (`CLAUDE.md` has the delivery rules). Read the recording before you c
 a real device's messages. There is no recorder for the FRITZ!Box: what a real box reports is noted by hand in
 [devices.md](devices.md) and `sim/README.md` under the known differences.
 
+## 6. The server
+
+The update, backup, restore and watch are tested with real files and real Git, but with Docker
+faked, as an ordinary user, without systemd and without pulling a plug. What only the server can
+show is here. Do it once after the install, and again after a release that changes
+[operations.md](operations.md). Run each command in `/opt/cave`.
+
+### 6.1 Git as the service user, started by root
+
+`update` runs as root and starts Git as the owner of the checkout with `runuser -u cave -- git …`,
+so that the fetch uses the service user's deploy key. `runuser` may keep root's `HOME`; OpenSSH
+takes the key from the service user's own home either way, but Git also reads its configuration
+from `HOME`.
+
+- **Observe.** `sudo ./cave update`, with or without a new release, and read its first lines and
+  `sudo -u cave ./cave status` ("Last check"). Also
+  `sudo runuser -u cave -- sh -c 'echo $HOME; git -C /opt/cave fetch --dry-run'`.
+- **Result:** the fetch worked: yes / no; `HOME` was ______ ; messages about `/root`: ______ .
+- **Do with it.** A fetch that works is all that matters. "Could not fetch releases" with
+  "Permission denied" for a path below `/root`, or a host key question, is a defect: report it with
+  the output. Until it is fixed, updates are by hand (`sudo -u cave git -C /opt/cave fetch --tags`
+  works; `update` does the rest).
+
+### 6.2 Files that belong to root and to the containers
+
+The state holds files of root and of the containers' users. A backup must keep their owners, a
+restore must give them back, and the lock must end up the service user's whoever took it first.
+
+- **Observe.** `sudo find /var/lib/cave -path '*/.cave/ops' -prune -o -printf '%u:%g %m %p\n' | sort > /tmp/owners-before`,
+  then `sudo ./cave backup` and `sudo ./cave restore /var/backups/cave/<the archive just written>`,
+  and the same `find` into `/tmp/owners-after`; `diff /tmp/owners-before /tmp/owners-after`. Then
+  `ls -l /var/lib/cave/.cave` (the lock file and `.cave` belong to `cave`), and
+  `sudo -u cave ./cave apply` (it takes the lock as the service user).
+- **Result:** the owners and modes differ in: ______ ; `.cave` and its lock belong to: ______ ;
+  `apply` took the lock: yes / no.
+- **Do with it.** Only the times of files Home Assistant wrote meanwhile may differ. Any owner or
+  mode that changed, or `apply` refusing with "cannot take the lock", is a defect: report it.
+  Delete the `before-restore-*` directory and the `.env.before-restore-*` file the restore names
+  once all is well.
+
+### 6.3 The timers and the boot
+
+- **Observe.** `systemctl list-timers 'cave-*'` lists `cave-backup.timer`, `cave-update.timer` and
+  `cave-watch.timer` with their next runs; the next morning, `journalctl -u cave-backup.service -u
+  cave-update.service --since yesterday` shows both nightly runs; `journalctl -u
+  cave-watch.service --since '-30min'` shows a run every five minutes, as the user `cave`, without
+  "permission denied" for Docker. Then `sudo reboot`, and afterwards `systemctl status
+  cave-recover.service` (ran and exited 0) and `sudo -u cave ./cave status` (healthy).
+- **Result:** the three timers are listed: yes / no; the watch runs every five minutes: yes / no;
+  after the reboot the stack is healthy: yes / no.
+- **Do with it.** A timer that is missing: run `sudo /opt/cave/scripts/provision-host.sh` again.
+  Anything else is a defect to report.
+
+### 6.4 Docker creating a missing bind-mount source
+
+Docker creates a bind mount's missing source as root. `init` and `restore` create the ones in the
+checkout and the state directory first, so that none of them becomes root's and blocks a later
+update of the checkout.
+
+- **Observe.** After the first `./cave up`, and again after a restore,
+  `sudo find /opt/cave /var/lib/cave/homeassistant -maxdepth 2 -user root`.
+- **Result:** listed: ______ .
+- **Do with it.** Within `/opt/cave` nothing may be listed, `tools` least of all. In
+  `/var/lib/cave/homeassistant` files Home Assistant wrote are expected, but not the mount points
+  `packages` and `custom_components/cave_heating`. One of those listed is a defect: report it, and
+  `sudo chown cave: <it>`.
+
+### 6.5 A real power cut
+
+- **Observe.** While the stack runs normally, pull the plug, wait a minute, and plug it in again.
+  Ten minutes after the start, `sudo -u cave ./cave status`. If you want to see
+  an update interrupted: when a new release is out, run `sudo ./cave update` and pull the plug as
+  soon as it says "Stopping the stack"; after the start, `sudo -u cave ./cave status` and
+  `journalctl -t cave --since '-1h'`.
+- **Result:** the stack came back healthy by itself: yes / no; the interrupted update was rolled
+  back at boot ("An update from … was interrupted"): yes / no; an alert arrived (with
+  `CAVE_ALERT_URL` set): ______ .
+- **Do with it.** The stack has to come back by itself, and an interrupted update has to be rolled
+  back by `cave-recover.service` at boot. An alert for the minutes of the power cut itself is a
+  defect (two runs far apart start the watch's count afresh); one for an update that was
+  interrupted is right if its way back could not finish. Report anything else.
+
+### 6.6 The alert and the watch
+
+- **Observe.** Set `CAVE_ALERT_URL` to a topic of your ntfy server and subscribe to it on the phone.
+  `sudo -u cave ./cave down`, wait 20 minutes: nothing arrives. `sudo -u cave ./cave up`. Then stop
+  one container without `cave`, `sudo docker stop cave-homeassistant-1`: after 15 to 20 minutes
+  one alert arrives ("the stack is not healthy" or "the stack is stopped"), and no second one.
+  `sudo -u cave ./cave up`: within five minutes "healthy again". Read the alert's text.
+- **Result:** no alert after `down`: yes / no; one alert, then one all-clear: yes / no; the text
+  holds the server's name, the command and the stack's state, and nothing else: yes / no.
+- **Do with it.** Anything else is a defect to report. If your receiver needs a token, check that
+  it is not in `journalctl -u cave-watch.service` nor in `journalctl -t cave`.
+
+### 6.7 The disk over many releases
+
+- **Observe.** After the second and every later installed update, `sudo docker image ls` and
+  `df -h /var/lib/cave`.
+- **Result:** versions of the Home Assistant, broker and Zigbee2MQTT images listed: ______ .
+- **Do with it.** At most two versions of each (the running release's and the one before) are
+  expected, three after a rollback, plus any your `compose.override.yaml` names. Every other
+  image of these three repositories is removed, also one that other software pulled, unless a
+  container of it exists; images of other repositories are never touched. More than that after
+  an update that said "Installed": look for `Old images were not removed` in
+  `journalctl -u cave-update.service`, and report it if the reason does not explain it.
+
+### 6.8 What Docker lists, and what it refuses to remove
+
+The removal of old images relies on two things the tests can only fake: what
+`docker image ls --digests --format '{{.Repository}}\t{{.Tag}}\t{{.Digest}}'` prints (one line
+per repository and tag, `<none>` as the tag of an image that has only a digest, the image's
+`sha256:` digest in the last column), and that `docker image rm` without `--force` refuses an
+image that a stopped container uses.
+
+- **Observe.** `sudo docker image ls --digests --format '{{.Repository}}\t{{.Tag}}\t{{.Digest}}'`.
+  Then stop one container without removing it, `sudo docker stop cave-mosquitto-1`, try
+  `sudo docker image rm eclipse-mosquitto:<the version it runs>`, and start it again with
+  `sudo -u cave ./cave up`.
+- **Result:** the lines look as described: yes / no (paste one) ______ ; the removal was refused
+  ("conflict … is using its referenced image"): yes / no.
+- **Do with it.** Both as described is right. A listing that looks different (another column
+  order, an empty digest for an image that was pulled) or a removal that went through is a
+  defect: report it with the output, because the update could then remove an image it means to
+  keep. (After `./cave down` there are no containers at all, so nothing protects the stack's
+  images; that is why the update removes nothing while the stack is not running.)
+
 ## When you are done
 
 What turned out as the controller expects is now known behaviour. What did not is a defect: open

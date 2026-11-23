@@ -188,7 +188,7 @@ def test_auto_update_off_does_not_stop_the_recovery(server, run_cave, killed, ct
     assert server.stack.running == OLD
 
 
-def test_recover_waits_for_a_backup_to_release_the_lock(server, run_cave, killed, ctx):
+def test_recover_waits_for_a_backup_to_release_the_lock(server, run_cave, killed, ctx, clock):
     server.release(NEW)
     kill_at(server, killed, "up", release=NEW)
     with pytest.raises(killed):
@@ -200,13 +200,16 @@ def test_recover_waits_for_a_backup_to_release_the_lock(server, run_cave, killed
 
     def sleep(seconds):
         waited.append(seconds)
-        backup.release()  # the backup finishes while recover waits
+        clock.sleep(seconds)
+        if seconds == 10:
+            backup.release()  # the backup finishes while recover waits
 
     ctx.sleep = sleep
 
     result = run_cave("update", "--recover")
 
-    assert waited[0] == 10
+    # Each try at the lock is patient for a moment (lock.PATIENCE), then recover waits 10 s.
+    assert 10 in waited
     assert result.code == 2
     assert server.stack.running == OLD
 

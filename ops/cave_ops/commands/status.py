@@ -16,6 +16,7 @@ from ..context import Context
 from ..errors import CaveError
 from ..health import check_health
 from ..lock import held_by
+from ..records import stopped
 from . import _archives, _releases, _server
 from . import _update_state as state
 from ._common import require_initialised
@@ -78,13 +79,15 @@ def run(ctx: Context, args: argparse.Namespace) -> int:
             f"{owed} put the state in place but was cut off before it started the stack. "
             "`sudo ./cave update --recover` starts it (the boot does too).",
         )
-    deliberately = _server.not_started(ctx)
-    if deliberately is not None and not health.healthy:
+    deliberately = stopped(ctx.paths)
+    # The record says what was meant; only a stack of which nothing runs is stopped. Over running
+    # containers it is stale (a start without `cave`), and the stack's line says what is wrong.
+    if deliberately is not None and health.stopped:
         _line(
             ctx,
             "NOT STARTED",
-            f"{deliberately} finished with --no-start, so the stack was not started. "
-            "`sudo -u cave ./cave up` starts it.",
+            f"{deliberately.what} ({deliberately.since}), so the stack was not started: on "
+            "purpose, which `cave watch` does not report. `sudo -u cave ./cave up` starts it.",
         )
     if record.last_result:
         last = record.last_result

@@ -48,6 +48,8 @@ class Context:
     journal: Callable[[str], None] = syslog_journal
     sleep: Callable[[float], None] = time.sleep
     monotonic: Callable[[], float] = time.monotonic
+    wall: Callable[[], float] = time.time
+    """Seconds since the epoch: for what has to be compared across runs (``cave watch``)."""
     compose_files: tuple[str, ...] = ()
     """Overlay files given to Compose after ``compose.yaml`` (the demo adds ``compose.sim.yaml``).
 
@@ -149,4 +151,4 @@ class Context:
     # --- the lock of concept section 4.5
     def lock(self, command: str) -> Lock:
         """``with ctx.lock("update"):`` raises ``LockBusy`` if another command holds it."""
-        return Lock(self.paths.lock_file, command)
+        return Lock(self.paths.lock_file, command, sleep=self.sleep, monotonic=self.monotonic)

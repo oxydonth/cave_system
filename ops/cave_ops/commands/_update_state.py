@@ -32,6 +32,7 @@ from pathlib import Path
 from typing import Any
 
 from ..context import Context
+from ..records import note_stopped
 from . import _server
 
 STATE_FILE = "update.json"
@@ -77,6 +78,12 @@ class UpdateRecord:
     ``status``."""
     last_check: dict[str, Any] | None = None
     """The last run at all: ``time`` and ``message``."""
+    previous: dict[str, str] | None = None
+    """The release the last installed update came from: ``release`` and ``commit``. Its images
+    are kept with the running release's (``_images``)."""
+    last_switch: dict[str, str] | None = None
+    """The release the last switch started from (``release`` and ``commit``), whatever came of
+    it: the one a way back by hand returns to. Its images are kept too."""
     problem: str | None = None
     """Set when the file could not be read; the record then starts empty."""
 
@@ -99,6 +106,8 @@ def load(ctx: Context) -> UpdateRecord:
         failed=dict(raw.get("failed") or {}),
         last_result=raw.get("last_result"),
         last_check=raw.get("last_check"),
+        previous=raw.get("previous") if isinstance(raw.get("previous"), dict) else None,
+        last_switch=raw.get("last_switch") if isinstance(raw.get("last_switch"), dict) else None,
     )
 
 
@@ -114,9 +123,9 @@ def complete_undo(ctx: Context) -> bool:
     If the restore had superseded an interrupted update, that update is written back and the
     marker removed: the update's way back then owns the state and starts the stack. Otherwise the
     marker moves to ``start_owed``, or, if the undo was run with ``--no-start``, it is replaced by
-    the not-started note. No step leaves the state from before in place without a record that
-    says what is still to do. ``update`` calls this first, so the next run at boot finishes what
-    ``--undo`` began; ``restore --undo`` itself calls it too.
+    the record of a stack stopped on purpose (``records.py``). No step leaves the state from
+    before in place without a record that says what is still to do. ``update`` calls this first,
+    so the next run at boot finishes what ``--undo`` began; ``restore --undo`` itself calls it too.
     """
     marker = _server.ops_dir(ctx) / _server.RESTORE_MARKER
     try:
@@ -128,7 +137,11 @@ def complete_undo(ctx: Context) -> bool:
     superseded = series.get("superseded_update")
     if not isinstance(superseded, dict):
         if series.get("no_start"):
-            _server.note_not_started(ctx, f"the undo of the restore of {series.get('archive')}")
+            note_stopped(
+                ctx.paths,
+                f"the undo of the restore of {series.get('archive')} finished with --no-start",
+                ctx.wall(),
+            )
             marker.unlink(missing_ok=True)
         elif not series.get("start_owed"):
             series["start_owed"] = True
@@ -171,6 +184,8 @@ def save(ctx: Context, record: UpdateRecord) -> None:
         "failed": record.failed,
         "last_result": record.last_result,
         "last_check": record.last_check,
+        "previous": record.previous,
+        "last_switch": record.last_switch,
     }
     ops = _server.ops_dir(ctx)
     ops.mkdir(parents=True, exist_ok=True)

@@ -1,0 +1,671 @@
+"""``cave watch`` against a local HTTP receiver: one alert per incident and one all-clear.
+
+The server is the fake one of ``conftest.py`` (real state and Git, Docker faked). The watch runs
+every five minutes; here each ``watch(...)`` call is such a run, ``minutes`` after the first one
+(the wall clock is the fake clock). Each test is a row of the watch's table of exits in the pull
+request of work package 11.
+"""
+
+from __future__ import annotations
+
+import errno
+import fcntl
+import json
+import os
+import threading
+
+import pytest
+
+from cave_ops import alert
+from cave_ops import lock as lock_module
+from cave_ops.commands import restore
+from cave_ops.lock import Lock, held_by
+
+from .test_backup import archives, backups  # noqa: F401  (backups is a fixture)
+
+OLD = "v2026.11.14.1"
+NEW = "v2026.11.15.1"
+START = 1_800_000_000.0
+
+
+@pytest.fixture
+def receiver(ctx, alert_endpoint, clock):
+    ctx.env["CAVE_ALERT_URL"] = alert_endpoint.url
+    ctx.wall = lambda: START + clock.now
+    return alert_endpoint
+
+
+@pytest.fixture
+def watch(run_cave, clock):
+    """``watch(minute)``: a run of the watch that many minutes after the first one. The clock
+    only goes forward: commands run in between (which wait on it) may have moved it on."""
+    origin = []
+
+    def run(minute, code=0):
+        if not origin:
+            origin.append(clock.now)
+        clock.now = max(clock.now, origin[0] + minute * 60.0)
+        result = run_cave("watch")
+        assert result.code == code, result.err
+        return result
+
+    return run
+
+
+def every_five_minutes(watch, start, end):
+    for minute in range(start, end + 1, 5):
+        watch(minute)
+
+
+def headlines(receiver):
+    return [title.split(": ", 1)[1] for title in receiver.titles()]
+
+
+# ----------------------------------------------------------------------------- nothing to do
+def test_unset_the_watch_does_nothing(server, run_cave, alert_endpoint, ctx):
+    server.stack.running = None
+    calls = len(server.runner.fake.calls)
+
+    result = run_cave("watch")
+
+    assert result.code == 0
+    assert "CAVE_ALERT_URL is not set" in result.out
+    assert len(server.runner.fake.calls) == calls, "Docker or Git was asked"
+    assert alert_endpoint.received == []
+    assert not ctx.paths.watch_record.exists()
+
+
+def test_a_healthy_stack_is_not_reported(server, receiver, watch):
+    every_five_minutes(watch, 0, 60)
+
+    assert receiver.received == []
+
+
+# --------------------------------------------------------------------------------- incidents
+def test_a_stack_stopped_for_fifteen_minutes_is_alerted_once_and_its_return_once(
+    server, receiver, watch
+):
+    server.stack.running = None
+
+    every_five_minutes(watch, 0, 10)
+    assert receiver.received == [], "alerted before fifteen minutes"
+    watch(15)
+    every_five_minutes(watch, 20, 60)
+    assert headlines(receiver) == ["the stack is stopped"]
+    body = receiver.received[0].body
+    assert "Nothing runs, and it was not stopped on purpose" in body
+    assert "Stack: stopped: nothing runs" in body
+    assert "Command: cave watch" in body
+
+    server.stack.start(OLD)
+    every_five_minutes(watch, 65, 90)
+
+    assert headlines(receiver) == ["the stack is stopped", "healthy again"]
+    assert "Stack: running and healthy" in receiver.received[1].body
+
+
+def test_a_stack_that_runs_unhealthy_is_alerted(server, receiver, watch):
+    server.stack.unhealthy.add(OLD)
+
+    every_five_minutes(watch, 0, 30)
+
+    assert headlines(receiver) == ["the stack is not healthy"]
+    assert "Stack: running, but NOT healthy" in receiver.received[0].body
+
+
+def test_an_interrupted_update_is_an_incident(server, run_cave, receiver, watch, killed):
+    server.release(NEW)
+
+    def die(release):
+        if release == NEW:
+            raise killed
+
+    server.stack.before["up"] = die
+    with pytest.raises(killed):
+        run_cave("update")
+    server.stack.before.clear()
+
+    every_five_minutes(watch, 0, 30)
+    assert headlines(receiver) == ["an update was interrupted"]
+
+    assert run_cave("update", "--recover").code == 2  # rolled back; that alerts by itself
+    watch(35)
+    watch(40)
+
+    assert headlines(receiver) == [
+        "an update was interrupted",
+        "update rolled back",
+        "healthy again",
+    ]
+
+
+def test_a_restore_that_stopped_half_way_is_an_incident(
+    server,
+    run_cave,
+    receiver,
+    watch,
+    backups,  # noqa: F811
+    monkeypatch,
+    killed,
+):
+    assert run_cave("backup").code == 0
+    [archive] = archives(backups)
+    renames = []
+    real_rename = os.rename
+
+    def power_cut(source, target):
+        renames.append(source)
+        if len(renames) == 6:
+            raise killed
+        real_rename(source, target)
+
+    monkeypatch.setattr(restore.os, "rename", power_cut)
+    with pytest.raises(killed):
+        run_cave("restore", str(archive))
+    monkeypatch.undo()
+
+    every_five_minutes(watch, 0, 30)
+
+    assert headlines(receiver) == ["a restore stopped half-way"]
+
+
+def test_a_command_s_alert_is_the_incident_s_alert_and_the_watch_sends_the_all_clear(
+    server, run_cave, receiver, watch
+):
+    """An update that leaves nothing running alerts at once; the watch does not alert the same
+    incident again, and says when the stack is healthy again."""
+    server.release(NEW)
+    server.stack.fail_up.update({NEW, OLD})
+    assert run_cave("update").code == 3
+    assert headlines(receiver) == ["update failed, act now"]
+    assert "Stack: stopped: nothing runs" in receiver.received[0].body
+
+    every_five_minutes(watch, 0, 60)
+    assert headlines(receiver) == ["update failed, act now"]
+
+    server.stack.fail_up.clear()
+    assert run_cave("update", "--recover").code == 2
+    watch(65)
+
+    assert headlines(receiver) == ["update failed, act now", "update rolled back", "healthy again"]
+
+
+# ------------------------------------------------------------------- stopped on purpose: quiet
+def test_a_stack_stopped_with_down_is_not_reported_and_up_ends_that(
+    server, run_cave, receiver, watch
+):
+    assert run_cave("down").code == 0
+    assert server.stack.running is None
+
+    every_five_minutes(watch, 0, 60)
+    assert receiver.received == []
+
+    assert run_cave("up").code == 0
+    assert not server.data.joinpath(".cave", "stopped.json").exists()
+    server.stack.running = None  # it stops by itself afterwards: that is an incident again
+    every_five_minutes(watch, 65, 85)
+
+    assert headlines(receiver) == ["the stack is stopped"]
+
+
+@pytest.mark.parametrize("undo", [False, True])
+def test_a_restore_or_undo_with_no_start_is_not_reported(
+    server,
+    run_cave,
+    receiver,
+    watch,
+    backups,  # noqa: F811
+    monkeypatch,
+    killed,
+    undo,
+):
+    assert run_cave("backup").code == 0
+    [archive] = archives(backups)
+    if undo:
+        renames = []
+        real_rename = os.rename
+
+        def power_cut(source, target):
+            renames.append(source)
+            if len(renames) == 6:
+                raise killed
+            real_rename(source, target)
+
+        monkeypatch.setattr(restore.os, "rename", power_cut)
+        with pytest.raises(killed):
+            run_cave("restore", str(archive))
+        monkeypatch.undo()
+        assert run_cave("restore", "--undo", "--no-start").code == 0
+    else:
+        assert run_cave("restore", str(archive), "--no-start").code == 0
+    assert server.stack.running is None
+
+    every_five_minutes(watch, 0, 60)
+
+    assert receiver.received == []
+
+
+def test_an_alerted_incident_stopped_on_purpose_is_closed_only_once_healthy(
+    server, run_cave, receiver, watch
+):
+    server.stack.running = None
+    every_five_minutes(watch, 0, 15)
+    assert headlines(receiver) == ["the stack is stopped"]
+
+    assert run_cave("down").code == 0
+    every_five_minutes(watch, 20, 40)
+    assert headlines(receiver) == ["the stack is stopped"]
+
+    assert run_cave("up").code == 0
+    watch(45)
+    assert headlines(receiver) == ["the stack is stopped", "healthy again"]
+
+
+# --------------------------------------------------------------------- a command is at work
+def test_nothing_is_said_while_a_command_holds_the_lock(server, receiver, watch, ctx):
+    server.stack.running = None  # an update or restore has stopped the stack
+
+    with Lock(ctx.paths.lock_file, "update"):
+        result = None
+        for minute in range(0, 31, 5):
+            result = watch(minute)
+        assert "`cave update`" in result.out
+    assert receiver.received == []
+
+    # Once it has finished, the count starts afresh.
+    every_five_minutes(watch, 35, 45)
+    assert receiver.received == []
+    watch(50)
+    assert headlines(receiver) == ["the stack is stopped"]
+
+
+def test_an_update_starting_while_the_watch_reads_the_lock_is_not_refused(
+    server, run_cave, ctx, clock, monkeypatch
+):
+    """The watch reads who holds the lock with a shared lock for an instant. An update that
+    tries to take it in exactly that instant keeps trying for a moment, and goes ahead."""
+    server.release(NEW)
+    ctx.paths.lock_file.touch()
+    in_probe, probe_may_end = threading.Event(), threading.Event()
+    real_flock = fcntl.flock
+
+    def flock(fd, operation):
+        real_flock(fd, operation)
+        if operation == fcntl.LOCK_SH | fcntl.LOCK_NB and threading.current_thread().name == "w":
+            in_probe.set()
+            probe_may_end.wait(10)
+
+    monkeypatch.setattr(lock_module.fcntl, "flock", flock)
+    seen = []
+    watcher = threading.Thread(
+        target=lambda: seen.append(held_by(ctx.paths.lock_file)), name="w", daemon=True
+    )
+    watcher.start()
+    assert in_probe.wait(10)
+
+    def sleep(seconds):
+        clock.sleep(seconds)
+        probe_may_end.set()
+        watcher.join(10)
+
+    ctx.sleep = sleep
+
+    result = run_cave("update")
+
+    assert result.code == 0, result.err
+    assert server.stack.running == NEW
+    assert seen == [None]
+
+
+# ------------------------------------------------------------------------------ time and delivery
+def test_runs_far_apart_start_the_count_afresh(server, receiver, watch):
+    """A power cut: the stack was down at the last run before it, and is still starting at the
+    first run after it, hours later. That is not fifteen minutes of watching."""
+    server.stack.running = None
+    watch(0)
+    watch(5)
+
+    watch(180)
+    assert receiver.received == []
+    every_five_minutes(watch, 185, 190)
+    assert receiver.received == []
+    watch(195)
+    assert headlines(receiver) == ["the stack is stopped"]
+
+
+def test_an_alert_that_could_not_be_delivered_is_tried_again(server, receiver, watch):
+    server.stack.running = None
+    receiver.mode = "error"
+    every_five_minutes(watch, 0, 20)
+    assert len(receiver.received) == 2  # at 15 and 20 minutes, both refused
+
+    receiver.mode = "ok"
+    every_five_minutes(watch, 25, 40)
+
+    assert headlines(receiver) == ["the stack is stopped"] * 3
+
+
+def test_a_memory_that_cannot_be_written_is_said(server, run_cave, receiver, monkeypatch):
+    def full(*args, **kwargs):
+        raise OSError(errno.ENOSPC, "No space left on device")
+
+    monkeypatch.setattr(alert, "write_atomic", full)
+
+    result = run_cave("watch")
+
+    assert result.code == 1
+    assert "cannot remember what it has alerted" in result.err
+
+
+# ------------------------------------------------------------------------------ cut off, failed
+def test_a_down_whose_docker_failed_leaves_the_record_as_it_was(server, run_cave):
+    """`down` records the stop first. If Docker then fails to stop the stack, the record is put
+    back as it was: a stack that `down` did not stop was not stopped on purpose."""
+    server.stack.fail["down"] = 1
+
+    assert run_cave("down").code != 0
+
+    assert not server.data.joinpath(".cave", "stopped.json").exists()
+    assert run_cave("down").code != 0  # and one recorded before stays as it was
+    del server.stack.fail["down"]
+    assert run_cave("down").code == 0
+    before = server.data.joinpath(".cave", "stopped.json").read_text()
+    server.stack.start(OLD)
+    server.stack.fail["down"] = 1
+    assert run_cave("down").code != 0
+    assert server.data.joinpath(".cave", "stopped.json").read_text() == before
+
+
+def test_a_down_cut_off_before_docker_leaves_no_lasting_exemption(
+    server, run_cave, receiver, watch, killed
+):
+    """`down` killed after its record, before Docker stopped anything: the record must not keep
+    the watch quiet for good. Once containers still run an interval later, it is dropped."""
+
+    def die(release):
+        raise killed
+
+    server.stack.before["down"] = die
+    with pytest.raises(killed):
+        run_cave("down")
+    server.stack.before.clear()
+    assert server.data.joinpath(".cave", "stopped.json").exists()
+
+    every_five_minutes(watch, 0, 10)
+    assert not server.data.joinpath(".cave", "stopped.json").exists()
+    server.stack.running = None  # it stops later, for another reason
+    every_five_minutes(watch, 15, 30)
+
+    assert headlines(receiver) == ["the stack is stopped"]
+
+
+def test_a_watch_cut_off_after_sending_sends_once_more(
+    server, receiver, watch, monkeypatch, killed
+):
+    """Killed after the alert went out, before it was remembered: the next run sends it again.
+    One repeat is the price of never losing an alert."""
+    server.stack.running = None
+    every_five_minutes(watch, 0, 10)
+    real_save = alert.save_memory
+
+    def cut(paths, memory, **kwargs):
+        if memory.alerted is not None:
+            raise killed
+        real_save(paths, memory, **kwargs)
+
+    monkeypatch.setattr(alert, "save_memory", cut)
+    with pytest.raises(killed):
+        watch(15)
+    monkeypatch.undo()
+    every_five_minutes(watch, 20, 40)
+
+    assert headlines(receiver) == ["the stack is stopped", "the stack is stopped"]
+
+
+def test_a_command_s_alert_that_could_not_be_remembered_is_alerted_by_the_watch(
+    server, run_cave, receiver, watch, monkeypatch
+):
+    server.release(NEW)
+    server.stack.fail_up.update({NEW, OLD})
+
+    def full(paths, memory, **kwargs):
+        raise OSError(errno.ENOSPC, "No space left on device")
+
+    monkeypatch.setattr(alert, "save_memory", full)
+    result = run_cave("update")
+    monkeypatch.undo()
+    assert result.code == 3
+    assert "What was alerted could not be recorded" in result.err
+
+    every_five_minutes(watch, 0, 20)
+
+    assert headlines(receiver) == ["update failed, act now", "an update was interrupted"]
+
+
+# ------------------------------------------------- the first review of #30: a memory that fails
+def test_a_full_disk_still_lets_the_watch_alert_a_stopped_stack(
+    server, run_cave, receiver, clock, monkeypatch
+):
+    """The reviewer's test. With the memory unwritable every run started the fifteen minutes
+    afresh, and two hours of a stopped stack brought no alert. A full disk is a likely moment for
+    Home Assistant to fail."""
+
+    def full(*args, **kwargs):
+        raise OSError(errno.ENOSPC, "No space left on device")
+
+    monkeypatch.setattr(alert, "write_atomic", full)
+    server.stack.running = None
+    origin = clock.now
+    results = []
+    for minute in range(0, 121, 5):
+        clock.now = max(clock.now, origin + minute * 60.0)
+        results.append(run_cave("watch"))
+
+    assert all(result.code == 1 for result in results)
+    assert receiver.received, "two hours of a stopped stack, and no alert"
+
+
+def test_an_alert_of_backup_about_something_else_is_not_the_stack_s_alert(
+    server, run_cave, receiver, watch
+):
+    """The reviewer's test, extended. With the stack unhealthy, backup refuses because the lock
+    is taken and alerts that. That alert is not about the stack: the watch still alerts the
+    unhealthy stack itself."""
+    server.stack.unhealthy.add(OLD)
+
+    with Lock(server.data / ".cave" / "lock", "update"):
+        run_cave("backup")
+
+    path = server.data / ".cave" / "watch.json"
+    memory = json.loads(path.read_text()) if path.exists() else {"what": None}
+    assert memory["what"] is None or "backup" not in memory["what"]
+    every_five_minutes(watch, 0, 20)
+    assert headlines(receiver) == [
+        "no backup: another command was running",
+        "the stack is not healthy",
+    ]
+
+
+def test_docker_that_does_not_answer_is_an_incident_even_after_down(
+    server, run_cave, receiver, watch
+):
+    """`down` stops the stack on purpose; it does not stop Docker. A Docker that does not answer
+    is something the owner has to know about, whatever stopped the stack before."""
+    assert run_cave("down").code == 0
+    server.stack.docker_down = True
+
+    every_five_minutes(watch, 0, 20)
+
+    assert headlines(receiver) == ["Docker does not answer"]
+    assert "Stack: unknown (Docker did not answer)" in receiver.received[0].body
+
+
+def test_an_alert_a_command_marks_while_the_watch_runs_is_not_lost(
+    server, run_cave, receiver, watch, monkeypatch
+):
+    """Root's command marks an incident as alerted between the watch's reading of its memory and
+    its writing: the watch keeps that mark and alerts nothing more for the incident."""
+    from cave_ops.commands import watch as watch_module
+
+    server.stack.running = None
+    real_assess = watch_module.assess
+    marked = []
+
+    def assess_while_a_command_alerts(ctx):
+        finding = real_assess(ctx)
+        if not marked:
+            marked.append(1)
+            alert.mark_alerted(ctx, "cave update: update failed, act now")
+        return finding
+
+    monkeypatch.setattr(watch_module, "assess", assess_while_a_command_alerts)
+    every_five_minutes(watch, 0, 40)
+
+    assert receiver.received == [], "the watch alerted an incident a command had alerted"
+    server.stack.start(OLD)
+    watch(45)
+    assert headlines(receiver) == ["healthy again"]
+
+
+def test_an_unwritable_memory_alerts_at_once_and_says_that_it_repeats(
+    server, run_cave, receiver, monkeypatch
+):
+    def full(*args, **kwargs):
+        raise OSError(errno.ENOSPC, "No space left on device")
+
+    monkeypatch.setattr(alert, "write_atomic", full)
+    server.stack.running = None
+
+    result = run_cave("watch")
+
+    assert result.code == 1
+    assert headlines(receiver) == ["the stack is stopped"]
+    assert "this repeats every five minutes while the incident lasts" in receiver.received[0].body
+    assert "no all-clear follows" in receiver.received[0].body
+    assert "it alerts an incident at once and at every run, and sends no all-clear" in result.err
+
+
+def test_an_unwritable_memory_repeats_the_incident_and_sends_no_all_clear(
+    server, receiver, watch, monkeypatch
+):
+    """While the memory cannot be written the watch trusts nothing it loaded: an incident is
+    alerted at every run, the all-clear is not sent (it would repeat every five minutes for as
+    long as the disk is full); the repeats stop when the stack is healthy again."""
+
+    def full(*args, **kwargs):
+        raise OSError(errno.ENOSPC, "No space left on device")
+
+    monkeypatch.setattr(alert, "write_atomic", full)
+    server.stack.running = None
+    for minute in range(0, 11, 5):
+        watch(minute, code=1)
+    assert headlines(receiver) == ["the stack is stopped"] * 3
+
+    server.stack.start(OLD)
+    for minute in range(15, 41, 5):
+        watch(minute, code=1)
+
+    assert headlines(receiver) == ["the stack is stopped"] * 3
+
+
+def test_a_memory_that_says_alerted_is_not_trusted_while_it_cannot_be_written(
+    server, receiver, watch, monkeypatch
+):
+    """Alerted and remembered before the disk filled; the incident goes on. "Alerted already" is
+    not trusted, because the watch cannot remember the next all-clear or incident either."""
+    server.stack.running = None
+    every_five_minutes(watch, 0, 15)
+    assert headlines(receiver) == ["the stack is stopped"]
+
+    def full(*args, **kwargs):
+        raise OSError(errno.ENOSPC, "No space left on device")
+
+    monkeypatch.setattr(alert, "write_atomic", full)
+    for minute in range(20, 31, 5):
+        watch(minute, code=1)
+    assert headlines(receiver) == ["the stack is stopped"] * 4
+
+    # The stack recovers while the disk stays full: no all-clear, run after run, though the
+    # memory still says that an incident was alerted.
+    server.stack.start(OLD)
+    for minute in range(35, 61, 5):
+        watch(minute, code=1)
+    assert headlines(receiver) == ["the stack is stopped"] * 4
+
+    # Once the memory can be written again, the incident it had remembered gets its all-clear.
+    monkeypatch.undo()
+    watch(65)
+    assert headlines(receiver) == ["the stack is stopped"] * 4 + ["healthy again"]
+
+
+def test_a_memory_that_cannot_be_read_counts_as_empty(server, receiver, watch):
+    """A damaged watch.json is read as nothing alerted, which can only lead to an alert: here it
+    is replaced at once and the count of fifteen minutes runs as usual."""
+    server.stack.running = None
+    (server.data / ".cave" / "watch.json").write_text("{ not json")
+
+    every_five_minutes(watch, 0, 10)
+    assert receiver.received == []
+    watch(15)
+
+    assert headlines(receiver) == ["the stack is stopped"]
+
+
+def test_an_unwritable_memory_sends_nothing_for_a_healthy_stack(
+    server, run_cave, receiver, monkeypatch
+):
+    def full(*args, **kwargs):
+        raise OSError(errno.ENOSPC, "No space left on device")
+
+    monkeypatch.setattr(alert, "write_atomic", full)
+
+    assert run_cave("watch").code == 1
+    assert receiver.received == []
+
+
+# ------------------------------------------ the second review of #30: a memory that fails later
+def test_a_full_disk_after_an_alerted_incident_still_alerts_the_next_one(
+    server, run_cave, receiver, clock, monkeypatch
+):
+    """The reviewer's test. An incident was alerted and remembered; then the disk fills; the
+    stack recovers and later stops again. The memory on disk still says "alerted", and the watch
+    must not trust it for staying silent."""
+
+    def full(*args, **kwargs):
+        raise OSError(errno.ENOSPC, "No space left on device")
+
+    origin = clock.now
+
+    def runs(minutes):
+        for minute in minutes:
+            clock.now = max(clock.now, origin + minute * 60.0)
+            run_cave("watch")
+
+    server.stack.running = None
+    runs(range(0, 16, 5))
+    assert headlines(receiver) == ["the stack is stopped"]
+    monkeypatch.setattr(alert, "write_atomic", full)
+    server.stack.start(OLD)
+    runs(range(20, 41, 5))
+    all_clears = headlines(receiver).count("healthy again")
+    server.stack.running = None
+    runs(range(45, 106, 5))
+
+    later = headlines(receiver)[1 + all_clears :]
+    assert "the stack is stopped" in later, (
+        f"second incident never alerted; received {headlines(receiver)}"
+    )
+
+
+def test_a_stack_that_runs_unhealthy_over_a_stale_record_is_an_incident(
+    server, run_cave, receiver, watch
+):
+    """`./cave down`, then a start without `cave` that does not become healthy. The record says
+    "on purpose", but containers run: the watch reports the unhealthy stack."""
+    assert run_cave("down").code == 0
+    server.stack.start(OLD)
+    server.stack.unhealthy.add(OLD)
+
+    every_five_minutes(watch, 0, 20)
+
+    assert headlines(receiver) == ["the stack is not healthy"]

@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import base64
 import hashlib
+import json
 import re
 import stat
 import time
@@ -172,3 +173,16 @@ def test_init_does_not_depend_on_the_validator(run_cave, fake_runner):
     run_cave("init")
 
     assert not fake_runner.ran("docker")
+
+
+def test_a_new_state_is_recorded_as_not_started_yet_and_an_existing_one_is_not(run_cave, checkout):
+    """Before the first `./cave up` a stack that does not run is not something `cave watch`
+    reports. A state that exists may be running: init never marks that one as stopped."""
+    assert run_cave("init").code == 0
+    record = checkout / "data" / ".cave" / "stopped.json"
+    assert "`./cave init` created the state" in json.loads(record.read_text())["what"]
+
+    record.unlink()
+    assert run_cave("init").code == 0
+
+    assert not record.exists()

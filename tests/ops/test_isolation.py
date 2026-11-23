@@ -44,3 +44,15 @@ def test_tests_of_the_cave_command_import_nothing_from_home_assistant(repo_root)
     for path in files:
         found = imported_modules(path) & set(FORBIDDEN_IN_TESTS)
         assert not found, f"{path.name} imports {sorted(found)}"
+
+
+def test_the_demo_takes_the_dashboard_paths_from_a_core_module(repo_root):
+    """Issue #16: `cave demo` imported three path constants from the `apply` command."""
+    tree = ast.parse((repo_root / "ops/cave_ops/commands/demo.py").read_text(encoding="utf-8"))
+    from_commands = {
+        node.module
+        for node in ast.walk(tree)
+        if isinstance(node, ast.ImportFrom) and node.level == 1 and node.module
+    }
+
+    assert "apply" not in from_commands

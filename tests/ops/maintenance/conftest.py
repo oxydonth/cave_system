@@ -106,6 +106,8 @@ class FakeStack:
     ops: list[tuple[str, str | None]] = field(default_factory=list)
     configured: list[str] = field(default_factory=list)
     """The ``COMPOSE_FILE`` of every ``config`` check of a release."""
+    docker_down: bool = False
+    """The Docker daemon does not answer: every Compose command fails."""
 
     def start(self, release: str) -> None:
         self.running = release
@@ -121,6 +123,8 @@ class FakeStack:
         return [name for name, _ in self.ops]
 
     def handle(self, args: tuple[str, ...], cwd: Path | None, env: Mapping[str, str]) -> Result:
+        if self.docker_down:
+            return Result(args, 1, "", "Cannot connect to the Docker daemon. Is it running?\n")
         rest = list(args[2:])
         while rest and rest[0] == "-f":
             del rest[:2]
@@ -191,12 +195,59 @@ class FakeStack:
         return Result(args, 0, "")
 
 
+@dataclass
+class FakeImages:
+    """Docker's image store, for ``docker image ls`` and ``docker image rm``.
+
+    ``store`` maps each reference (``repository:tag``, or ``repository@digest`` for an image
+    without a tag) to its digest. ``in_use`` lists references a container uses: removing them is
+    refused, as Docker refuses without ``--force``. ``removed`` lists what was removed, in order.
+    """
+
+    store: dict[str, str] = field(default_factory=dict)
+    in_use: set[str] = field(default_factory=set)
+    removed: list[str] = field(default_factory=list)
+
+    def add(self, *references: str) -> None:
+        for reference in references:
+            self.store[reference] = f"sha256:{abs(hash(reference)):064x}"[:71]
+
+    def handle(self, args: tuple[str, ...]) -> Result:
+        command = args[2]
+        if command == "ls":
+            assert "--format" in args, args
+            lines = []
+            for reference, digest in sorted(self.store.items()):
+                if "@" in reference:
+                    name, tag = reference.split("@", 1)[0], "<none>"
+                else:
+                    name, tag = reference.rsplit(":", 1)
+                # As Docker does: without --digests the column says nothing.
+                shown = digest if "--digests" in args else "<none>"
+                lines.append(f"{name}\t{tag}\t{shown}")
+            return Result(args, 0, "".join(line + "\n" for line in lines))
+        if command == "rm":
+            assert "--force" not in args, "never forced"
+            assert "-f" not in args, "never forced"
+            reference = args[-1]
+            if reference in self.in_use:
+                return Result(args, 1, "", f"conflict: unable to remove {reference}: in use\n")
+            if reference not in self.store:
+                return Result(args, 1, "", f"No such image: {reference}\n")
+            del self.store[reference]
+            self.removed.append(reference)
+            return Result(args, 0, f"Untagged: {reference}\n")
+        raise AssertionError(f"unexpected image command: {args}")
+
+
 class ServerRunner:
-    """Git for real, ``docker compose`` through the ``FakeStack``, the rest to ``fake_runner``."""
+    """Git for real, ``docker compose`` through the ``FakeStack``, ``docker image`` through
+    ``FakeImages``, the rest to ``fake_runner``."""
 
     def __init__(self, fake_runner: Any, stack: FakeStack) -> None:
         self.fake = fake_runner
         self.stack = stack
+        self.images = FakeImages()
         self.git_fail: dict[str, list[tuple[int, str]]] = {}
         """Git subcommand -> answers ``(exit status, standard error)`` given instead of running
         it, one per call, in order; once used up, Git runs for real."""
@@ -215,12 +266,14 @@ class ServerRunner:
         timeout: float | None = None,
     ) -> Result:
         argv = tuple(args)
-        if argv[:1] == ("git",) or argv[:2] == ("docker", "compose"):
+        if argv[:1] == ("git",) or argv[:2] in (("docker", "compose"), ("docker", "image")):
             self.fake.calls.append(
                 RecordedCall(argv, cwd, capture, check, input_text, env, timeout)
             )
             if argv[0] == "git":
                 result = self._git(argv, cwd)
+            elif argv[1] == "image":
+                result = self.images.handle(argv)
             else:
                 result = self.stack.handle(argv, cwd, env or {})
             if check and not result.ok:
@@ -394,14 +447,13 @@ def tree(path: Path) -> dict[str, bytes]:
 
 @pytest.fixture
 def state_tree() -> Callable[[Path], dict[str, bytes]]:
-    """``state_tree(data)``: the state entries' files, without the commands' own ``.cave/ops``
-    and the lock."""
+    """``state_tree(data)``: the state entries' files, without the commands' own records: the
+    lock, ``.cave/ops``, the record of a stack stopped on purpose and the watch's memory."""
 
     def read(data: Path) -> dict[str, bytes]:
+        records = (".cave/ops/", ".cave/lock", ".cave/stopped.json", ".cave/watch.json")
         return {
-            name: content
-            for name, content in tree(data).items()
-            if not name.startswith((".cave/ops/", ".cave/lock"))
+            name: content for name, content in tree(data).items() if not name.startswith(records)
         }
 
     return read

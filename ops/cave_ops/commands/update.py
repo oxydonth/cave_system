@@ -38,6 +38,7 @@ from contextlib import contextmanager
 from pathlib import Path
 from types import FrameType
 
+from .. import alert
 from ..container import run_in_homeassistant
 from ..context import Context
 from ..errors import CaveError
@@ -47,8 +48,9 @@ from ..heating import validation_result
 from ..lock import Lock, LockBusy
 from ..notify import notify
 from ..paths import CONTAINER_CONFIG
+from ..records import clear_stopped, stopped
 from ..runner import Result
-from . import _releases, _server
+from . import _images, _releases, _server
 from . import _update_state as state
 from ._common import require_initialised
 
@@ -59,6 +61,30 @@ UPDATE_PROJECT = "cave-update"
 """The Compose project of the one-off checks with the exported release; never the home's."""
 
 OK, NOT_UPDATED, ROLLED_BACK, BROKEN = 0, 1, 2, 3
+
+WARNINGS = {
+    "rolled-back": (
+        "update rolled back",
+        "A new release failed and was rolled back: the previous release runs again, with the "
+        "state from before the update.",
+    ),
+    "broken": (
+        "update failed, act now",
+        "A new release failed, and the way back did not end with the previous release running "
+        "and healthy, or it was not clean.",
+    ),
+    "start-finished": (
+        "restored stack not healthy",
+        "A restore had been cut off before it started the stack. The stack was started now, and "
+        "it is not healthy.",
+    ),
+    "start-owed": (
+        "restored stack not started",
+        "A restore had been cut off before it started the stack, and it could not be started now.",
+    ),
+}
+"""What the alert says (``alert.warn_owner``) for each outcome that ends with exit status 2 or 3:
+fixed words, never the message itself."""
 
 FETCH_TIMEOUT = 300.0
 PULL_TIMEOUT = 3600.0
@@ -188,9 +214,34 @@ def run(ctx: Context, args: argparse.Namespace) -> int:
         return NOT_UPDATED
     try:
         with _terminate_as_exit():
-            return _Update(ctx, args).run()
+            status = _Update(ctx, args).run()
+        if not args.recover and not (args.auto and auto_updates_off(ctx.env)):
+            _remove_old_images(ctx)
+        return status
     finally:
         lock.release()
+
+
+def _remove_old_images(ctx: Context) -> None:
+    """Still holding the lock: remove the images no release needs any more (``_images``). What
+    happens here never changes the exit status."""
+    try:
+        pruned = _images.prune(ctx)
+    except Exception as error:  # whatever goes wrong here, the update's outcome stands
+        ctx.warn(f"Old images were not removed: {type(error).__name__}: {error}.")
+        return
+    if pruned.skipped:
+        ctx.say(f"Old images were not removed: {pruned.skipped}.")
+        return
+    if pruned.removed:
+        message = (
+            f"{TITLE}: removed {len(pruned.removed)} image(s) that no release here needs any "
+            f"more: {', '.join(pruned.removed)}."
+        )
+        ctx.say(message)
+        ctx.journal(message)
+    if pruned.refused:
+        ctx.say(f"Docker kept these images (a container uses them): {', '.join(pruned.refused)}.")
 
 
 def _wait_for_lock(ctx: Context, lock: Lock) -> None:
@@ -231,16 +282,18 @@ class _Update:
         owed = _server.restore_start_owed(ctx)
         if owed is not None:
             return self.finish_owed_start(owed)
-        if _server.not_started(ctx) is not None and check_health(ctx).healthy:
-            _server.clear_not_started(ctx)  # the stack was started since the --no-start
+        if stopped(ctx.paths) is not None and check_health(ctx).healthy:
+            clear_stopped(ctx.paths, ctx.wall())  # started since it was stopped on purpose
         restoring = _server.restore_in_progress(ctx)
         if restoring is not None:
+            # A refusal changes nothing: an update in flight stays recorded (keep_switch).
             return self.conclude(
                 None,
                 "refused",
                 NOT_UPDATED,
                 f"Not updating: a restore of {restoring} was interrupted, and the state may be "
                 "half restored. " + _server.RESTORE_WAY_OUT + " Nothing was changed.",
+                keep_switch=True,
             )
         if record.switch is not None:
             return self.finish_interrupted()
@@ -274,40 +327,63 @@ class _Update:
             installed = _releases.newest(
                 self.git_lines("tag", "--list", _releases.TAG_PATTERN, "--merged", "HEAD")
             )
-            newest = self.newest_on_main(installed)
+            newer = self.newer_on_main(installed)
         except CaveError as error:
             return self.not_updated(None, "fetch-failed", f"Could not list the releases: {error}.")
-        if newest is None or (installed is not None and newest <= installed):
+        if not newer:
             return self.no_op(
                 f"Up to date: {installed or 'no release'} is installed, there is no newer release."
             )
-        failed = record.failed.get(newest.tag)
-        if failed and not args.force:
+        newest = newer[0]
+        # The newest release that has not failed before: one that failed is skipped, but a release
+        # between it and the installed one is still installed. --force takes the newest.
+        chosen = (
+            newest
+            if args.force
+            else next((version for version in newer if version.tag not in record.failed), None)
+        )
+        skipped = [version for version in newer if chosen is None or version > chosen]
+        said = "; ".join(
+            f"{version} failed on {record.failed[version.tag].get('time')} "
+            f"({record.failed[version.tag].get('reason')})"
+            for version in skipped
+        )
+        if chosen is None:
             return self.no_op(
-                f"{newest} failed on {failed.get('time')} ({failed.get('reason')}) and is skipped "
-                "until a newer release appears or `sudo ./cave update --force` is run."
+                f"{said} and {'is' if len(skipped) == 1 else 'are'} skipped until a newer release "
+                "appears or `sudo ./cave update --force` is run."
             )
-        return self.install(newest.tag)
+        if skipped:
+            ctx.say(f"{said}: skipped. {chosen} is the newest release that has not failed.")
+            self.notes.append(
+                f"{', '.join(str(version) for version in skipped)} failed before and "
+                f"{'was' if len(skipped) == 1 else 'were'} skipped; {chosen} is the newest release "
+                "that has not failed (`sudo ./cave update --force` tries the newest)"
+            )
+        return self.install(chosen.tag)
 
-    def newest_on_main(self, installed: _releases.Version | None) -> _releases.Version | None:
-        """The newest release tag newer than ``installed`` whose commit is on ``origin/main``.
+    def newer_on_main(self, installed: _releases.Version | None) -> list[_releases.Version]:
+        """The release tags newer than ``installed`` whose commit is on ``origin/main``, newest
+        first.
 
         Only the pipeline creates release tags, and only for commits on ``main``; a tag that
         matches the pattern on any other commit (pushed by hand, on a branch) is ignored.
         """
         candidates = _releases.releases(self.git_lines("tag", "--list", _releases.TAG_PATTERN))
+        found: list[_releases.Version] = []
         for version in reversed(candidates):
             if installed is not None and version <= installed:
-                return None
+                break
             on_main = _server.git(
                 self.ctx, "merge-base", "--is-ancestor", f"{version.tag}^{{commit}}", MAIN
             )
             if on_main.returncode == 0:
-                return version
-            if on_main.returncode != 1:
+                found.append(version)
+            elif on_main.returncode == 1:
+                self.ctx.say(f"Ignoring {version}: its commit is not on main.")
+            else:
                 raise CaveError(f"cannot tell whether {version} is on main: {_tail(on_main)}")
-            self.ctx.say(f"Ignoring {version}: its commit is not on main.")
-        return None
+        return found
 
     # ---------------------------------------------------------------- before anything is touched
     def install(self, tag: str) -> int:
@@ -375,7 +451,38 @@ class _Update:
             _server.remove(work)
         if failure is not None:
             return failure
+        # Last, right before the stack is stopped: `cave device-check` takes no lock, and stopping
+        # Home Assistant under a running check would spoil it.
+        held = self.held_thermostats()
+        if held:
+            return self.not_updated(
+                tag,
+                "postponed",
+                f"Not updating to {tag} now: `cave device-check` holds {', '.join(held)}, and "
+                "the switch would stop Home Assistant under it. Nothing was changed; the next run "
+                "tries again.",
+            )
         return self.switch(tag, to_commit, from_commit, from_label)
+
+    def held_thermostats(self) -> list[str]:
+        """The thermostats that ``cave_heating`` shows as held: only ``cave device-check`` holds
+        one (concept section 5.5). Empty when Home Assistant cannot be asked (it was healthy a
+        moment ago, with the same token)."""
+        try:
+            client = self.ctx.ha()
+            listing = client.states() if client is not None else []
+        except CaveError as error:
+            self.ctx.warn(f"Could not ask Home Assistant whether a thermostat is held: {error}.")
+            return []
+        held: list[str] = []
+        for item in listing:
+            entity = str(item.get("entity_id", ""))
+            if not (entity.startswith("binary_sensor.cave_") and entity.endswith("_problem")):
+                continue
+            statuses = (item.get("attributes") or {}).get("thermostats") or {}
+            if isinstance(statuses, dict):
+                held += sorted(str(name) for name, status in statuses.items() if status == "held")
+        return held
 
     def check_release(self, tag: str, commit: str, work: Path) -> int | None:
         """Export the release, pull its images and validate with it; ``None`` when all passed."""
@@ -525,6 +632,7 @@ class _Update:
         ctx, record = self.ctx, self.record
         switch = state.Switch(state.BEFORE_SWITCH, from_commit, from_label, tag, to_commit)
         record.switch = switch
+        record.last_switch = {"release": from_label, "commit": from_commit}
         state.save(ctx, record)
         try:
             reason = self.do_switch(switch)
@@ -537,6 +645,7 @@ class _Update:
             return self.roll_back(reason)
 
         record.failed.pop(tag, None)
+        record.previous = {"release": from_label, "commit": from_commit}
         return self.conclude(
             tag,
             "installed",
@@ -760,7 +869,7 @@ class _Update:
         """
         switch = self._switch()
         self.ctx.say(f"Checking out {switch.from_label} ...")
-        error, kept = _server.check_out_exactly(
+        error, kept, removed = _server.check_out_exactly(
             self.ctx,
             switch.from_commit,
             switch.to_commit,
@@ -769,6 +878,11 @@ class _Update:
         if kept:
             self.notes.append(
                 "left in place, because they are not the new release's files: " + ", ".join(kept)
+            )
+        if removed:
+            self.notes.append(
+                f"removed, because they are {switch.to_release}'s own files, byte for byte (Git "
+                f"gives them back with {switch.to_release}): " + ", ".join(removed)
             )
         if error is None:
             return []
@@ -784,6 +898,7 @@ class _Update:
         """Start the checkout (one retry) and wait until healthy."""
         ctx = self.ctx
         ctx.say("Starting the stack ...")
+        clear_stopped(ctx.paths, ctx.wall())
         result = ctx.compose("up", "--detach", "--force-recreate", timeout=UP_TIMEOUT)
         if not result.ok:
             ctx.sleep(10)
@@ -880,6 +995,11 @@ class _Update:
                 self.ctx.warn(f"The used-up snapshot could not be removed: {error}")
         (self.ctx.say if status == OK else self.ctx.warn)(message)
         notify(self.ctx, TITLE, message)
+        if status in (ROLLED_BACK, BROKEN):
+            headline, happened = WARNINGS.get(outcome, WARNINGS["broken"])
+            alert.warn_owner(
+                self.ctx, "update", headline, happened, about_the_stack=status == BROKEN
+            )
         return status
 
     def not_updated(
