@@ -657,11 +657,12 @@ class HeatingRuntime:
         for role in self._roles.get(event.data["entity_id"], ()):
             role(state, now)
         if event.data["entity_id"] in self._sensor_entities:
-            # The temperature or the humidity of a room sensor changed. The message that
-            # carries it carries the device's ``last_seen`` too, and that may be written after
-            # it: after a restart every entity is unknown until Zigbee2MQTT sends its states
-            # again, and an evaluation between the two writes would take the reading of a
-            # sensor that died before the restart for fresh and feed it to the thermostats.
+            # An entity of a room sensor's device changed: the temperature, the humidity,
+            # ``last_seen``, the battery. One message writes several of them, and ``last_seen``
+            # may be written after the reading: after a restart every entity is unknown until
+            # Zigbee2MQTT sends its states again, and an evaluation between the writes would
+            # take the reading of a sensor that died before the restart for fresh and feed it
+            # to the thermostats.
             self._evaluate_after_message()
             return
         self._evaluate()

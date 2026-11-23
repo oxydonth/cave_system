@@ -163,7 +163,11 @@ async def idle(hass: HomeAssistant) -> None:
 
     ``async_block_till_done`` returns as soon as no task is left. The last step of a chain can
     be scheduled for the next turn of the event loop without being a task yet: the copy to the
-    phone is, it leaves one turn after everything else is done. So one call is not enough, two
+    phone is, it leaves one turn after everything else is done. The call that makes it so is
+    Home Assistant's event trigger: ``handle_event`` in
+    ``homeassistant/components/homeassistant/triggers/event.py`` starts an event-triggered
+    automation with ``hass.loop.call_soon``, one turn of the loop after its event (the copy's
+    automation is triggered by the event ``cave_notify_copy``). So one call is not enough, two
     are today, and three leave a turn to spare. The count is turns of the loop, not time, so it
     is the same on every machine. (Before ``Shown`` was updated in the event loop its worker
     thread was a task to wait for, and that wait hid this.)
