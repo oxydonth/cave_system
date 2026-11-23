@@ -28,6 +28,7 @@ from tests.packages.helpers import (
     Shown,
     advance,
     failed_copy,
+    idle,
     load_package,
     room,
     set_helper,
@@ -51,7 +52,7 @@ def phone(hass: HomeAssistant) -> list[ServiceCall]:
 
 async def _call_script(hass: HomeAssistant, **data: Any) -> None:
     await hass.services.async_call("script", "cave_notify", data, blocking=True)
-    await hass.async_block_till_done()
+    await idle(hass)
 
 
 # ---------------------------------------------------------------------------------------------
@@ -170,7 +171,7 @@ async def test_only_a_notify_action_is_ever_called(
     await set_helper(hass, "cave_notify_service", value)
 
     await _call_script(hass, title="Disk", message="Disk is 90 % full")
-    await hass.async_block_till_done()
+    await idle(hass)
 
     assert shown.messages == ["Disk is 90 % full"]
     assert phone == []
