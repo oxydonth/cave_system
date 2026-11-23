@@ -2,7 +2,7 @@
 
 This splits the [concept](concept.md) into work packages. Each is implemented by a coding agent on its own branch, reviewed by a second agent, and merged only after that review.
 
-Work packages 1 to 9 build the system. Work packages 10 to 12 close what their reviews left open and are scheduled. Work packages 13 to 15 are defined so that they can be picked up, but each waits for something outside this repository; see [Later work packages](#later-work-packages).
+Work packages 1 to 9 build the system. Work packages 10 to 12 close what their reviews left open. Work packages 16 and 17 are scheduled: 16 makes the pipeline cheaper to run, 17 rehearses the operations commands on a real Linux machine. Work packages 13 to 15 are defined so that they can be picked up, but each waits for something outside this repository; see [Later work packages](#later-work-packages).
 
 ## How a work package is delivered
 
@@ -63,16 +63,25 @@ flowchart LR
 | 13 | Room-sensor regulation for FRITZ! thermostats | 10 | Opus 5.5, extra-high | Fable 5.2, high | Touches the most delicate rule of the controller. Later |
 | 14 | Heating insights | 10, 12 | Sonnet 5.5, high | Opus 5.5, high | New entities, statistics and a dashboard view. Later |
 | 15 | Home Assistant upgrade | all others | Sonnet 5.5, high | Opus 5.5, high | Mechanical, proven by the whole pipeline. Later |
+| 16 | Pipeline diet | 9 | Opus 5.5, high | Opus 5.5, high | Pipeline structure, where a mistake lets a broken change through |
+| 17 | Server rehearsal | 8, 11, 16 | Opus 5.5, high | Opus 5.5, high | Runs the operations commands for real, as root, on a throw-away machine |
 
-Work packages 2, 3 and 4 run in parallel, as do 5, 6, 7 and 8 once their dependencies are merged. Work packages 10, 11 and 12 run in parallel. Their paths overlap only in three documents: `docs/concept.md` (10: section 5.4; 11: sections 4.2 and 4.5), `docs/devices.md` (10: the device tests and the SNZB-02P; 11: the `device-check` section) and `docs/hardware-acceptance.md` (10: the point about a sensor in a steady room; 11: a new section for the server). Each edits only its own sections, and whichever merges second rebases.
+Work packages 2, 3 and 4 run in parallel, as do 5, 6, 7 and 8 once their dependencies are merged. Work packages 10, 11 and 12 run in parallel. Their paths overlap only in three documents: `docs/concept.md` (10: section 5.4; 11: sections 4.2 and 4.5), `docs/devices.md` (10: the device tests and the SNZB-02P; 11: the `device-check` section) and `docs/hardware-acceptance.md` (10: the point about a sensor in a steady room; 11: a new section for the server). Each edits only its own sections, and whichever merges second rebases. Work packages 16 and 17 run one after the other: 17 adds a workflow to the pipeline that 16 restructures, and starts once 16 is merged.
 
 ### Shared files
 
 Several work packages add to the same files. To keep that mechanical:
 
-- **`.github/workflows/ci.yml`** only lists jobs. Each larger check lives in its own reusable workflow file (`stack.yml`, `sim.yml`, `e2e.yml`, `release.yml`) and is added to `ci.yml` as a short calling job, which is also added to the `needs` of `ci-ok`. `ci-ok` checks every job it needs, so `needs` is the only list to edit.
-  - The `release` job is the exception: it has `needs: ci-ok`, runs only for pushes to `main`, and `ci-ok` does not depend on it. Its calling job sets `permissions: contents: write`, because a reusable workflow cannot raise the read-only default.
-  - Superseded runs are cancelled for pull requests only. Every run on `main` completes.
+- **`.github/workflows/ci.yml`** lists the jobs of the pipeline. GitHub bills every job rounded up to the whole minute, so a check that takes seconds is a step of a job that exists anyway, not a job of its own (WP16). The jobs:
+  - `lint`: Ruff, yamllint, ShellCheck, actionlint, mypy, the version check, the document check (`tests/docs/`), the dry run of `scripts/provision-host.sh`, and whether the change touches code at all (below).
+  - `test`: the test suite in parallel with coverage, the tests of the `cave` command on Python 3.11, the device matrix, and hassfest.
+  - `e2e` (`e2e.yml`): everything with containers, one part after the other: the stack check (the composite action in `.github/actions/stack/`), the simulator check (`.github/actions/sim/`), then first-run setup, the dashboard in a browser and the scenarios on the demo. The first part that fails ends the job. `stack.yml` and `sim.yml` run the stack check or the simulator check on its own, on demand; the pipeline does not call them.
+  - `ci-ok`: the one check that says a commit is good. It passes when every job in its `needs` succeeded. A failed or cancelled job fails it, and so does a skipped one, except under the rule for documents below. `needs` is the only list to edit.
+  - `release` (`release.yml`): the exception. It has `needs: ci-ok`, runs only for pushes to `main`, and `ci-ok` does not depend on it. Its calling job sets `permissions: contents: write`, because a reusable workflow cannot raise the read-only default.
+- **A new check** goes into the job that already has what it needs: a static check into `lint`, a test into the suite, a check of the integration with Docker into `test`, a check with containers into the matching part of `e2e`. A check step after the first of a job has `if: ${{ !cancelled() }}`, so that one failing check does not hide the others; the parts of `e2e` are the exception, because each needs the one before to have left a clean runner. A new check with many steps becomes a composite action under `.github/actions/` run as a step there; a new job is the last resort, with the same `needs: lint` and `if:` as `e2e`, and is added to the `needs` of `ci-ok`.
+- **Documents only.** A pull request that changes nothing but Markdown files runs `lint`, which includes the document check, and skips `test` and `e2e`; `ci-ok` accepts those as skipped. `lint` decides it from the diff of the merge commit GitHub makes of the pull request against its base, so the pull request counts as a whole, whatever was pushed. No test except the document check reads a Markdown file, and none may, unless this rule is widened. A push to `main` always runs everything.
+- **`make check`** runs on the development machine what `lint` and `test` run, except hassfest and the device matrix; hassfest, the tests that need Docker and the job `e2e` run only in the pipeline.
+- Superseded runs are cancelled for pull requests only. Every run on `main` completes.
 - **The `cave` command** discovers its commands from `ops/cave_ops/commands/`, one module per command. A work package adds modules there and does not edit other commands.
 - **Core modules of the `cave` command.** WP2 delivers, besides its own commands, what later commands need: the runner for `docker` and `git`, the `.env` loader and the paths, the script-token reader, a small client for Home Assistant's REST API, the health check and the notification call of concept section 4.5, the function that validates a `heating.yaml` and stores its applied copy, the lock, and the test fixtures that fake them. Later work packages import these and do not write their own. If one of them lacks something, the work package that needs it extends it and says so in its pull request.
 - **`.env.example` and the `init` command** are written once, in WP2, for the complete variable table in concept section 4.2, including the variables only later work packages read. Later work packages do not need to change them. WP11 is the planned exception: it adds a variable, and it changes existing commands where its issues ask for that.
@@ -412,6 +421,53 @@ A new variable and the fallback channel change contracts: concept sections 4.2 a
 - The screenshots of the browser check show the contact rows with the chosen label and no error card.
 
 **Paths:** `homeassistant/packages/`, `tools/render_dashboard.py`, `tests/packages/`, `tests/tools/`, `docs/dashboard-and-notifications.md`. Something outside these paths that shows a defect found here is reported in the pull request and in an issue, not changed.
+
+---
+
+## WP16 — Pipeline diet
+
+**Goal.** A pipeline run costs clearly less than it does now, and checks exactly what it checked before.
+
+**Background.** In November 2026 the pipeline used more than the 2,000 Actions minutes a private repository gets for free. A run billed about 21 minutes, 22 on `main`: GitHub bills every job rounded up to the minute, five jobs take seconds, and the test job had grown to nearly seven minutes.
+
+**Deliverables**
+
+- Fewer, fuller jobs: checks that take seconds share a job with others instead of each billing a minute. What is checked, and that a failing check fails the pipeline, does not change.
+- A faster test job, for example by running the tests in parallel, with the same tests and the same coverage report.
+- Nothing downloaded twice that can be cached: the browser of the dashboard check, tool and package caches.
+- A change that touches only documents does not start the stack, the simulator or the end-to-end checks; the document check still runs. A push to `main` always runs everything, so that every release has passed the whole pipeline.
+- `ci-ok` stays the one check that says a commit is good, and it fails when any check it stands for failed or was cancelled. A check that was skipped on purpose under the rule above does not fail it.
+- `CLAUDE.md` and the "Shared files" section of this document describe the pipeline as it is afterwards.
+
+**Acceptance**
+
+- A table in the pull request with the billed minutes per job of a run before and after, taken from GitHub's own job data, for a pull request that changes code and for one that changes only a document. The run for a code change bills at most 14 minutes.
+- For every check the pipeline made before, the pull request says where it runs now. Each is shown to still fail the pipeline: by a deliberately failing change for each job that was restructured, in as few pipeline runs as possible, and by the workflow's logic for the rest.
+- A run on `main` still ends with a release.
+
+**Paths:** `.github/workflows/`, `Makefile`, `pyproject.toml` and `uv.lock` (only for what the faster test job needs), `CLAUDE.md`, the "Shared files" section of `docs/work-packages.md`.
+
+---
+
+## WP17 — Server rehearsal
+
+**Goal.** What the reviews of the operations commands could not verify without root, systemd and a real Docker is verified on a real Linux machine before the owner installs: a GitHub runner is one.
+
+**Deliverables**
+
+- A rehearsal, as a workflow of its own that the ordinary pipeline does not call: it starts on demand, once a week, on a push to `main` that changes the operations commands or the provisioning, and on a pull request that changes the rehearsal itself. On a fresh runner it provisions the host with the provisioning script for real, installs from a local Git remote that carries releases, and then goes through what an owner does and what happens to a server: `init`, `check`, `up`, `bootstrap`, `apply`; a backup by its systemd unit; an update to a newer release; an update to a release that does not become healthy, and its way back; a restore onto the same state directory and onto a new one; `restore --undo`; the recovery unit that runs at boot; `down`, `up`; the watch with an alert receiver on the runner itself.
+- After each step it asserts what `docs/operations.md` promises: who owns which file, that the service user can still `apply` after root has run, what `cave status` says, which timers are enabled, which containers run, which images remain, what the receiver got.
+- It answers the points of section 6 of `docs/hardware-acceptance.md` that a runner can answer, among them what Docker really prints when images are listed with digests, that Docker refuses to remove an image a stopped container uses, and Git run for the service user by root. That section then says for each point whether the rehearsal covers it or whether it stays for the owner's server, such as a real power cut.
+- Defects the rehearsal finds in the operations commands are fixed in the same pull request when the fix is small, each with a test in the ordinary suite; otherwise they become issues and the rehearsal's step is marked as a known finding that does not hide other failures.
+- The rehearsal is documented where the operations commands are: what it proves, how to start it, how long it takes, and what it costs in Actions minutes.
+
+**Acceptance**
+
+- The rehearsal has run green on the pull request, and its log shows each step and each assertion by name.
+- It fails when it should: shown for three assertions chosen from different steps.
+- A table of the points of section 6 with "rehearsal" or "owner's server" for each, and the evidence for the first kind.
+
+**Paths:** a new workflow under `.github/workflows/` and its scripts under `tests/`, `docs/operations.md`, `docs/hardware-acceptance.md` (section 6), and in `ops/` and `scripts/` only the fixes of what it finds.
 
 ---
 

@@ -1,6 +1,19 @@
 name: End-to-end
 
-# The complete system from a clean checkout (concept section 8, end-to-end level), in two parts:
+# Every check that needs containers, in one job, so that it is billed once and the images are
+# pulled once (work package 16). One part after the other; the first that fails ends the job:
+#
+# - The stack check (.github/actions/stack): the runtime stack from a clean checkout, `./cave
+#   check`, the broker's credentials, Home Assistant's log, `./cave apply` in the pinned image.
+# - The simulator check (.github/actions/sim): the simulator image against a real broker.
+# - Back to a clean checkout: the stack check's state is removed, and the checkout must then be as
+#   clean as a fresh one, so that the first-run setup below starts from nothing.
+# - The end-to-end check, below.
+#
+# stack.yml and sim.yml run the first two on their own, on demand.
+#
+# The end-to-end check: the complete system from a clean checkout (concept section 8, end-to-end
+# level), in two parts:
 #
 # 1. First-run setup on the home's stack: `./cave init`, `./cave up`, then tests/e2e/
 #    test_first_run.py runs `./cave bootstrap`, checks the result through Home Assistant's API
@@ -25,9 +38,9 @@ permissions:
 
 jobs:
   e2e:
-    name: e2e
+    name: stack, sim, e2e
     runs-on: ubuntu-24.04
-    timeout-minutes: 30
+    timeout-minutes: 50
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
@@ -43,6 +56,62 @@ jobs:
           cache-python: true
 
       - run: make setup
+
+      # --- the browser for the dashboard check, installed while the images are pulled
+      - name: Which Playwright the tests use
+        id: playwright
+        run: |
+          version=$(uv run --locked python -c 'from importlib.metadata import version; print(version("playwright"))')
+          echo "version=${version}" >> "${GITHUB_OUTPUT}"
+
+      # Each Playwright version installs one fixed build of the browser, so the browser is cached
+      # under that version and downloaded only when the version changes. Playwright checks what it
+      # finds and downloads whatever is missing; a damaged browser does not start, which fails the
+      # dashboard check. Only the browser is cached: the system libraries come from apt every time.
+      - name: The browser from the cache
+        uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: ~/.cache/ms-playwright
+          key: playwright-${{ steps.playwright.outputs.version }}-${{ runner.os }}-${{ runner.arch }}
+
+      - name: Install the browser, in the background
+        # Chromium's headless shell with the system libraries it needs, about half a minute of apt
+        # that would otherwise hold up the job. It runs while the images are pulled and the stack
+        # starts; "Wait for the browser" below waits for it and fails if it failed. The background
+        # process writes only to its own files, so this step ends at once.
+        run: |
+          (
+            status=0
+            uv run --locked playwright install --with-deps --only-shell chromium || status=$?
+            echo "${status}" > "${RUNNER_TEMP}/browser.status"
+          ) > "${RUNNER_TEMP}/browser.log" 2>&1 < /dev/null &
+
+      # --- the stack check and the simulator check
+      - name: The runtime stack
+        uses: ./.github/actions/stack
+
+      - name: The simulator against a real broker
+        uses: ./.github/actions/sim
+
+      - name: Back to a clean checkout
+        # The stack check leaves the stopped stack's state; files Home Assistant wrote belong to
+        # root. Without that state the checkout is a fresh one plus ignored caches (.venv,
+        # __pycache__), which the end-to-end job always had; the step checks it.
+        run: |
+          sudo rm -rf data .env
+          # Every change, untracked and ignored file, except the caches named.
+          left=$(git status --porcelain --ignored |
+            grep -vE '^!! (\.venv/|(.*/)?(__pycache__|\.pytest_cache|\.ruff_cache|\.mypy_cache)/)$' || true)
+          if [ -n "${left}" ]; then
+            echo "::error::the checks before left files behind:"
+            echo "${left}"
+            exit 1
+          fi
+          if [ -n "$(docker ps --all --quiet)" ]; then
+            echo "::error::the checks before left containers behind:"
+            docker ps --all
+            exit 1
+          fi
 
       - name: Where the demo keeps its state (`./cave demo`'s default)
         run: echo "DEMO_DATA=${XDG_STATE_HOME:-${HOME}/.local/state}/cave/demo" >> "${GITHUB_ENV}"
@@ -95,9 +164,20 @@ jobs:
           tests/e2e/mask-secrets.sh "${DEMO_DATA}/demo.env" "${DEMO_DATA}/homeassistant/.cave/token"
 
       # --- the heating dashboard in a browser
-      - name: Install the browser
-        # Chromium's headless shell with the system libraries it needs, about 100 MB.
-        run: uv run --locked playwright install --with-deps --only-shell chromium
+      - name: Wait for the browser
+        run: |
+          for _ in $(seq 600); do
+            [ -s "${RUNNER_TEMP}/browser.status" ] && break
+            sleep 1
+          done
+          echo "::group::Installing the browser"
+          cat "${RUNNER_TEMP}/browser.log" || true
+          echo "::endgroup::"
+          status=$(cat "${RUNNER_TEMP}/browser.status" 2> /dev/null || echo "none: it did not finish in ten minutes")
+          if [ "${status}" != 0 ]; then
+            echo "::error::installing the browser failed, exit status ${status}"
+            exit 1
+          fi
 
       - name: The heating dashboard in a browser
         env:

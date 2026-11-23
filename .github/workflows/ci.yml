@@ -1,9 +1,23 @@
 name: CI
 
-# This file only lists jobs. A larger check lives in its own reusable workflow file
-# (stack.yml, sim.yml, e2e.yml, release.yml) and is added here as a short calling job that
-# `ci-ok` also depends on. `ci-ok` is the one check to wait for: it fails when any other job
-# does. Branch protection is unavailable here, so GitHub does not enforce it.
+# This file lists the jobs. GitHub bills every job rounded up to the whole minute, so a check that
+# takes seconds is a step in a job that exists anyway, not a job of its own:
+#
+#   lint   static checks, the version check, the document check, the provision-host dry run, and
+#          which kind of change this is (below)
+#   test   the test suite on Python 3.14 and 3.11, the device matrix, hassfest
+#   e2e    e2e.yml, everything with containers: the stack check (.github/actions/stack), the
+#          simulator check (.github/actions/sim), then first-run setup, the dashboard in a
+#          browser and the scenarios on the demo
+#
+# A check with many steps lives in its own file and runs as a step of the job that has what it
+# needs. `ci-ok` is the one check to wait for: it fails when any job it needs failed or was
+# cancelled, and when one was skipped that should have run. Branch protection is unavailable
+# here, so GitHub does not enforce it.
+#
+# A pull request that changes only Markdown files (*.md) runs `lint`, which includes the document
+# check, and nothing else: no test reads a Markdown file except the document check, and nothing
+# that the other jobs build or start contains one. A push to main always runs everything.
 
 on:
   pull_request:
@@ -31,10 +45,46 @@ jobs:
     name: lint
     runs-on: ubuntu-24.04
     timeout-minutes: 15
+    outputs:
+      # "true" unless this is a pull request that changes nothing but Markdown files.
+      code: ${{ steps.changes.outputs.code }}
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           persist-credentials: false
+          # For a pull request: the merge commit and both its parents, for the step below.
+          fetch-depth: 2
+
+      - name: Code or only documents
+        id: changes
+        env:
+          EVENT: ${{ github.event_name }}
+        # A pull request is checked out as the merge commit GitHub made of it, whose first parent is
+        # the tip of the base branch. Its diff against that parent is everything the pull request
+        # changes, all commits together, however they were pushed or force-pushed. A rename counts
+        # with its old and its new path. Anything unexpected (no merge commit, an empty diff) counts
+        # as code, so that everything runs.
+        run: |
+          code=true
+          if [ "${EVENT}" = pull_request ]; then
+            if git rev-parse --verify --quiet 'HEAD^2' > /dev/null; then
+              changed=$(git diff --name-only --no-renames 'HEAD^1' HEAD)
+              echo "Changed files:"
+              printf '%s\n' "${changed}"
+              if [ -n "${changed}" ] && ! grep -qv '\.md$' <<< "${changed}"; then
+                code=false
+              fi
+            else
+              echo "::warning::HEAD is not a merge commit; everything runs"
+            fi
+          fi
+          if [ "${code}" = true ]; then
+            echo "Code changed: every job runs."
+          else
+            echo "Only Markdown files changed: test and e2e are skipped."
+          fi
+          echo "code=${code}" >> "${GITHUB_OUTPUT}"
+
       - uses: astral-sh/setup-uv@1db35dd8eee11c5894872e0b383ae6c406cf738d # v10.4.0
         with:
           version: ${{ env.UV_VERSION }}
@@ -42,14 +92,51 @@ jobs:
           cache-dependency-glob: uv.lock
           cache-python: true
       - run: make setup
+      # Each check runs even when the one before it failed, so that one run reports all of them.
       - run: make lint
+        if: ${{ !cancelled() }}
       - run: make typecheck
+        if: ${{ !cancelled() }}
       - run: make versions
+        if: ${{ !cancelled() }}
+      # tests/docs: links, `cave` commands and repository paths in every Markdown file. It also runs
+      # with the whole suite in `test`; here it is the check a change of documents gets.
+      - name: Document check
+        if: ${{ !cancelled() }}
+        run: uv run --locked pytest tests/docs -p no:cacheprovider
+      # Runs scripts/provision-host.sh for its plan only. Nothing in this job creates the service
+      # user or the directories it looks for.
+      - name: provision-host dry run prints the plan and changes nothing
+        if: ${{ !cancelled() }}
+        run: |
+          before=$(getent passwd | cut -d: -f1 | sort | tr '\n' ' ')
+          ./scripts/provision-host.sh --dry-run | tee "${RUNNER_TEMP}/plan.txt"
+          grep -q 'Dry run finished: nothing was changed.' "${RUNNER_TEMP}/plan.txt"
+          grep -q 'docker-ce' "${RUNNER_TEMP}/plan.txt"
+          test "$(getent passwd | cut -d: -f1 | sort | tr '\n' ' ')" = "${before}"
+          if getent passwd cave; then
+            echo "::error::the dry run created the service user"
+            exit 1
+          fi
+          test ! -e /etc/apt/sources.list.d/docker.sources
+          test ! -e /var/lib/cave
+          test ! -e /opt/cave
 
   test:
     name: test
+    needs: lint
+    if: ${{ !cancelled() && needs.lint.outputs.code == 'true' }}
     runs-on: ubuntu-24.04
     timeout-minutes: 15
+    # Runs the official hassfest image directly instead of through home-assistant/actions,
+    # whose action.yml uses the untagged :latest image: a new Home Assistant release could
+    # then turn this job red with no change here. The Home Assistant version appears in
+    # three places that move together, in one pull request: `homeassistant` in uv.lock
+    # (through pytest-homeassistant-custom-component), the tag of this image, and the image
+    # tag in compose.yaml. `make versions` (job lint) enforces it. The digest is the registry's
+    # Docker-Content-Digest for the tag.
+    env:
+      HASSFEST_IMAGE: ghcr.io/home-assistant/hassfest:2026.10.4@sha256:e5828f7e305518506d8b4e8346411357d68358531b761bd118fe6a1631feff44
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
@@ -61,6 +148,7 @@ jobs:
           cache-dependency-glob: uv.lock
           cache-python: true
       - run: make setup
+      # In parallel, one worker per CPU of the runner (PYTEST_WORKERS in the Makefile).
       - run: make test
         env:
           PYTEST_ADDOPTS: --junitxml=test-results.xml
@@ -75,44 +163,22 @@ jobs:
         # An explicit `bash` runs with pipefail, so the script's exit status survives the tee.
         shell: bash
         run: uv run --locked python -m tests.devices.matrix test-results.xml | tee -a "${GITHUB_STEP_SUMMARY}"
-
-  hassfest:
-    name: hassfest
-    runs-on: ubuntu-24.04
-    timeout-minutes: 10
-    # Runs the official hassfest image directly instead of through home-assistant/actions,
-    # whose action.yml uses the untagged :latest image: a new Home Assistant release could
-    # then turn this job red with no change here. The Home Assistant version appears in
-    # three places that move together, in one pull request: `homeassistant` in uv.lock
-    # (through pytest-homeassistant-custom-component), the tag of this image, and the image
-    # tag in compose.yaml. `make versions` (job lint) enforces it. The digest is the registry's
-    # Docker-Content-Digest for the tag.
-    env:
-      HASSFEST_IMAGE: ghcr.io/home-assistant/hassfest:2026.10.4@sha256:e5828f7e305518506d8b4e8346411357d68358531b761bd118fe6a1631feff44
-    steps:
-      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
-        with:
-          persist-credentials: false
       - name: hassfest
+        if: ${{ !cancelled() }}
         run: docker run --rm -v "${GITHUB_WORKSPACE}:/github/workspace" "${HASSFEST_IMAGE}"
-
-  stack:
-    name: stack
-    uses: ./.github/workflows/stack.yml
-
-  sim:
-    name: sim
-    uses: ./.github/workflows/sim.yml
 
   e2e:
     name: e2e
+    needs: lint
+    if: ${{ !cancelled() && needs.lint.outputs.code == 'true' }}
     uses: ./.github/workflows/e2e.yml
 
   release:
     name: release
-    # The exception to the rule above: it runs after ci-ok, only for pushes to main, and ci-ok
-    # does not wait for it. A reusable workflow cannot raise the read-only default, so the
-    # permission to create the tag and the release is granted here.
+    # The one job that ci-ok does not stand for: it runs after ci-ok, only for pushes to main. A
+    # job of its own, so that the permission to create the tag and the release is held only here,
+    # on main, and a failed release does not turn a good commit's ci-ok red. A reusable workflow
+    # cannot raise the read-only default, so the permission is granted here.
     needs: ci-ok
     if: github.event_name == 'push' && github.ref == 'refs/heads/main'
     permissions:
@@ -121,16 +187,25 @@ jobs:
 
   ci-ok:
     name: ci-ok
-    # Fails when any job it depends on failed, was cancelled or was skipped, so it can be the
-    # one check to wait for. The list of jobs is `needs`; it is the only place to edit.
+    # The one check to wait for. It passes when every job it needs succeeded; for a pull request
+    # that changes only Markdown files, `lint` must have succeeded and the others may have been
+    # skipped. A failed or cancelled job always fails it, and so does a skipped one in any other
+    # case. The list of jobs is `needs`; it is the only place to edit.
     if: always()
-    needs: [lint, test, hassfest, stack, sim, e2e]
+    needs: [lint, test, e2e]
     runs-on: ubuntu-24.04
     timeout-minutes: 5
     env:
       NEEDS: ${{ toJSON(needs) }}
+      EVENT: ${{ github.event_name }}
     steps:
-      - name: Require every job to have succeeded
+      - name: Require every job to have succeeded, or to have been skipped for documents only
         run: |
           jq -r 'to_entries[] | "\(.key): \(.value.result)"' <<< "${NEEDS}"
-          jq -e 'all(.[]; .result == "success")' <<< "${NEEDS}" > /dev/null
+          if [ "${EVENT}" = pull_request ] && [ "$(jq -r '.lint.outputs.code' <<< "${NEEDS}")" = false ]; then
+            echo "Only Markdown files changed: lint must have succeeded; the other jobs may be skipped."
+            jq -e '.lint.result == "success"
+              and all(.[]; .result == "success" or .result == "skipped")' <<< "${NEEDS}" > /dev/null
+          else
+            jq -e 'all(.[]; .result == "success")' <<< "${NEEDS}" > /dev/null
+          fi

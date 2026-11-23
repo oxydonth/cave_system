@@ -1,0 +1,266 @@
+name: Stack
+description: >-
+  The runtime stack from a clean checkout, with no interaction. Run it from the root of a checkout
+  on a runner with Docker; it leaves the stack stopped, with its state in data/ and .env.
+
+# The Compose file and the Home Assistant configuration are valid, the stack boots healthy in the
+# pinned images, the broker lets in exactly those who know the generated password, Home Assistant
+# set up `cave_heating` without logging errors, and `./cave apply` validates, stores and generates
+# the dashboard in the pinned image. The pipeline runs this as the first part of the job in
+# e2e.yml; stack.yml runs it on its own, on demand.
+#
+# Every step of a composite action must name its shell. `bash -e {0}` is what a workflow's run
+# step uses by default (without pipefail), so the steps behave exactly as they did in a job.
+
+runs:
+  using: composite
+  steps:
+    - name: Initialise
+      shell: bash -e {0}
+      run: ./cave init
+
+    - name: Nothing secret is tracked or left to be committed
+      shell: bash -e {0}
+      run: |
+        status=$(git status --porcelain)
+        if [ -n "${status}" ]; then
+          echo "::error::init left files that Git does not ignore:"
+          echo "${status}"
+          exit 1
+        fi
+        test "$(stat -c '%a' .env)" = 600
+
+    - name: A second init changes nothing
+      shell: bash -e {0}
+      run: |
+        snapshot() { find .env data -printf '%p %y %m %s %T@\n' | sort; }
+        snapshot > "${RUNNER_TEMP}/before"
+        sleep 2
+        ./cave init
+        snapshot > "${RUNNER_TEMP}/after"
+        diff "${RUNNER_TEMP}/before" "${RUNNER_TEMP}/after"
+
+    - name: The Compose file is valid with and without the zigbee profile
+      shell: bash -e {0}
+      run: |
+        docker compose config --quiet
+        docker compose --profile zigbee config --quiet
+        test "$(docker compose config --services | sort | tr '\n' ' ')" = "homeassistant mosquitto "
+        test "$(docker compose --profile zigbee config --services | sort | tr '\n' ' ')" = \
+          "homeassistant mosquitto zigbee2mqtt "
+
+    - name: The Zigbee2MQTT image has the tool its health check uses
+      shell: bash -e {0}
+      run: |
+        image=$(docker compose --profile zigbee config --images | grep zigbee2mqtt)
+        docker run --rm --entrypoint sh "${image}" -c 'command -v wget'
+
+    - name: Check the Compose file and the Home Assistant configuration
+      shell: bash -e {0}
+      run: ./cave check
+
+    - name: Start the stack and wait until it is healthy
+      shell: bash -e {0}
+      run: ./cave up --timeout 420
+
+    - name: Show the containers
+      shell: bash -e {0}
+      run: ./cave ps
+
+    - name: The broker accepts the generated credentials and nobody else
+      shell: bash -e {0}
+      run: |
+        set -a
+        # shellcheck disable=SC1091
+        . ./.env
+        set +a
+        subscribe() {
+          docker compose exec -T mosquitto mosquitto_sub -h 127.0.0.1 -p 1883 \
+            -t '$SYS/broker/version' -C 1 -W 5 "$@"
+        }
+        must_fail() {
+          if "$@" > /dev/null 2>&1; then
+            echo "::error::the broker accepted: $*"
+            exit 1
+          fi
+        }
+        echo "with the generated credentials:"
+        subscribe -u "${CAVE_MQTT_USER}" -P "${CAVE_MQTT_PASSWORD}"
+        echo "without credentials, with a wrong password, with an unknown user:"
+        must_fail subscribe
+        must_fail subscribe -u "${CAVE_MQTT_USER}" -P "not-the-password"
+        must_fail subscribe -u "nobody" -P "${CAVE_MQTT_PASSWORD}"
+        echo "the port is published on the host (Home Assistant reaches it there):"
+        timeout 5 bash -c '</dev/tcp/127.0.0.1/1883'
+
+    - name: Home Assistant finished starting
+      shell: bash -e {0}
+      run: |
+        for _ in $(seq 1 90); do
+          if docker compose logs --no-color --no-log-prefix homeassistant | grep -q 'Home Assistant initialized'; then
+            exit 0
+          fi
+          sleep 2
+        done
+        echo "::error::Home Assistant did not report that it finished starting"
+        exit 1
+
+    - name: Home Assistant set up cave_heating and logged no unexpected errors
+      shell: bash -e {0}
+      run: |
+        # Give integrations that start in the background a moment to report.
+        sleep 15
+        # Home Assistant colours its log lines; remove the escape sequences before matching.
+        docker compose logs --no-color --no-log-prefix homeassistant 2>&1 |
+          sed 's/\x1b\[[0-9;]*m//g' > "${RUNNER_TEMP}/ha.log"
+        grep -E 'Setting up cave_heating$' "${RUNNER_TEMP}/ha.log"
+
+        # Log lines look like: 2026-11-15 12:00:00.000 ERROR (MainThread) [logger] message.
+        # If Home Assistant changed that format, the error filter below would find nothing
+        # and pass without looking, so insist that the format is still recognised.
+        line_format='^[0-9-]+ [0-9:.]+ (DEBUG|INFO|WARNING|ERROR|CRITICAL) '
+        lines=$(grep -cE "${line_format}" "${RUNNER_TEMP}/ha.log" || true)
+        if [ "${lines}" -lt 10 ]; then
+          echo "::error::only ${lines} log lines match the expected format; has Home Assistant's log format changed?"
+          exit 1
+        fi
+
+        # Errors that are expected on a GitHub runner or in a stack without devices. Every
+        # entry is an extended regular expression matched against the whole log line, and
+        # says why it is harmless. Anything else that Home Assistant logs as ERROR or
+        # CRITICAL fails the job. Do not add an entry without a reason. There is none now:
+        # the integrations that complain about a missing Bluetooth adapter, USB or D-Bus
+        # (bluetooth, usb) are not loaded (homeassistant/configuration.yaml).
+        allowed=(
+          '^$'
+        )
+
+        grep -E '^[0-9-]+ [0-9:.]+ (ERROR|CRITICAL) ' "${RUNNER_TEMP}/ha.log" > "${RUNNER_TEMP}/errors.log" || true
+        for pattern in "${allowed[@]}"; do
+          grep -vE "${pattern}" "${RUNNER_TEMP}/errors.log" > "${RUNNER_TEMP}/errors.next" || true
+          mv "${RUNNER_TEMP}/errors.next" "${RUNNER_TEMP}/errors.log"
+        done
+        if [ -s "${RUNNER_TEMP}/errors.log" ]; then
+          echo "::error::Home Assistant logged errors that are not on the allow-list:"
+          cat "${RUNNER_TEMP}/errors.log"
+          exit 1
+        fi
+        echo "no unexpected errors in $(wc -l < "${RUNNER_TEMP}/ha.log") log lines"
+
+    - name: apply turns the starter configuration into the heating dashboard
+      shell: bash -e {0}
+      # The real validator and the real dashboard generator, each in a one-off container of the
+      # pinned image. There is no script token in the pipeline (`cave bootstrap` creates it),
+      # so apply must say that Home Assistant has to be restarted, and still succeed.
+      run: |
+        dashboard=data/homeassistant/dashboards/heating.yaml
+        grep -q '^# Placeholder until' "${dashboard}"
+
+        ./cave apply | tee "${RUNNER_TEMP}/apply.txt"
+        grep -q 'Applied copy:    unchanged' "${RUNNER_TEMP}/apply.txt"
+        grep -q 'Dashboard:       regenerated' "${RUNNER_TEMP}/apply.txt"
+        grep -q 'has to be restarted instead' "${RUNNER_TEMP}/apply.txt"
+
+        if grep -q 'Placeholder until' "${dashboard}"; then
+          echo "::error::the dashboard is still the placeholder"
+          exit 1
+        fi
+        head -n 1 "${dashboard}" | grep -q '^# Generated by tools/render_dashboard.py'
+        docker compose run --rm --no-deps -T --entrypoint python3 homeassistant -c '
+        import sys, yaml
+        dashboard = yaml.safe_load(open("/config/dashboards/heating.yaml"))
+        paths = [view["path"] for view in dashboard["views"]]
+        assert paths == ["rooms", "maintenance"], paths
+        print("dashboard parses, views:", paths)
+        '
+
+        # The starter has no rooms: the room view says so, and a second apply changes nothing.
+        grep -q 'No rooms are configured yet' "${dashboard}"
+        sha256sum "${dashboard}" > "${RUNNER_TEMP}/dashboard.sha"
+        ./cave apply
+        sha256sum --check "${RUNNER_TEMP}/dashboard.sha"
+
+    - name: apply stores a valid file with a room and generates its dashboard
+      shell: bash -e {0}
+      # A changed, valid file through the real validator and the real generator in the pinned
+      # image: the applied copy is replaced and the dashboard has the room's section.
+      run: |
+        applied=data/homeassistant/cave/.applied/heating.yaml
+        dashboard=data/homeassistant/dashboards/heating.yaml
+        cp tests/tools/golden/one_room/heating.yaml data/homeassistant/cave/heating.yaml
+
+        ./cave apply | tee "${RUNNER_TEMP}/apply-room.txt"
+        grep -q 'Applied copy:    updated' "${RUNNER_TEMP}/apply-room.txt"
+        grep -q 'Dashboard:       regenerated' "${RUNNER_TEMP}/apply-room.txt"
+        cmp "${applied}" data/homeassistant/cave/heating.yaml
+        grep -q 'heading: Office' "${dashboard}"
+        grep -q 'entity: climate.cave_office' "${dashboard}"
+        if grep -q 'No rooms are configured yet' "${dashboard}"; then
+          echo "::error::the dashboard still says there are no rooms"
+          exit 1
+        fi
+
+    - name: apply refuses a well-formed invalid file, names the problem, and changes nothing
+      shell: bash -e {0}
+      run: |
+        applied=data/homeassistant/cave/.applied/heating.yaml
+        dashboard=data/homeassistant/dashboards/heating.yaml
+        sha256sum "${applied}" "${dashboard}" > "${RUNNER_TEMP}/before.sha"
+        cat > data/homeassistant/cave/heating.yaml <<'YAML'
+        version: 1
+        rooms:
+          - id: Not A Slug
+            name: Office
+            trvs:
+              - entity: climate.office_thermostat
+        YAML
+        if ./cave apply > "${RUNNER_TEMP}/apply-invalid.txt" 2>&1; then
+          echo "::error::apply accepted an invalid file"
+          cat "${RUNNER_TEMP}/apply-invalid.txt"
+          exit 1
+        fi
+        cat "${RUNNER_TEMP}/apply-invalid.txt"
+        grep -q 'rooms\[0\]' "${RUNNER_TEMP}/apply-invalid.txt"
+        grep -q 'field "id"' "${RUNNER_TEMP}/apply-invalid.txt"
+        grep -q 'Nothing was changed' "${RUNNER_TEMP}/apply-invalid.txt"
+        sha256sum --check "${RUNNER_TEMP}/before.sha"
+
+    - name: apply does not run while another cave command holds the lock
+      shell: bash -e {0}
+      run: |
+        # Name the holder the way `cave update` does, then hold the lock as it would.
+        holder="\`cave update\` (pid 1, since the pipeline)"
+        printf '%s\n' "${holder}" > data/.cave/lock
+        flock --exclusive --nonblock data/.cave/lock sleep 8 &
+        sleep 2
+        sha256sum data/homeassistant/cave/.applied/heating.yaml > "${RUNNER_TEMP}/locked.sha"
+        if ./cave apply > "${RUNNER_TEMP}/apply-locked.txt" 2>&1; then
+          echo "::error::apply ran while the lock was held"
+          exit 1
+        fi
+        cat "${RUNNER_TEMP}/apply-locked.txt"
+        grep -qF "${holder} is running" "${RUNNER_TEMP}/apply-locked.txt"
+        grep -q 'Nothing was changed' "${RUNNER_TEMP}/apply-locked.txt"
+        sha256sum --check "${RUNNER_TEMP}/locked.sha"
+        wait
+
+    - name: The broker logged no warning or error
+      shell: bash -e {0}
+      # Mosquitto 2.0 warns about a password file with wrong ownership or permissions, and
+      # logs a client that could not log in at notice level, which is not matched here.
+      run: |
+        docker compose logs --no-color --no-log-prefix mosquitto > "${RUNNER_TEMP}/mosquitto.log"
+        if grep -E '(Warning|Error):' "${RUNNER_TEMP}/mosquitto.log"; then
+          echo "::error::Mosquitto logged warnings or errors"
+          exit 1
+        fi
+
+    - name: Logs of every service, when something failed
+      shell: bash -e {0}
+      if: failure()
+      run: ./cave logs --tail all || true
+
+    - name: Stop the stack
+      shell: bash -e {0}
+      if: always()
+      run: ./cave down
