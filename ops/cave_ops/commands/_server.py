@@ -8,10 +8,11 @@ of them, and only root can give a restored file back its owner. Run as another u
 commands refuse before they touch anything, unless every file in the state directory belongs to
 that user (a development checkout, where nothing needs privileges).
 
-**Git as the owner.** The checkout belongs to the service user, whose home holds the deploy key.
-Run as root, Git is started as that user (``runuser -u <owner> -- git ...``), so the fetch uses
-the deploy key, no file in the checkout becomes root's, and Git does not refuse a repository
-owned by someone else.
+**Git as the owner.** The checkout belongs to the service user, whose home holds Git's state (and,
+on a server cloned over SSH while the repository was private, the deploy key). Run as root, Git is
+started as that user (``runuser -u <owner> -- git ...``), so the fetch uses that user's
+configuration and key, no file in the checkout becomes root's, and Git does not refuse a
+repository owned by someone else.
 """
 
 from __future__ import annotations

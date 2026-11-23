@@ -14,7 +14,7 @@ the rooms is the next guide, [pairing.md](pairing.md).
 | | |
 |---|---|
 | The server | A mini PC (Intel N100 or N150, 8 GB or more, SSD) or a Raspberry Pi 4 or 5 with 4 GB or more, on an Ethernet cable. About 2 GB of memory is used. |
-| A second computer | With a checkout of this repository, for the one file you copy to the server, and with access to the repository on GitHub, which is private. |
+| A second computer | With a checkout of this repository, for the one file you copy to the server. The repository is public: no GitHub account is needed. |
 | The FRITZ!Box | Its login, to give the server a fixed address and, if you use FRITZ! thermostats or presence, to create a user. |
 | A Zigbee coordinator | The SLZB-06MG24 or another. It is not needed to install: without it the system starts without Zigbee2MQTT. |
 
@@ -87,18 +87,24 @@ name `cave`; use yours if you gave `--user`.
 
 ## 4. Get the code, and install the timers
 
-The server needs a read-only deploy key for the private repository. Create one for the service
-user, add its public part on GitHub (the repository's **Settings**, **Deploy keys**, **Add deploy
-key**, without write access), and clone into the empty `/opt/cave`:
+The repository is public, so the server needs no key and no GitHub account: clone it over HTTPS,
+as the service user, into the empty `/opt/cave`. The nightly update fetches its releases the same
+way.
 
 ```sh
-sudo -u cave -H install -d -m 700 /var/lib/cave-home/.ssh
-sudo -u cave -H ssh-keygen -t ed25519 -N '' -f /var/lib/cave-home/.ssh/id_ed25519
-sudo cat /var/lib/cave-home/.ssh/id_ed25519.pub     # paste this into GitHub
-sudo -u cave -H ssh -T git@github.com               # answer yes once the fingerprint matches
-                                                    # the one on docs.github.com
-sudo -u cave -H git clone git@github.com:oxydonth/cave_system.git /opt/cave
+sudo -u cave -H git clone https://github.com/oxydonth/cave_system.git /opt/cave
 cd /opt/cave
+```
+
+A server cloned before 23 November 2026, while the repository was private, fetches over SSH with
+its deploy key. That keeps working while the key is listed on GitHub. To do without it, switch the
+checkout to HTTPS, check that a fetch works, then delete the deploy key on GitHub (the
+repository's **Settings**, **Deploy keys**) and on the server:
+
+```sh
+sudo -u cave git -C /opt/cave remote set-url origin https://github.com/oxydonth/cave_system.git
+sudo -u cave -H git -C /opt/cave fetch --tags
+sudo rm /var/lib/cave-home/.ssh/id_ed25519 /var/lib/cave-home/.ssh/id_ed25519.pub
 ```
 
 Now the second run of the script, this time from the checkout. It finds the units in

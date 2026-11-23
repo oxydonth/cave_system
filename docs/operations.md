@@ -33,7 +33,7 @@ Find the start of the message in the left column.
 | `Not updating to v…: the running stack is not healthy` | The update found the running system unhealthy before it touched anything, and left it alone. | As before the update, still unhealthy. | See [The running stack is not healthy](#the-running-stack-is-not-healthy). |
 | `Not updating to v…: the checkout … has local changes` | Someone edited files in `/opt/cave`. | Unchanged. | See [Local changes](#local-changes). |
 | `Not updating to v…: the snapshot needs about … MiB` | Not enough disk space for the safety copy, measured after the new images were pulled. | Unchanged. | Free space on the disk that holds `/var/lib/cave`: old files in `/var/backups/cave`, `/var/lib/cave/.cave/ops/before-restore-*` left by a restore that finished (never while `status` shows an unfinished restore: the directory named in `/var/lib/cave/.cave/ops/restore.json` is then the only copy of the state from before), images: the update removes the images of this system's repositories that no kept release needs by itself ([Old images](#old-images)), so `sudo docker image ls` should show at most two or three versions of each of them; images of other repositories are yours to remove. The next night tries again. |
-| `Not updating to v…: pulling its images failed`, `Could not fetch releases` or `Could not list the releases` | No internet, GitHub or the image registry unreachable, or Git could not read the checkout. | Unchanged. | Nothing; the next night tries again. If it repeats for days, check the internet connection and the deploy key (`sudo -u cave -H git -C /opt/cave fetch`). |
+| `Not updating to v…: pulling its images failed`, `Could not fetch releases` or `Could not list the releases` | No internet, GitHub or the image registry unreachable, or Git could not read the checkout. | Unchanged. | Nothing; the next night tries again. If it repeats for days, check the internet connection, and whether the service user can fetch (`sudo -u cave -H git -C /opt/cave fetch`). |
 | `Not updating to v…: exporting it failed` | The release could not be unpacked into `/var/lib/cave/.cave/ops/tmp` (disk full, or a damaged repository). | Unchanged. | Free space; if it repeats, `sudo -u cave git -C /opt/cave fsck`. |
 | `Not updating to v…: its Compose file does not accept this server's .env and compose.override.yaml` | The new release needs a variable that `.env` lacks, or the local `compose.override.yaml` does not fit it. | Unchanged. Not remembered as failed. | `sudo -u cave ./cave init` (it adds missing variables), check `compose.override.yaml`, then `sudo ./cave update`. |
 | `Not updating to v…: the check_config could not run` / `the validator could not run` | The check in the new image did not run at all: Docker failed, it timed out, or the validator is not in the release (see [Before the validator exists](#before-the-validator-exists)). This says nothing about your configuration. | Unchanged. Not remembered as failed. | Nothing; the next night tries again. If it repeats, look at `journalctl -u cave-update.service`. |
@@ -383,16 +383,18 @@ back its owner. Run as the service user, these commands stop at once with
 development checkout, where every file belongs to you, they work without root.)
 
 Git, however, always runs as the owner of `/opt/cave` (the service user `cave`), also when the
-update runs as root: the fetch then uses the service user's deploy key in
-`/var/lib/cave-home/.ssh`, and no file in the checkout becomes root's (run as root, `cave` also
-writes no Python bytecode there). `status` needs no root.
+update runs as root: the fetch then uses the service user's Git configuration (and, on a server
+cloned over SSH while the repository was private, its deploy key in `/var/lib/cave-home/.ssh`),
+and no file in the checkout becomes root's (run as root, `cave` also writes no Python bytecode
+there). `status` needs no root.
 
 **What this means for security.** Root runs `/opt/cave/cave`, which the service user can change,
 and works in directories the service user owns (`/var/backups/cave`, the export directory). So
 the service user can become root. That adds nothing today, because the service user is in the
 `docker` group, which is equivalent to root anyway. Do not remove it from the `docker` group in
 the belief that this "hardens" the server: the hole described here would then be the open one.
-Protect the service user's deploy key and login as you would root's.
+Protect the service user's login (and a deploy key, if the server still has one) as you would
+root's.
 
 ### Turning automatic updates off
 

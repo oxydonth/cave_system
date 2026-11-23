@@ -19,8 +19,8 @@ set -euo pipefail
 
 SERVICE_USER=cave
 APP_DIR=/opt/cave
-# Outside the checkout: the deploy key and Git's and SSH's state go here, and a clone needs an
-# empty target directory.
+# Outside the checkout: Git's state goes here (and SSH's, on a server cloned over SSH with a
+# deploy key while the repository was private), and a clone needs an empty target directory.
 HOME_DIR=/var/lib/cave-home
 DATA_DIR=/var/lib/cave
 BACKUP_DIR=/var/backups/cave

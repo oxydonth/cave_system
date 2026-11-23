@@ -459,14 +459,14 @@ flowchart LR
 
   Every outcome is reported as a notification. A release that failed is remembered and not tried again until a newer one appears or `cave update --force` is run. `CAVE_AUTO_UPDATE=0` switches to manual updates.
 - **Upgrades:** Dependabot proposes new versions of the Python packages, Actions and the other container images weekly. The Home Assistant image is excluded from Dependabot: it must match the Home Assistant version the tests run against (4.5), so both are raised together in one pull request, and every level of testing then runs against the same Home Assistant.
-- **Rules:** no direct pushes to `main` after the bootstrap commit. Every change is a pull request with a green pipeline and a review by an Opus-class model or better, then a squash merge. GitHub does not offer branch protection for a private repository on the free plan, so these rules are conventions followed by whoever works on the repository, not something GitHub enforces.
+- **Rules:** no direct pushes to `main` after the bootstrap commit. Every change is a pull request with a green pipeline and a review by an Opus-class model or better, then a squash merge. The repository is public since 23 November 2026, so GitHub offers branch protection and rulesets for it, but none is set up: these rules are conventions followed by whoever works on the repository, not something GitHub enforces. (While the repository was private, the free plan offered neither.)
 
 ## 10. Security and privacy
 
 - No port is opened to the internet. Remote access is through the FRITZ!Box VPN.
 - The MQTT broker requires a password and listens only on localhost and the internal Compose network. The Zigbee2MQTT UI requires a token.
 - Secrets are generated on the server and never committed: `.env` and the state directory are outside version control. On the development machine a hook scans commits and pushes for secrets.
-- Supply chain: pinned image versions, Actions pinned to commit hashes, workflow tokens with the minimum permissions, and a read-only deploy key on the server.
+- Supply chain: pinned image versions, Actions pinned to commit hashes, workflow tokens with the minimum permissions. The server reads the public repository over HTTPS and holds no key for it; it installs only release tags whose commit is on `main`.
 - No vendor cloud is involved. Device data stays in the home.
 
 ## 11. Operations and extension points
@@ -498,7 +498,7 @@ flowchart LR
 | A rollback after Home Assistant has migrated its database | The snapshot taken with the stack stopped is restored together with the previous release. |
 | Zigbee range in concrete buildings | Network-attached coordinator placed centrally; relay plugs; FRITZ! thermostats as the alternative. |
 | First-run setup relies on Home Assistant's onboarding and config-flow endpoints, which are not a formal public API | Exercised by the end-to-end test on every upgrade. |
-| GitHub Actions minutes on a private repository | The pipeline is kept short, superseded runs on pull requests are cancelled, and usage is checked after the first work packages. |
+| GitHub Actions minutes | Free on GitHub's runners since the repository is public (23 November 2026); until then the free plan's 2,000 minutes of a private repository applied. The pipeline is kept short and superseded runs on pull requests are cancelled, which buys time now rather than money. |
 
 ## 13. Sources
 
