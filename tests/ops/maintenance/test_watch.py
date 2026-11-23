@@ -10,6 +10,7 @@ from __future__ import annotations
 
 import errno
 import fcntl
+import json
 import os
 import threading
 
@@ -357,14 +358,37 @@ def test_a_memory_that_cannot_be_written_is_said(server, run_cave, receiver, mon
 
 
 # ------------------------------------------------------------------------------ cut off, failed
-def test_a_down_that_did_not_stop_the_stack_leaves_no_lasting_exemption(
-    server, run_cave, receiver, watch
-):
-    """`down` records the stop first. If Docker then fails to stop the stack, the record must not
-    keep the watch quiet for good: once containers still run an interval later, it is dropped."""
+def test_a_down_whose_docker_failed_leaves_the_record_as_it_was(server, run_cave):
+    """`down` records the stop first. If Docker then fails to stop the stack, the record is put
+    back as it was: a stack that `down` did not stop was not stopped on purpose."""
+    server.stack.fail["down"] = 1
+
+    assert run_cave("down").code != 0
+
+    assert not server.data.joinpath(".cave", "stopped.json").exists()
+    assert run_cave("down").code != 0  # and one recorded before stays as it was
+    del server.stack.fail["down"]
+    assert run_cave("down").code == 0
+    before = server.data.joinpath(".cave", "stopped.json").read_text()
+    server.stack.start(OLD)
     server.stack.fail["down"] = 1
     assert run_cave("down").code != 0
-    del server.stack.fail["down"]
+    assert server.data.joinpath(".cave", "stopped.json").read_text() == before
+
+
+def test_a_down_cut_off_before_docker_leaves_no_lasting_exemption(
+    server, run_cave, receiver, watch, killed
+):
+    """`down` killed after its record, before Docker stopped anything: the record must not keep
+    the watch quiet for good. Once containers still run an interval later, it is dropped."""
+
+    def die(release):
+        raise killed
+
+    server.stack.before["down"] = die
+    with pytest.raises(killed):
+        run_cave("down")
+    server.stack.before.clear()
     assert server.data.joinpath(".cave", "stopped.json").exists()
 
     every_five_minutes(watch, 0, 10)
@@ -384,10 +408,10 @@ def test_a_watch_cut_off_after_sending_sends_once_more(
     every_five_minutes(watch, 0, 10)
     real_save = alert.save_memory
 
-    def cut(paths, memory):
+    def cut(paths, memory, **kwargs):
         if memory.alerted is not None:
             raise killed
-        real_save(paths, memory)
+        real_save(paths, memory, **kwargs)
 
     monkeypatch.setattr(alert, "save_memory", cut)
     with pytest.raises(killed):
@@ -404,7 +428,7 @@ def test_a_command_s_alert_that_could_not_be_remembered_is_alerted_by_the_watch(
     server.release(NEW)
     server.stack.fail_up.update({NEW, OLD})
 
-    def full(paths, memory):
+    def full(paths, memory, **kwargs):
         raise OSError(errno.ENOSPC, "No space left on device")
 
     monkeypatch.setattr(alert, "save_memory", full)
@@ -416,3 +440,47 @@ def test_a_command_s_alert_that_could_not_be_remembered_is_alerted_by_the_watch(
     every_five_minutes(watch, 0, 20)
 
     assert headlines(receiver) == ["update failed, act now", "an update was interrupted"]
+
+
+# ------------------------------------------------- the first review of #30: a memory that fails
+def test_a_full_disk_still_lets_the_watch_alert_a_stopped_stack(
+    server, run_cave, receiver, clock, monkeypatch
+):
+    """The reviewer's test. With the memory unwritable every run started the fifteen minutes
+    afresh, and two hours of a stopped stack brought no alert. A full disk is a likely moment for
+    Home Assistant to fail."""
+
+    def full(*args, **kwargs):
+        raise OSError(errno.ENOSPC, "No space left on device")
+
+    monkeypatch.setattr(alert, "write_atomic", full)
+    server.stack.running = None
+    origin = clock.now
+    results = []
+    for minute in range(0, 121, 5):
+        clock.now = max(clock.now, origin + minute * 60.0)
+        results.append(run_cave("watch"))
+
+    assert all(result.code == 1 for result in results)
+    assert receiver.received, "two hours of a stopped stack, and no alert"
+
+
+def test_an_alert_of_backup_about_something_else_is_not_the_stack_s_alert(
+    server, run_cave, receiver, watch
+):
+    """The reviewer's test, extended. With the stack unhealthy, backup refuses because the lock
+    is taken and alerts that. That alert is not about the stack: the watch still alerts the
+    unhealthy stack itself."""
+    server.stack.unhealthy.add(OLD)
+
+    with Lock(server.data / ".cave" / "lock", "update"):
+        run_cave("backup")
+
+    path = server.data / ".cave" / "watch.json"
+    memory = json.loads(path.read_text()) if path.exists() else {"what": None}
+    assert memory["what"] is None or "backup" not in memory["what"]
+    every_five_minutes(watch, 0, 20)
+    assert headlines(receiver) == [
+        "no backup: another command was running",
+        "the stack is not healthy",
+    ]

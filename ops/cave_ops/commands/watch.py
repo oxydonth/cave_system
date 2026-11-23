@@ -15,7 +15,10 @@ nothing at all while ``CAVE_ALERT_URL`` is unset. Otherwise, each run:
 3. Alerts once when an incident has lasted ``ALERT_AFTER`` (15 minutes), and once when the stack
    is healthy again. What it has alerted is remembered in ``CAVE_DATA/.cave/watch.json``
    (``alert.Memory``), which the service user may write and which no snapshot or backup
-   contains. An alert that could not be delivered is tried again at the next run.
+   contains. An alert that could not be delivered is tried again at the next run. When the memory
+   cannot be written (a full disk), the count of fifteen minutes cannot be kept either: the
+   watch then alerts an incident at once, at every run, and says that it repeats. An unwritable
+   memory may cause more alerts, never fewer.
 
 A record of a stack stopped on purpose that containers still outlive by more than ``INTERVAL`` is
 removed: the stop did not happen, or the stack was started without ``cave``.
@@ -126,20 +129,15 @@ def run(ctx: Context, args: argparse.Namespace) -> int:
         return _save(ctx, memory)
 
     finding = assess(ctx)
-    record = stopped(ctx.paths)
-    if record is not None and finding.health.running and now - (record.at or 0.0) > INTERVAL:
-        # Containers run an interval after the stack was stopped on purpose: the stop did not
-        # happen (Docker failed under `cave down`), or the stack was started without `cave`.
-        clear_stopped(ctx.paths)
+    _drop_a_stale_record(ctx, finding, now)
     if finding.kind == "healthy":
         memory.since = None
-        if memory.alerted is not None:
-            sent = _send(ctx, "healthy again", "The stack is running and healthy again.", finding)
-            if sent.delivered:
-                memory.alerted, memory.what = None, None
-        else:
+        if memory.alerted is None:
             ctx.say("The stack is healthy.")
-        return _save(ctx, memory)
+            return _save(ctx, memory)
+        return _alert(
+            ctx, memory, finding, "healthy again", "The stack is running and healthy again.", True
+        )
     if finding.kind == "on-purpose":
         # Not an incident. An incident alerted before stays open until the stack is healthy.
         memory.since = None
@@ -153,19 +151,63 @@ def run(ctx: Context, args: argparse.Namespace) -> int:
         return _save(ctx, memory)
     lasted = now - memory.since
     if lasted < ALERT_AFTER:
-        ctx.say(
-            f"{finding.headline[:1].upper()}{finding.headline[1:]} (since "
-            f"{_clock(memory.since)}): alerted once it has lasted {ALERT_AFTER // 60} minutes."
-        )
-        return _save(ctx, memory)
+        error = _try_save(ctx, memory)
+        if error is None:
+            ctx.say(
+                f"{finding.headline[:1].upper()}{finding.headline[1:]} (since "
+                f"{_clock(memory.since)}): alerted once it has lasted {ALERT_AFTER // 60} minutes."
+            )
+            return 0
+        # Without its memory every run starts the count afresh and would never reach the alert:
+        # an unwritable memory may only cause more alerts, never fewer. Alert now.
+        return _alert(ctx, memory, finding, finding.headline, finding.happened, False, error)
     happened = (
         f"{finding.happened} This has lasted {int(lasted // 60)} minutes, since "
         f"{_clock(memory.since)}."
     )
-    sent = _send(ctx, finding.headline, happened, finding)
+    return _alert(ctx, memory, finding, finding.headline, happened, False)
+
+
+REPEATS = (
+    "cave watch cannot write what it has sent (a full disk, or CAVE_DATA/.cave not writable by "
+    "the service user), so this may repeat every five minutes until that is fixed."
+)
+
+
+def _alert(
+    ctx: Context,
+    memory: alert.Memory,
+    finding: Finding,
+    headline: str,
+    happened: str,
+    closes: bool,
+    unwritable: str | None = None,
+) -> int:
+    """Send an alert (``closes``: the all-clear) and remember it. Whether the memory can be
+    written is found out first, so that an alert that will repeat says so."""
+    if unwritable is None:
+        unwritable = _try_save(ctx, memory)
+    if unwritable is not None:
+        happened = f"{happened} {REPEATS}"
+    sent = _send(ctx, headline, happened, finding)
     if sent.delivered:
-        memory.alerted, memory.what = now, finding.headline
-    return _save(ctx, memory)
+        memory.alerted, memory.what = (None, None) if closes else (ctx.wall(), headline)
+    if unwritable is not None:
+        _say_unwritable(ctx, unwritable)
+        return 1
+    return _save(ctx, memory, sent.delivered)
+
+
+def _drop_a_stale_record(ctx: Context, finding: Finding, now: float) -> None:
+    """Containers run an interval after the stack was stopped on purpose: the stop did not happen
+    (Docker failed under `cave down`), or the stack was started without `cave`."""
+    record = stopped(ctx.paths)
+    if record is None or not finding.health.running or now - (record.at or 0.0) <= INTERVAL:
+        return
+    try:
+        clear_stopped(ctx.paths, now)
+    except OSError as error:
+        ctx.warn(f"The record of a stack stopped on purpose could not be removed: {error}.")
 
 
 def _send(ctx: Context, headline: str, happened: str, finding: Finding) -> alert.Sent:
@@ -180,15 +222,28 @@ def _send(ctx: Context, headline: str, happened: str, finding: Finding) -> alert
     return sent
 
 
-def _save(ctx: Context, memory: alert.Memory) -> int:
+def _try_save(ctx: Context, memory: alert.Memory, alert_changed: bool = False) -> str | None:
+    """Write the memory; what went wrong, or ``None``. Unless this run changed what was alerted,
+    an alert a command marked meanwhile is kept (``alert.save_memory``)."""
     try:
-        alert.save_memory(ctx.paths, memory)
+        alert.save_memory(ctx.paths, memory, keep_marked=not alert_changed)
     except OSError as error:
-        message = (
-            f"cave watch cannot remember what it has alerted ({error}); it may alert the same "
-            "incident again at its next run."
-        )
-        ctx.warn(message)
-        ctx.journal(message)
+        return str(error)
+    return None
+
+
+def _say_unwritable(ctx: Context, error: str) -> None:
+    message = (
+        f"cave watch cannot remember what it has alerted ({error}): it alerts an incident at once "
+        "and at every run, and an all-clear may repeat too, until the memory can be written."
+    )
+    ctx.warn(message)
+    ctx.journal(message)
+
+
+def _save(ctx: Context, memory: alert.Memory, alert_changed: bool = False) -> int:
+    error = _try_save(ctx, memory, alert_changed)
+    if error is not None:
+        _say_unwritable(ctx, error)
         return 1
     return 0

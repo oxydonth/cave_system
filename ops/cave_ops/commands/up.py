@@ -1,9 +1,10 @@
 """``cave up``: start the stack and wait until it is healthy.
 
-Before it starts anything it removes the record of a stack stopped on purpose (``records.py``),
-which ``down``, a ``--no-start`` and a fresh ``init`` write: from now on a stack that is not
-running or not healthy is something ``cave watch`` reports, and ``cave status`` no longer says it
-was stopped on purpose.
+Once Compose has started the containers, it removes the record of a stack stopped on purpose
+(``records.py``), which ``down``, a ``--no-start`` and a fresh ``init`` write: from then on a stack
+that is not running or not healthy is something ``cave watch`` reports, and ``cave status`` no
+longer says it was stopped on purpose. An ``up`` that fails before anything is started leaves the
+record as it was.
 """
 
 from __future__ import annotations
@@ -33,18 +34,19 @@ def add_arguments(parser: argparse.ArgumentParser) -> None:
 
 def run(ctx: Context, args: argparse.Namespace) -> int:
     require_initialised(ctx)
-    try:
-        clear_stopped(ctx.paths)
-    except OSError as error:
-        ctx.warn(
-            f"Could not remove the record of a stack stopped on purpose ({error}); `cave status` "
-            "may still say so."
-        )
     # Always recreate: the code is bind-mounted, so Compose cannot see that a checkout changed
     # (concept section 4.2: "a changed checkout takes effect when the containers are recreated").
     started = ctx.compose("up", "--detach", "--force-recreate", capture=False)
     if not started.ok:
         return started.returncode
+    try:
+        clear_stopped(ctx.paths, ctx.wall())
+    except OSError as error:
+        ctx.warn(
+            f"Could not remove the record of a stack stopped on purpose ({error}); `cave status` "
+            "may still say so, and `cave watch` removes it once the containers have run five "
+            "minutes."
+        )
     if args.no_wait:
         return 0
     ctx.say("Waiting until healthy ...")

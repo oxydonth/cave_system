@@ -26,6 +26,7 @@ from __future__ import annotations
 import base64
 import http.client
 import json
+import os
 import socket
 import threading
 import urllib.error
@@ -145,10 +146,14 @@ def send(ctx: Context, title: str, body: str) -> Sent:
     if not url:
         return Sent(False)
     outcome: list[str | None] = []
-    worker = threading.Thread(
-        target=_post, args=(url, title, body, outcome), name="cave-alert", daemon=True
-    )
-    worker.start()
+    try:
+        worker = threading.Thread(
+            target=_post, args=(url, title, body, outcome), name="cave-alert", daemon=True
+        )
+        worker.start()
+    except RuntimeError as no_thread:  # no thread to be had: the send fails, nothing raises
+        ctx.journal(f"cave alert NOT sent (no thread could be started: {no_thread}): {title}")
+        return Sent(False, f"no thread could be started ({no_thread})")
     worker.join(TIMEOUT)
     if worker.is_alive() or not outcome:
         error: str | None = f"no answer within {TIMEOUT:g} s"
@@ -162,12 +167,21 @@ def send(ctx: Context, title: str, body: str) -> Sent:
 
 
 def warn_owner(
-    ctx: Context, command: str, headline: str, happened: str, health: Health | None = None
+    ctx: Context,
+    command: str,
+    headline: str,
+    happened: str,
+    health: Health | None = None,
+    *,
+    about_the_stack: bool = False,
 ) -> Sent:
     """The alert for a command's warning (concept section 4.5), in addition to its notification.
 
-    ``health`` is the stack's state if the caller knows it; else it is asked. A delivered alert
-    while the stack is not healthy is that incident's alert for ``cave watch`` too.
+    ``health`` is the stack's state if the caller knows it; else it is asked. An alert that is
+    ``about_the_stack`` (an update left it not healthy or not running; a restore stopped half-way
+    or did not get it started or healthy) and was delivered while the stack was not healthy is
+    that incident's alert for ``cave watch`` too. Any other warning (a backup that was not made)
+    says nothing about the stack, so the watch still alerts the stack itself.
     """
     if not configured(ctx):
         return Sent(False)
@@ -178,7 +192,7 @@ def warn_owner(
             health = Health(False, ("Docker could not be asked",), None)
     title, body = compose(f"cave {command}", headline, happened, health.state())
     sent = send(ctx, title, body)
-    if sent.delivered and not health.healthy:
+    if sent.delivered and about_the_stack and not health.healthy:
         try:
             mark_alerted(ctx, f"cave {command}: {headline}")
         except OSError as error:
@@ -219,8 +233,19 @@ def load_memory(paths: Paths) -> Memory:
     return Memory(number("since"), number("alerted"), number("last"), what if what else None)
 
 
-def save_memory(paths: Paths, memory: Memory) -> None:
-    write_atomic(paths.watch_record, (json.dumps(asdict(memory)) + "\n").encode(), 0o644)
+def save_memory(paths: Paths, memory: Memory, keep_marked: bool = False) -> None:
+    """Write the memory. Two writers share it: the watch (the service user) and the commands'
+    ``mark_alerted`` (root). ``keep_marked`` reads the file again right before writing and keeps an
+    alert marked there since ``memory`` was loaded; the watch passes it unless its own run changed
+    what was alerted. Each writer has its own temporary file. What can still be lost is a mark made
+    in the instant between that read and the rename: then the watch alerts the incident once
+    more, which is the worst case."""
+    if keep_marked and memory.alerted is None:
+        on_disk = load_memory(paths)
+        if on_disk.alerted is not None:
+            memory.alerted, memory.what = on_disk.alerted, on_disk.what
+    text = (json.dumps(asdict(memory)) + "\n").encode()
+    write_atomic(paths.watch_record, text, 0o644, writer=str(os.getpid()))
 
 
 def mark_alerted(ctx: Context, what: str) -> None:

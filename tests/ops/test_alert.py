@@ -196,7 +196,9 @@ def test_a_warning_delivered_while_the_stack_is_down_counts_as_the_incident_s_al
     ctx.env["CAVE_ALERT_URL"] = alert_endpoint.url
     ctx.wall = lambda: 1_800_000_000.0 + clock.now
 
-    alert.warn_owner(ctx, "update", "update failed, act now", "Nothing runs.", STOPPED)
+    alert.warn_owner(
+        ctx, "update", "update failed, act now", "Nothing runs.", STOPPED, about_the_stack=True
+    )
 
     memory = alert.load_memory(ctx.paths)
     assert memory.alerted == 1_800_000_000.0
@@ -215,6 +217,8 @@ def test_an_undelivered_warning_is_no_incident_alert(ctx, alert_endpoint):
     alert_endpoint.mode = "error"
     ctx.env["CAVE_ALERT_URL"] = alert_endpoint.url
 
-    alert.warn_owner(ctx, "update", "update failed, act now", "Nothing runs.", STOPPED)
+    alert.warn_owner(
+        ctx, "update", "update failed, act now", "Nothing runs.", STOPPED, about_the_stack=True
+    )
 
     assert alert.load_memory(ctx.paths).alerted is None

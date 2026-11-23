@@ -226,10 +226,9 @@ def _remove_old_images(ctx: Context) -> None:
     """Still holding the lock: remove the images no release needs any more (``_images``). What
     happens here never changes the exit status."""
     try:
-        previous = (state.load(ctx).previous or {}).get("commit")
-        pruned = _images.prune(ctx, previous)
-    except (CaveError, OSError) as error:
-        ctx.warn(f"Old images were not removed: {error}.")
+        pruned = _images.prune(ctx)
+    except Exception as error:  # whatever goes wrong here, the update's outcome stands
+        ctx.warn(f"Old images were not removed: {type(error).__name__}: {error}.")
         return
     if pruned.skipped:
         ctx.say(f"Old images were not removed: {pruned.skipped}.")
@@ -284,7 +283,7 @@ class _Update:
         if owed is not None:
             return self.finish_owed_start(owed)
         if stopped(ctx.paths) is not None and check_health(ctx).healthy:
-            clear_stopped(ctx.paths)  # the stack was started since it was stopped on purpose
+            clear_stopped(ctx.paths, ctx.wall())  # started since it was stopped on purpose
         restoring = _server.restore_in_progress(ctx)
         if restoring is not None:
             # A refusal changes nothing: an update in flight stays recorded (keep_switch).
@@ -633,6 +632,7 @@ class _Update:
         ctx, record = self.ctx, self.record
         switch = state.Switch(state.BEFORE_SWITCH, from_commit, from_label, tag, to_commit)
         record.switch = switch
+        record.last_switch = {"release": from_label, "commit": from_commit}
         state.save(ctx, record)
         try:
             reason = self.do_switch(switch)
@@ -898,7 +898,7 @@ class _Update:
         """Start the checkout (one retry) and wait until healthy."""
         ctx = self.ctx
         ctx.say("Starting the stack ...")
-        clear_stopped(ctx.paths)
+        clear_stopped(ctx.paths, ctx.wall())
         result = ctx.compose("up", "--detach", "--force-recreate", timeout=UP_TIMEOUT)
         if not result.ok:
             ctx.sleep(10)
@@ -997,7 +997,9 @@ class _Update:
         notify(self.ctx, TITLE, message)
         if status in (ROLLED_BACK, BROKEN):
             headline, happened = WARNINGS.get(outcome, WARNINGS["broken"])
-            alert.warn_owner(self.ctx, "update", headline, happened)
+            alert.warn_owner(
+                self.ctx, "update", headline, happened, about_the_stack=status == BROKEN
+            )
         return status
 
     def not_updated(

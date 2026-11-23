@@ -204,11 +204,12 @@ def test_a_variable_in_an_image_line_removes_nothing(server, run_cave, store):
 @pytest.mark.parametrize(
     ("reference", "normalised"),
     [
-        ("eclipse-mosquitto:2.0.23", "eclipse-mosquitto:2.0.23"),
-        ("docker.io/library/eclipse-mosquitto:2.0.23", "eclipse-mosquitto:2.0.23"),
-        ("docker.io/koenkk/zigbee2mqtt", "koenkk/zigbee2mqtt:latest"),
-        ("localhost:5000/cave/sim", "localhost:5000/cave/sim:latest"),
-        ("ghcr.io/a/b:1@sha256:abc", "ghcr.io/a/b@sha256:abc"),
+        ("eclipse-mosquitto:2.0.23", {"eclipse-mosquitto:2.0.23"}),
+        ("docker.io/library/eclipse-mosquitto:2.0.23", {"eclipse-mosquitto:2.0.23"}),
+        ("docker.io/koenkk/zigbee2mqtt", {"koenkk/zigbee2mqtt:latest"}),
+        ("localhost:5000/cave/sim", {"localhost:5000/cave/sim:latest"}),
+        ("ghcr.io/a/b:1@sha256:abc", {"ghcr.io/a/b:1", "ghcr.io/a/b@sha256:abc"}),
+        ("ghcr.io/a/b@sha256:abc", {"ghcr.io/a/b@sha256:abc"}),
     ],
 )
 def test_references_are_named_as_docker_lists_them(reference, normalised):
@@ -236,3 +237,80 @@ def test_a_removal_cut_off_half_way_is_finished_by_the_next_update(server, run_c
     run_cave("update")
 
     assert project_images(store) == images_of(RELEASES[1]) | images_of(RELEASES[2])
+
+
+# ------------------------------------------------------ the first review of #30: what is kept
+def test_a_digest_pin_keeps_the_previous_release_s_image(server, run_cave, store):
+    """The reviewer's test. The previous release names its broker by tag and digest; the image
+    is also tagged locally. `docker image ls --digests` lists it as `name tag digest`."""
+    install(server, run_cave, RELEASES[0])
+    digest = "sha256:" + "a" * 64
+    pinned = "eclipse-mosquitto:2.0.99"
+
+    def compose(ha, broker):
+        return (
+            "name: cave\nservices:\n"
+            f"  homeassistant:\n    image: {ha}\n"
+            f"  mosquitto:\n    image: {broker}\n"
+        )
+
+    server.stack.after["pull"] = lambda release: None
+    store.store[pinned] = digest
+    store.store["ghcr.io/home-assistant/home-assistant:2026.12.1"] = "sha256:" + "b" * 64
+    server.release(
+        RELEASES[1],
+        files={
+            "compose.yaml": compose(
+                "ghcr.io/home-assistant/home-assistant:2026.12.1", f"{pinned}@{digest}"
+            )
+        },
+    )
+    assert run_cave("update").code == 0
+    store.store["ghcr.io/home-assistant/home-assistant:2026.12.2"] = "sha256:" + "c" * 64
+    store.store["eclipse-mosquitto:2.0.100"] = "sha256:" + "d" * 64
+    server.release(
+        RELEASES[2],
+        files={
+            "compose.yaml": compose(
+                "ghcr.io/home-assistant/home-assistant:2026.12.2", "eclipse-mosquitto:2.0.100"
+            )
+        },
+    )
+    assert run_cave("update").code == 0
+    assert server.record()["previous"]["release"].startswith(RELEASES[1])
+
+    assert pinned in store.store, f"the previous release's image was removed: {store.removed}"
+
+
+def test_a_way_back_that_was_not_clean_removes_no_image_of_the_release_before(
+    server, run_cave, store
+):
+    """The reviewer's test. The update fails to start the new release; the way back cannot check
+    out the previous release, starts whatever is checked out (the new one) and ends `broken`
+    (exit 3), the update no longer in flight. The release the owner is told to go back to must
+    keep its images."""
+    install(server, run_cave, RELEASES[0])
+    install(server, run_cave, RELEASES[1])
+    publish(server, RELEASES[2])
+    server.stack.fail_times["up"] = 1  # the switch's start fails once; the way back's works
+    checkouts = []
+
+    def fail_the_way_back(argv):
+        checkouts.append(argv)
+        if len(checkouts) >= 2:
+            server.runner.git_fail.setdefault("checkout", []).append((1, "error: unable"))
+            server.runner.git_fail.setdefault("reset", []).append((1, "error: unable"))
+
+    server.runner.git_before["checkout"] = fail_the_way_back
+
+    result = run_cave("update")
+    server.runner.git_before.clear()
+
+    assert result.code == 3
+    assert server.record()["switch"] is None
+    assert images_of(RELEASES[1]) <= set(store.store), (
+        f"the release the owner was on lost its images: removed {store.removed}"
+    )
+    # And not on the nights after either, until an update has ended well again.
+    assert run_cave("update").code == 0  # nothing newer: up to date
+    assert images_of(RELEASES[1]) <= set(store.store)

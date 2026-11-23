@@ -246,9 +246,18 @@ def state_entries(data: Path) -> list[str]:
     entries = sorted(name for name in os.listdir(data) if name != ".cave")
     meta = data / ".cave"
     if meta.is_dir():
-        records = {*NOT_STATE, *(f".{name}.tmp" for name in NOT_STATE)}
-        entries += sorted(f".cave/{name}" for name in os.listdir(meta) if name not in records)
+        entries += sorted(f".cave/{name}" for name in os.listdir(meta) if not _a_record(name))
     return entries
+
+
+def _a_record(name: str) -> bool:
+    """One of ``NOT_STATE``, or a temporary file of one (``.<name>.tmp``, ``.<name>.<writer>.tmp``,
+    ``records.write_atomic``)."""
+    if name in NOT_STATE:
+        return True
+    return name.endswith(".tmp") and any(
+        name == f".{record}.tmp" or name.startswith(f".{record}.") for record in NOT_STATE
+    )
 
 
 def _keep_owner(path: Path, info: os.stat_result) -> None:

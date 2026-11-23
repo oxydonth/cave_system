@@ -81,6 +81,9 @@ class UpdateRecord:
     previous: dict[str, str] | None = None
     """The release the last installed update came from: ``release`` and ``commit``. Its images
     are kept with the running release's (``_images``)."""
+    last_switch: dict[str, str] | None = None
+    """The release the last switch started from (``release`` and ``commit``), whatever came of
+    it: the one a way back by hand returns to. Its images are kept too."""
     problem: str | None = None
     """Set when the file could not be read; the record then starts empty."""
 
@@ -104,6 +107,7 @@ def load(ctx: Context) -> UpdateRecord:
         last_result=raw.get("last_result"),
         last_check=raw.get("last_check"),
         previous=raw.get("previous") if isinstance(raw.get("previous"), dict) else None,
+        last_switch=raw.get("last_switch") if isinstance(raw.get("last_switch"), dict) else None,
     )
 
 
@@ -181,6 +185,7 @@ def save(ctx: Context, record: UpdateRecord) -> None:
         "last_result": record.last_result,
         "last_check": record.last_check,
         "previous": record.previous,
+        "last_switch": record.last_switch,
     }
     ops = _server.ops_dir(ctx)
     ops.mkdir(parents=True, exist_ok=True)

@@ -260,3 +260,38 @@ def test_the_records_of_the_commands_are_in_no_backup(server, run_cave, backups)
     assert "data/.cave/mqtt-credentials" in names
     assert not [name for name in names if name.endswith(("stopped.json", "watch.json"))]
     assert os.path.exists(server.data / ".cave" / "stopped.json")
+
+
+# ------------------------------------- the first review of #30: a refusal keeps the record
+def test_a_restore_refused_for_space_keeps_the_record_of_down(
+    server,
+    run_cave,
+    backups,  # noqa: F811
+    monkeypatch,
+):
+    """The reviewer's test. "Nothing was changed", so the record of `./cave down` stays."""
+    assert run_cave("backup").code == 0
+    [archive] = archives(backups)
+    assert run_cave("down").code == 0
+    monkeypatch.setattr(restore._server, "free_bytes", lambda path: 0)
+
+    result = run_cave("restore", str(archive))
+
+    assert result.code != 0
+    assert "Nothing was changed" in result.err
+    assert server.data.joinpath(".cave", "stopped.json").exists(), (
+        "a restore that changed nothing removed the record of `down`"
+    )
+
+
+def test_an_undo_with_nothing_to_undo_keeps_the_record_of_down(server, run_cave):
+    """The reviewer's test."""
+    assert run_cave("down").code == 0
+
+    result = run_cave("restore", "--undo")
+
+    assert result.code != 0
+    assert "Nothing was changed" in result.err
+    assert server.data.joinpath(".cave", "stopped.json").exists(), (
+        "an --undo that changed nothing removed the record of `down`"
+    )
