@@ -9,6 +9,11 @@ name: Server rehearsal
 # One step per part (tests/server/NN-*.sh). A failed check is recorded and the part goes on; a
 # failed step stops its part and the parts after it. The last steps write the summary and keep
 # the machine's journals as an artifact. The ordinary pipeline (ci.yml) does not call this.
+#
+# It runs once a week, on demand, and for a push to main or a pull request that changes the
+# operations commands (ops/, cave), the provisioning (scripts/) or the rehearsal itself. Only the
+# pull_request event, never pull_request_target, and no secrets: the machine's key pair is made in
+# the job. When it ran on a pull request, it has to be green before the merge (CLAUDE.md).
 
 on:
   workflow_dispatch:
@@ -23,7 +28,7 @@ on:
     # Mondays, 04:17 UTC.
     - cron: "17 4 * * 1"
   push:
-    branches: [main, wp/17-server-rehearsal]
+    branches: [main]
     paths:
       - "ops/**"
       - "cave"
@@ -57,7 +62,7 @@ jobs:
     timeout-minutes: 120
     env:
       REHEARSAL_DIR: /mnt/rehearsal
-      REHEARSAL_PARTS: ${{ inputs.parts || 'down-up' }}
+      REHEARSAL_PARTS: ${{ inputs.parts || 'all' }}
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
